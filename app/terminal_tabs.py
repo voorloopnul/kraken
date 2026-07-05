@@ -75,10 +75,11 @@ QToolButton:hover { background: #dedee2; color: #1b1d22; }
 class TerminalTabs(QWidget):
     """Tab bar + "+" button on top, one terminal per tab below."""
 
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(self, parent: QWidget | None = None, cwd: str | None = None):
         super().__init__(parent)
         self._theme_name = DEFAULT_THEME
         self._counter = 0
+        self._cwd = cwd
 
         self._tab_bar = QTabBar()
         self._tab_bar.setExpanding(False)
@@ -128,7 +129,7 @@ class TerminalTabs(QWidget):
         return [self._stack.widget(i) for i in range(self._stack.count())]
 
     def add_terminal(self) -> GhosttyTerminalWidget:
-        term = GhosttyTerminalWidget(self)
+        term = GhosttyTerminalWidget(self, cwd=self._cwd)
         if self._theme_name != DEFAULT_THEME:
             term.set_theme(self._theme_name)
         self._stack.addWidget(term)

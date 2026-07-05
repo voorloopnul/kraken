@@ -58,7 +58,7 @@ class LeftPanel(Panel):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._card = Card()
-        placeholder = QLabel("Left panel\n(e.g. file tree, list)")
+        placeholder = QLabel("History")
         placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._card.add_widget(placeholder, stretch=1)
         self.add_widget(self._card, stretch=1)
@@ -73,7 +73,7 @@ class CenterPanel(Panel):
         super().__init__(parent)
         from app.chat_input import ChatInput
 
-        placeholder = QLabel("Center panel\n(main content)")
+        placeholder = QLabel("Conversation")
         placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.add_widget(placeholder, stretch=1)
         self.chat = ChatInput()
@@ -84,12 +84,12 @@ class CenterPanel(Panel):
 
 
 class RightPanel(Panel):
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(self, parent: QWidget | None = None, cwd: str | None = None):
         super().__init__(parent)
         from app.terminal_tabs import TerminalTabs
 
         self._card = Card()
-        self.terminals = TerminalTabs(self)
+        self.terminals = TerminalTabs(self, cwd=cwd)
         self._card.add_widget(self.terminals, stretch=1)
         self.add_widget(self._card, stretch=1)
 

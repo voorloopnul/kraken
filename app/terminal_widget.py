@@ -116,8 +116,9 @@ def _pick_term() -> str:
 class GhosttyTerminalWidget(QWidget):
     """Interactive shell terminal rendered from libghostty-vt render state."""
 
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(self, parent: QWidget | None = None, cwd: str | None = None):
         super().__init__(parent)
+        self._cwd = cwd
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
         self.setAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled)
@@ -196,11 +197,15 @@ class GhosttyTerminalWidget(QWidget):
 
         # Resizes are debounced: applying every intermediate size during a
         # splitter drag makes the shell redraw its prompt dozens of times,
-        # and the leftovers reflow into garbled lines.
+        # and the leftovers reflow into garbled lines. Worse, two quick
+        # PTY resizes can coalesce into one SIGWINCH that the shell sees as
+        # "no net change" and skips redrawing, while the reflow of the
+        # intermediate size already moved the real cursor — so keep the
+        # debounce long enough that mid-drag pauses don't apply.
         self._force_full_rebuild = False
         self._resize_timer = QTimer(self)
         self._resize_timer.setSingleShot(True)
-        self._resize_timer.setInterval(50)
+        self._resize_timer.setInterval(150)
         self._resize_timer.timeout.connect(self._apply_resize)
 
         self._spawn_shell()
@@ -219,17 +224,26 @@ class GhosttyTerminalWidget(QWidget):
 
         # posix_spawn with setsid: the child opens the pty slave as fd 0
         # after setsid(), which makes it the controlling terminal.
-        self._child_pid = os.posix_spawn(
-            shell,
-            [shell],
-            env,
-            file_actions=[
-                (os.POSIX_SPAWN_OPEN, 0, slave_path, os.O_RDWR, 0),
-                (os.POSIX_SPAWN_DUP2, 0, 1),
-                (os.POSIX_SPAWN_DUP2, 0, 2),
-            ],
-            setsid=True,
-        )
+        # posix_spawn has no cwd parameter, so chdir around it; Qt runs
+        # single-threaded here so nothing else observes the switch.
+        old_cwd = os.getcwd() if self._cwd else None
+        if self._cwd:
+            os.chdir(self._cwd)
+        try:
+            self._child_pid = os.posix_spawn(
+                shell,
+                [shell],
+                env,
+                file_actions=[
+                    (os.POSIX_SPAWN_OPEN, 0, slave_path, os.O_RDWR, 0),
+                    (os.POSIX_SPAWN_DUP2, 0, 1),
+                    (os.POSIX_SPAWN_DUP2, 0, 2),
+                ],
+                setsid=True,
+            )
+        finally:
+            if old_cwd is not None:
+                os.chdir(old_cwd)
         os.close(slave_fd)
         os.set_blocking(self._master_fd, False)
 
@@ -609,10 +623,24 @@ class GhosttyTerminalWidget(QWidget):
         cols = max(4, self.width() // self._cell_w)
         rows = max(2, self.height() // self._cell_h)
         if cols == self._cols and rows == self._rows_count:
+            self._resize_timer.stop()
             return
         self._resize_timer.start()
 
+    def showEvent(self, event) -> None:
+        # Coming back from a hidden stack page: apply any pending size now,
+        # so the shell gets one clean SIGWINCH before the user can type and
+        # the first paint already uses the right grid.
+        super().showEvent(event)
+        self._resize_timer.stop()
+        self._apply_resize()
+
     def _apply_resize(self) -> None:
+        # Never resize the PTY while hidden (e.g. in a background workspace):
+        # the shell would redraw unseen, and repeated hidden resizes can
+        # desync its cursor bookkeeping. showEvent applies the final size.
+        if not self.isVisible() or self.width() <= 0 or self.height() <= 0:
+            return
         cols = max(4, self.width() // self._cell_w)
         rows = max(2, self.height() // self._cell_h)
         if cols == self._cols and rows == self._rows_count:
