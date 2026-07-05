@@ -76,7 +76,7 @@ LIGHT = TerminalTheme(
 )
 
 THEMES: dict[str, TerminalTheme] = {t.name: t for t in (DARK, LIGHT)}
-DEFAULT_THEME = DARK.name
+DEFAULT_THEME = LIGHT.name
 
 # Application chrome per theme: window background, cards, and plain text.
 # Card backgrounds match the terminal backgrounds so the right panel blends.
@@ -88,7 +88,7 @@ UI_COLORS: dict[str, dict[str, str]] = {
         "text": "#c8cad0",
     },
     "light": {
-        "window": "#ece5d8",
+        "window": "#faf6ec",
         "card": "#%02X%02X%02X" % LIGHT.background,
         "card_border": "#e0e0e0",
         "text": "#383a42",

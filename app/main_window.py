@@ -122,18 +122,20 @@ class MainWindow(QMainWindow):
             self._panel_actions[side] = action
 
         # First side-bar icon toggles the terminal (right) panel, staying in
-        # sync with the View menu checkbox.
+        # sync with the View menu checkbox. Hidden by default.
         toggle = self.side_bar.buttons["Terminal Panel"]
         toggle.setCheckable(True)
-        toggle.setChecked(True)
         toggle.toggled.connect(self._panel_actions["right"].setChecked)
         self._panel_actions["right"].toggled.connect(toggle.setChecked)
+        self._panel_actions["right"].setChecked(False)
 
         self.side_bar.buttons["Quit"].clicked.connect(self.close)
+        # Menu bar starts hidden; setVisible(False) is explicit because
+        # setChecked(False) on a fresh action doesn't emit toggled.
         menu_toggle = self.side_bar.buttons["Menu Bar"]
         menu_toggle.setCheckable(True)
-        menu_toggle.setChecked(True)
         menu_toggle.toggled.connect(self.menuBar().setVisible)
+        self.menuBar().setVisible(False)
         self.side_bar.buttons["Toggle Theme"].clicked.connect(
             lambda: self.set_theme("light" if self._theme_name == "dark" else "dark")
         )
