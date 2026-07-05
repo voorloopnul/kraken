@@ -1,16 +1,49 @@
 """The three content panels. Replace the placeholder widgets with real content."""
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
     QLabel,
+    QHBoxLayout,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from app.themes import LIGHT, UI_COLORS
+
+_HISTORY_STYLES = {
+    "dark": """
+QListWidget { background: transparent; border: none; color: #c8cad0; font-size: 12px; }
+QListWidget::item { padding: 6px 8px; border-radius: 6px; }
+QListWidget::item:hover { background: #2c2e35; }
+QListWidget::item:selected { background: #1c2f50; color: #ffffff; }
+""",
+    "light": """
+QListWidget { background: transparent; border: none; color: #4a4d55; font-size: 12px; }
+QListWidget::item { padding: 6px 8px; border-radius: 6px; }
+QListWidget::item:hover { background: #e8e8ec; }
+QListWidget::item:selected { background: #dce8fb; color: #1b1d22; }
+""",
+}
+
+_NEW_SESSION_STYLES = {
+    "dark": """
+QPushButton { background: #26282e; border: 1px solid #33353c; border-radius: 6px;
+              color: #c8cad0; font-size: 12px; padding: 5px 8px; }
+QPushButton:hover { background: #2c2e35; color: #ffffff; }
+""",
+    "light": """
+QPushButton { background: #f5f5f6; border: 1px solid #d8d8dd; border-radius: 6px;
+              color: #4a4d55; font-size: 12px; padding: 5px 8px; }
+QPushButton:hover { background: #e8e8ec; color: #1b1d22; }
+""",
+}
 
 
 class Card(QFrame):
@@ -55,32 +88,114 @@ class Panel(QWidget):
 
 
 class LeftPanel(Panel):
-    def __init__(self, parent: QWidget | None = None):
+    """History pane: previous Pi agent sessions recorded for the workspace
+    folder. Emits `session_selected` with the session file path on click."""
+
+    session_selected = Signal(str)
+    new_session_requested = Signal()
+
+    def __init__(self, parent: QWidget | None = None, cwd: str | None = None):
         super().__init__(parent)
+        self._cwd = cwd
         self._card = Card()
-        placeholder = QLabel("History")
-        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._card.add_widget(placeholder, stretch=1)
+        title = QLabel("History")
+        self._new_button = QPushButton("＋  New Session")
+        self._new_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._new_button.clicked.connect(self.new_session_requested)
+        self._list = QListWidget()
+        self._list.setWordWrap(True)
+        self._list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self._list.itemClicked.connect(self._on_item_clicked)
+        self._card.add_widget(title)
+        self._card.add_widget(self._new_button)
+        self._card.add_widget(self._list, stretch=1)
         self.add_widget(self._card, stretch=1)
+        self.refresh()
+
+    def refresh(self) -> None:
+        """Re-read the workspace's Pi sessions from disk."""
+        from app.pi_sessions import sessions_for
+
+        selected = self._selected_path()
+        self._list.clear()
+        sessions = sessions_for(self._cwd) if self._cwd else []
+        if not sessions:
+            item = QListWidgetItem("No previous sessions")
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            self._list.addItem(item)
+            return
+        for session in sessions:
+            noun = "message" if session.message_count == 1 else "messages"
+            item = QListWidgetItem(
+                f"{session.title}\n{session.started:%b %d, %H:%M}"
+                f" · {session.message_count} {noun}"
+            )
+            item.setData(Qt.ItemDataRole.UserRole, str(session.path))
+            item.setToolTip(str(session.path))
+            self._list.addItem(item)
+            if str(session.path) == selected:
+                item.setSelected(True)
+
+    def clear_selection(self) -> None:
+        self._list.clearSelection()
+
+    def _selected_path(self) -> str | None:
+        items = self._list.selectedItems()
+        return items[0].data(Qt.ItemDataRole.UserRole) if items else None
+
+    def _on_item_clicked(self, item: QListWidgetItem) -> None:
+        path = item.data(Qt.ItemDataRole.UserRole)
+        if path:
+            self.session_selected.emit(path)
 
     def set_theme(self, name: str) -> None:
         ui = UI_COLORS[name]
         self._card.set_colors(ui["card"], ui["card_border"])
+        self._list.setStyleSheet(_HISTORY_STYLES[name])
+        self._new_button.setStyleSheet(_NEW_SESSION_STYLES[name])
 
 
 class CenterPanel(Panel):
+    """Conversation pane: transcript, busy row (with Stop), and chat input."""
+
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         from app.chat_input import ChatInput
+        from app.conversation import ConversationView
 
-        placeholder = QLabel("Conversation")
-        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.add_widget(placeholder, stretch=1)
+        self.conversation = ConversationView()
+        self.add_widget(self.conversation, stretch=1)
+
+        self._busy_label = QLabel("Pi is working…")
+        self.stop_button = QToolButton()
+        self.stop_button.setText("Stop")
+        self.stop_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        busy_row = QWidget()
+        self._busy_row = busy_row
+        row_layout = QHBoxLayout(busy_row)
+        row_layout.setContentsMargins(4, 0, 4, 2)
+        row_layout.addWidget(self._busy_label)
+        row_layout.addStretch(1)
+        row_layout.addWidget(self.stop_button)
+        busy_row.setVisible(False)
+        self.add_widget(busy_row)
+
         self.chat = ChatInput()
         self.add_widget(self.chat)
 
+    def set_busy(self, busy: bool) -> None:
+        self._busy_row.setVisible(busy)
+
     def set_theme(self, name: str) -> None:
+        self.conversation.set_theme(name)
         self.chat.set_theme(name)
+        dim, hover = ("#7a7d85", "#2c2e35") if name == "dark" else ("#5f6269", "#e0e0e4")
+        self._busy_row.setStyleSheet(
+            f"QLabel {{ color: {dim}; font-size: 12px; font-style: italic; }}"
+            f" QToolButton {{ background: transparent; border: none; border-radius: 4px;"
+            f" color: {dim}; font-size: 12px; padding: 2px 6px; }}"
+            f" QToolButton:hover {{ background: {hover}; }}"
+        )
 
 
 class RightPanel(Panel):

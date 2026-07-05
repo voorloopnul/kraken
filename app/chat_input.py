@@ -106,6 +106,9 @@ class ChatInput(QFrame):
     def set_theme(self, name: str) -> None:
         self.setStyleSheet(_STYLES[name])
 
+    def set_model_label(self, text: str) -> None:
+        self._model.setText(f"{text}  ⌄")
+
     def text(self) -> str:
         return self._edit.toPlainText()
 

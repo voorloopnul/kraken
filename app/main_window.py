@@ -83,6 +83,8 @@ class MainWindow(QMainWindow):
             view.right_panel.setVisible(self._panel_actions["right"].isChecked())
             self.views[path] = view
             self._view_stack.addWidget(view)
+        else:
+            view.left_panel.refresh()
         self._view_stack.setCurrentWidget(view)
         self.current_workspace = path
         self.setWindowTitle(f"Alpine — {Path(path).name}")
