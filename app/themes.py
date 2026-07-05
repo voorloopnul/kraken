@@ -88,7 +88,7 @@ UI_COLORS: dict[str, dict[str, str]] = {
         "text": "#c8cad0",
     },
     "light": {
-        "window": "#ececee",
+        "window": "#ece5d8",
         "card": "#%02X%02X%02X" % LIGHT.background,
         "card_border": "#e0e0e0",
         "text": "#383a42",

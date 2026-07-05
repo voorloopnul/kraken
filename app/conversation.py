@@ -1,15 +1,25 @@
 """Conversation transcript: a read-only view of the chat with the Pi agent.
 
-Renders user prompts, streamed assistant text, tool-call notes, and info
-lines. Content is kept as a list of semantic blocks (kind + color role per
-span) and painted with explicit character formats, so streaming deltas are
-cheap appends and set_theme can repaint the whole transcript in the new
-palette — text written in dark mode never lingers unreadable in light mode.
+Renders user prompts, streamed assistant text (as markdown), tool-call
+notes, and info lines. Content is kept as a list of semantic blocks and
+repainted from that model on theme switches, so text written in dark mode
+never lingers unreadable in light mode.
+
+Assistant blocks are markdown sources: streaming deltas can split markdown
+syntax mid-token, so instead of appending raw text, the trailing assistant
+block is re-rendered in place (from its recorded start position) with the
+accumulated source on every delta.
 """
 
 from __future__ import annotations
 
-from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QTextBlockFormat,
+    QTextCharFormat,
+    QTextCursor,
+)
 from PySide6.QtWidgets import QTextBrowser, QWidget
 
 from app.themes import DEFAULT_THEME
@@ -33,7 +43,9 @@ _PALETTE = {
     "light": {"user": "#02669c", "text": "#1a1c21", "dim": "#5f6269", "error": "#a8232e"},
 }
 
-# One span of styled text inside a block: (text, color_role, bold, italic).
+# One span of styled text inside a non-assistant block:
+# (text, color_role, bold, italic). Assistant blocks carry markdown source
+# strings instead.
 _Span = tuple[str, str, bool, bool]
 
 
@@ -42,10 +54,14 @@ class ConversationView(QTextBrowser):
         super().__init__(parent)
         self.setReadOnly(True)
         self.setOpenExternalLinks(False)
-        # The transcript model: (kind, spans) per block. `kind` drives block
-        # spacing and lets consecutive streaming deltas merge.
-        self._blocks: list[tuple[str, list[_Span]]] = []
+        # The transcript model: (kind, payload) per block. `kind` drives
+        # block spacing; payload is a list of markdown source chunks for
+        # assistant blocks, a list of _Span for everything else.
+        self._blocks: list[tuple[str, list]] = []
         self._last_kind: str | None = None
+        # Document position where the trailing assistant block's markdown
+        # starts; None when the last block isn't assistant.
+        self._assistant_start: int | None = None
         self.set_theme(DEFAULT_THEME)
 
     # ---- Theme -----------------------------------------------------------
@@ -56,8 +72,9 @@ class ConversationView(QTextBrowser):
         # Repaint existing content with the new palette.
         self.clear()
         self._last_kind = None
-        for kind, spans in self._blocks:
-            self._paint(kind, spans)
+        self._assistant_start = None
+        for kind, payload in self._blocks:
+            self._paint(kind, payload)
 
     def _format(self, role: str, bold: bool, italic: bool) -> QTextCharFormat:
         fmt = QTextCharFormat()
@@ -69,39 +86,61 @@ class ConversationView(QTextBrowser):
 
     # ---- Writing ---------------------------------------------------------
 
-    def _paint(self, kind: str, spans: list[_Span]) -> None:
-        """Append one block to the document; blocks of different kinds get a
-        blank line between them, consecutive tool/info lines just a newline,
-        and consecutive assistant writes flow together (streaming deltas)."""
+    def _separator(self, cursor: QTextCursor, kind: str) -> None:
+        """Blocks of different kinds get a blank line between them,
+        consecutive tool/info lines just a newline. Inserted with default
+        formats so markdown block styles (lists, headings) don't leak."""
+        if self._last_kind is None:
+            return
+        block_fmt, char_fmt = QTextBlockFormat(), QTextCharFormat()
+        if kind != self._last_kind:
+            cursor.insertBlock(block_fmt, char_fmt)
+            cursor.insertBlock(block_fmt, char_fmt)
+        elif kind in ("tool", "info"):
+            cursor.insertBlock(block_fmt, char_fmt)
+
+    def _paint(self, kind: str, payload: list) -> None:
         scrollbar = self.verticalScrollBar()
         follow = scrollbar.value() >= scrollbar.maximum() - 4
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        if self._last_kind is not None:
-            if kind != self._last_kind:
-                cursor.insertText("\n\n")
-            elif kind in ("tool", "info"):
-                cursor.insertText("\n")
-        for text, role, bold, italic in spans:
-            cursor.insertText(text, self._format(role, bold, italic))
+        if kind == "assistant" and self._assistant_start is not None:
+            # Streaming continuation: re-render the whole trailing assistant
+            # block so markdown split across deltas parses correctly.
+            cursor.setPosition(self._assistant_start)
+            cursor.movePosition(
+                QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor
+            )
+            cursor.removeSelectedText()
+            cursor.insertMarkdown("".join(payload))
+        else:
+            self._separator(cursor, kind)
+            if kind == "assistant":
+                self._assistant_start = cursor.position()
+                cursor.insertMarkdown("".join(payload))
+            else:
+                self._assistant_start = None
+                for text, role, bold, italic in payload:
+                    cursor.insertText(text, self._format(role, bold, italic))
         self._last_kind = kind
         if follow:
             scrollbar.setValue(scrollbar.maximum())
 
-    def _write(self, kind: str, spans: list[_Span]) -> None:
-        # Merge consecutive assistant deltas into one block so the model
-        # stays small during streaming.
+    def _write(self, kind: str, payload: list) -> None:
+        # Merge consecutive assistant deltas into one block: its full
+        # markdown source must be re-rendered together.
         if kind == "assistant" and self._blocks and self._blocks[-1][0] == "assistant":
-            self._blocks[-1][1].extend(spans)
+            self._blocks[-1][1].extend(payload)
+            self._paint(kind, self._blocks[-1][1])
         else:
-            self._blocks.append((kind, list(spans)))
-        self._paint(kind, spans)
+            self._blocks.append((kind, list(payload)))
+            self._paint(kind, payload)
 
     def add_user(self, text: str) -> None:
         self._write("user", [("You\n", "user", True, False), (text, "text", False, False)])
 
     def append_assistant_delta(self, delta: str) -> None:
-        self._write("assistant", [(delta, "text", False, False)])
+        self._write("assistant", [delta])
 
     def add_tool(self, name: str, summary: str) -> None:
         line = f"⚒ {name}"
@@ -116,6 +155,7 @@ class ConversationView(QTextBrowser):
         self.clear()
         self._blocks = []
         self._last_kind = None
+        self._assistant_start = None
 
     # ---- Rendering stored messages ----------------------------------------
 
