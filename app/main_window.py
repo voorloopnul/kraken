@@ -80,6 +80,7 @@ class MainWindow(QMainWindow):
             view.set_theme(self._theme_name)
             # New views follow the current pane-visibility toggles.
             view.left_panel.setVisible(self._panel_actions["left"].isChecked())
+            view.browser_panel.setVisible(self._panel_actions["browser"].isChecked())
             view.right_panel.setVisible(self._panel_actions["right"].isChecked())
             self.views[path] = view
             self._view_stack.addWidget(view)
@@ -97,7 +98,11 @@ class MainWindow(QMainWindow):
     def _set_panel_visible(self, side: str, visible: bool) -> None:
         """Pane visibility toggles are global: they apply to every workspace."""
         for view in self.views.values():
-            panel = view.left_panel if side == "left" else view.right_panel
+            panel = {
+                "left": view.left_panel,
+                "browser": view.browser_panel,
+                "right": view.right_panel,
+            }[side]
             panel.setVisible(visible)
 
     def _create_menus(self) -> None:
@@ -113,7 +118,11 @@ class MainWindow(QMainWindow):
 
         view_menu = self.menuBar().addMenu("&View")
         self._panel_actions: dict[str, QAction] = {}
-        for label, side in (("Left Panel", "left"), ("Right Panel", "right")):
+        for label, side in (
+            ("Left Panel", "left"),
+            ("Browser Panel", "browser"),
+            ("Right Panel", "right"),
+        ):
             action = QAction(label, self, checkable=True, checked=True)
             action.toggled.connect(
                 lambda checked, s=side: self._set_panel_visible(s, checked)
@@ -128,6 +137,13 @@ class MainWindow(QMainWindow):
         toggle.toggled.connect(self._panel_actions["right"].setChecked)
         self._panel_actions["right"].toggled.connect(toggle.setChecked)
         self._panel_actions["right"].setChecked(False)
+
+        # Same deal for the browser panel and its globe icon.
+        browser_toggle = self.side_bar.buttons["Browser Panel"]
+        browser_toggle.setCheckable(True)
+        browser_toggle.toggled.connect(self._panel_actions["browser"].setChecked)
+        self._panel_actions["browser"].toggled.connect(browser_toggle.setChecked)
+        self._panel_actions["browser"].setChecked(False)
 
         self.side_bar.buttons["Quit"].clicked.connect(self.close)
         # Menu bar starts hidden; setVisible(False) is explicit because

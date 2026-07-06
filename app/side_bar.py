@@ -65,6 +65,24 @@ def _terminal_icon(color: str) -> QIcon:
     return QIcon(pixmap)
 
 
+def _globe_icon(color: str) -> QIcon:
+    """Globe: circle with a meridian ellipse and an equator line."""
+    pixmap = QPixmap(36, 36)
+    pixmap.setDevicePixelRatio(2.0)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(color))
+    pen.setWidthF(1.4)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    painter.drawEllipse(QPointF(9.0, 9.0), 6.5, 6.5)
+    painter.drawEllipse(QPointF(9.0, 9.0), 3.0, 6.5)
+    painter.drawLine(QPointF(2.5, 9.0), QPointF(15.5, 9.0))
+    painter.end()
+    return QIcon(pixmap)
+
+
 def _power_icon(color: str) -> QIcon:
     """Power symbol: a circle with a top gap and a vertical bar through it."""
     pixmap = QPixmap(36, 36)
@@ -145,6 +163,7 @@ def _moon_icon(color: str) -> QIcon:
 # separately since its glyph depends on the active theme.
 _ICON_FACTORIES = {
     "Terminal Panel": _terminal_icon,
+    "Browser Panel": _globe_icon,
     "Menu Bar": _menubar_icon,
     "Quit": _power_icon,
 }
@@ -168,9 +187,10 @@ class SideBar(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 8, 4, 8)
         layout.setSpacing(6)
-        terminal_btn = self._make_button("", "Terminal Panel")
-        terminal_btn.setIconSize(QSize(18, 18))
-        layout.addWidget(terminal_btn)
+        for name in ("Terminal Panel", "Browser Panel"):
+            btn = self._make_button("", name)
+            btn.setIconSize(QSize(18, 18))
+            layout.addWidget(btn)
         layout.addStretch(1)
         for glyph, name in _BOTTOM_ITEMS:
             btn = self._make_button(glyph, name)

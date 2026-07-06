@@ -9,7 +9,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QSplitter, QVBoxLayout, QWidget
 
-from app.panels import CenterPanel, LeftPanel, RightPanel
+from app.panels import BrowserPanel, CenterPanel, LeftPanel, RightPanel
 from app.pi_rpc import PiAgent
 from app.themes import UI_COLORS
 
@@ -21,18 +21,23 @@ class WorkspaceView(QWidget):
 
         self.left_panel = LeftPanel(cwd=path)
         self.center_panel = CenterPanel()
+        # Per-workspace browser, like the terminals; it's lazily populated
+        # on first show, so hidden panels cost no Chromium processes.
+        self.browser_panel = BrowserPanel()
         self.right_panel = RightPanel(cwd=path)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.left_panel)
         splitter.addWidget(self.center_panel)
+        splitter.addWidget(self.browser_panel)
         splitter.addWidget(self.right_panel)
 
         # Center panel absorbs extra space when the window resizes.
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
-        splitter.setSizes([300, 500, 480])
+        splitter.setStretchFactor(3, 0)
+        splitter.setSizes([300, 500, 480, 480])
         splitter.setChildrenCollapsible(False)
         self._splitter = splitter
 
@@ -183,6 +188,7 @@ class WorkspaceView(QWidget):
         )
         self.left_panel.set_theme(name)
         self.center_panel.set_theme(name)
+        self.browser_panel.set_theme(name)
         self.right_panel.set_theme(name)
 
     def shutdown(self) -> None:

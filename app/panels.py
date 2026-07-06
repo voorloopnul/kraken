@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.themes import LIGHT, UI_COLORS
+from app.themes import DEFAULT_THEME, LIGHT, UI_COLORS
 
 _HISTORY_STYLES = {
     "dark": """
@@ -47,17 +47,23 @@ QPushButton:hover { background: #e8e8ec; color: #1b1d22; }
 
 
 class Card(QFrame):
-    """A rounded-border container to group panel content."""
+    """A rounded-border container to group panel content.
 
-    def __init__(self, parent: QWidget | None = None):
+    `shadow=False` matters for cards hosting a QWebEngineView: a graphics
+    effect makes Qt render the subtree through a cached pixmap, freezing
+    Chromium's composited output — the page looks unresponsive even though
+    input still reaches it."""
+
+    def __init__(self, parent: QWidget | None = None, shadow: bool = True):
         super().__init__(parent)
         self.setObjectName("card")
         self.set_colors("#%02X%02X%02X" % LIGHT.background, "#e0e0e0")
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(12)
-        shadow.setOffset(0, 2)
-        shadow.setColor(QColor(0, 0, 0, 40))
-        self.setGraphicsEffect(shadow)
+        if shadow:
+            effect = QGraphicsDropShadowEffect(self)
+            effect.setBlurRadius(12)
+            effect.setOffset(0, 2)
+            effect.setColor(QColor(0, 0, 0, 40))
+            self.setGraphicsEffect(effect)
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(12, 12, 12, 12)
@@ -196,6 +202,46 @@ class CenterPanel(Panel):
             f" color: {dim}; font-size: 12px; padding: 2px 6px; }}"
             f" QToolButton:hover {{ background: {hover}; }}"
         )
+
+
+class BrowserPanel(Panel):
+    """Web browser pane, the sibling of the terminal pane. The tabbed
+    browser (and its Chromium processes) is only created the first time the
+    panel becomes visible, so hidden panels cost nothing."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._card = Card(shadow=False)
+        self._theme_name = DEFAULT_THEME
+        self.browsers = None
+        self._creating = False
+        self.add_widget(self._card, stretch=1)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        # Re-entrancy guard: web view construction can pump the event loop
+        # (Chromium/GL init), letting a second showEvent arrive while the
+        # first BrowserTabs is still mid-construction — without the flag
+        # that stacked a duplicate browser into the card.
+        if self.browsers is not None or self._creating:
+            return
+        self._creating = True
+        try:
+            from app.browser_tabs import BrowserTabs
+
+            tabs = BrowserTabs(self)
+            tabs.set_theme(self._theme_name)
+            self._card.add_widget(tabs, stretch=1)
+            self.browsers = tabs
+        finally:
+            self._creating = False
+
+    def set_theme(self, name: str) -> None:
+        self._theme_name = name
+        ui = UI_COLORS[name]
+        self._card.set_colors(ui["card"], ui["card_border"])
+        if self.browsers is not None:
+            self.browsers.set_theme(name)
 
 
 class RightPanel(Panel):
