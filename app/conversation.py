@@ -102,6 +102,11 @@ _HIGHLIGHT = {
     },
 }
 
+# insertMarkdown lays out headings and code fences with no vertical
+# margins; these are merged into the block formats after each render.
+_HEADING_TOP_MARGIN = 14.0
+_CODE_BLOCK_MARGIN = 8.0
+
 # Lexer lookup is not free; cache per fence language (None = no lexer).
 _LEXERS: dict[str, object] = {}
 
@@ -341,9 +346,13 @@ class ConversationView(QTextBrowser):
         start: int | None = None
         block = document.firstBlock()
         while block.isValid():
+            fmt = block.blockFormat()
+            if fmt.headingLevel() and fmt.topMargin() != _HEADING_TOP_MARGIN:
+                margin = QTextBlockFormat()
+                margin.setTopMargin(_HEADING_TOP_MARGIN)
+                QTextCursor(block).mergeBlockFormat(margin)
             is_code = (
-                block.blockFormat().property(QTextFormat.Property.BlockCodeLanguage)
-                is not None
+                fmt.property(QTextFormat.Property.BlockCodeLanguage) is not None
             )
             if is_code and start is None:
                 start = block.blockNumber()
@@ -363,6 +372,21 @@ class ConversationView(QTextBrowser):
                     fmt = QTextBlockFormat()
                     fmt.setBackground(background)
                     QTextCursor(block).mergeBlockFormat(fmt)
+                # Margins go on the fence edges only; putting them on every
+                # block would space out the individual code lines.
+                edges = QTextBlockFormat()
+                if (
+                    block.blockNumber() == first
+                    and block.blockFormat().topMargin() != _CODE_BLOCK_MARGIN
+                ):
+                    edges.setTopMargin(_CODE_BLOCK_MARGIN)
+                if (
+                    block.blockNumber() == last
+                    and block.blockFormat().bottomMargin() != _CODE_BLOCK_MARGIN
+                ):
+                    edges.setBottomMargin(_CODE_BLOCK_MARGIN)
+                if edges.propertyCount():
+                    QTextCursor(block).mergeBlockFormat(edges)
                 block = block.next()
             end_block = document.findBlockByNumber(last)
             if end_block.position() + end_block.length() >= changed_from:
