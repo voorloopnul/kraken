@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from PySide6.QtGui import QAction, QActionGroup
+from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -39,6 +40,16 @@ class MainWindow(QMainWindow):
         central_layout.addWidget(self.workspace_bar)
         central_layout.addWidget(self._view_stack, stretch=1)
         central_layout.addWidget(self.side_bar)
+
+        # Adding the first render-to-texture widget (the browser panel's
+        # QWebEngineView) to a window whose native handle already exists
+        # makes Qt destroy and recreate that handle, so the compositor
+        # unmaps and remaps the window — a visible flash that can also
+        # move it. This 1px GL widget, clipped outside the viewport,
+        # makes the window GL-composited from first creation instead.
+        self._gl_warmup = QOpenGLWidget(central)
+        self._gl_warmup.setFixedSize(1, 1)
+        self._gl_warmup.move(-2, -2)
 
         self.setCentralWidget(central)
         self.set_theme(DEFAULT_THEME)
