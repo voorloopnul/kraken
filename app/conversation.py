@@ -147,6 +147,14 @@ class ConversationView(QTextBrowser):
         # Document position where the trailing assistant block's markdown
         # starts; None when the last block isn't assistant.
         self._assistant_start: int | None = None
+        # Streaming deltas accumulate in the block model but repaint at most
+        # once per interval: re-rendering the whole assistant block on every
+        # token is O(message) per token, i.e. quadratic over a long reply.
+        self._assistant_dirty = False
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setSingleShot(True)
+        self._flush_timer.setInterval(50)
+        self._flush_timer.timeout.connect(self._flush_assistant)
         # Floating "Copy" buttons, one per code block; _code_ranges holds
         # the matching (first, last) text-block numbers.
         self._code_ranges: list[tuple[int, int]] = []
@@ -168,6 +176,10 @@ class ConversationView(QTextBrowser):
     def _repaint_all(self) -> None:
         """Re-render the whole document from the block model (theme change,
         collapse toggle), keeping the scroll position."""
+        # The model already holds any pending streamed text; a full repaint
+        # supersedes the deferred single-block flush.
+        self._flush_timer.stop()
+        self._assistant_dirty = False
         scroll = self.verticalScrollBar().value()
         self.clear()
         self._last_kind = None
@@ -268,17 +280,34 @@ class ConversationView(QTextBrowser):
     def _write(self, kind: str, payload: list) -> None:
         # A non-assistant block ends any assistant message in progress, so
         # held-back whitespace belonged to a text part that never became
-        # visible — drop it.
+        # visible — drop it, and flush any pending streamed text so the
+        # finished reply is painted before the new block.
         if kind != "assistant":
             self._pending_assistant = ""
+            self._flush_assistant()
         # Merge consecutive assistant deltas into one block: its full
         # markdown source must be re-rendered together.
         if kind == "assistant" and self._blocks and self._blocks[-1][0] == "assistant":
             self._blocks[-1][1].extend(payload)
-            self._paint(kind, self._blocks[-1][1])
+            self._schedule_assistant_flush()
         else:
             self._blocks.append((kind, list(payload)))
             self._paint(kind, payload)
+
+    def _schedule_assistant_flush(self) -> None:
+        """Mark the trailing assistant block dirty and coalesce repaints:
+        one paint per timer interval rather than one per delta."""
+        self._assistant_dirty = True
+        if not self._flush_timer.isActive():
+            self._flush_timer.start()
+
+    def _flush_assistant(self) -> None:
+        self._flush_timer.stop()
+        if not self._assistant_dirty:
+            return
+        self._assistant_dirty = False
+        if self._blocks and self._blocks[-1][0] == "assistant":
+            self._paint("assistant", self._blocks[-1][1])
 
     def add_user(self, text: str) -> None:
         self._write("user", [("You\n", "user", True, False), (text, "text", False, False)])
@@ -300,6 +329,7 @@ class ConversationView(QTextBrowser):
     def add_tool(self, name: str, summary: str, detail: str = "") -> int:
         """Add a collapsible tool line; returns its block index so callers
         can append the result once the tool finishes."""
+        self._flush_assistant()
         line = f"⚒ {name}"
         if summary:
             line += f"  {summary}"
@@ -327,6 +357,8 @@ class ConversationView(QTextBrowser):
         self._write("info", [(text, "error" if error else "dim", False, True)])
 
     def clear_conversation(self) -> None:
+        self._flush_timer.stop()
+        self._assistant_dirty = False
         self.clear()
         self._blocks = []
         self._last_kind = None
@@ -337,14 +369,25 @@ class ConversationView(QTextBrowser):
     # ---- Code blocks: background + copy buttons ----------------------------
 
     def _sync_code_ui(self, changed_from: int = 0) -> None:
-        """Re-scan the document for code blocks (markdown import marks them
-        with BlockCodeLanguage), tint them, syntax-highlight them, and give
-        each one a Copy button. Ranges entirely before `changed_from` keep
-        their existing highlighting."""
+        """Give headings/code blocks their margins, tint and syntax-highlight
+        code blocks, and give each one a Copy button. Only blocks from
+        `changed_from` onward are re-examined; everything before it survived
+        the paint untouched, so its cached ranges and styling are reused —
+        without this, a streamed reply would re-scan the whole document on
+        every repaint (quadratic over the message)."""
         document = self.document()
-        ranges: list[tuple[int, int]] = []
+        changed_block = document.findBlock(changed_from).blockNumber()
+        # A cached code range straddling the boundary must be re-scanned from
+        # its start; only ranges wholly before that are kept as-is.
+        rescan_from = changed_block
+        for first, last in self._code_ranges:
+            if first < changed_block <= last:
+                rescan_from = min(rescan_from, first)
+        prefix = [r for r in self._code_ranges if r[1] < rescan_from]
+
+        tail: list[tuple[int, int]] = []
         start: int | None = None
-        block = document.firstBlock()
+        block = document.findBlockByNumber(rescan_from)
         while block.isValid():
             fmt = block.blockFormat()
             if fmt.headingLevel() and fmt.topMargin() != _HEADING_TOP_MARGIN:
@@ -357,15 +400,17 @@ class ConversationView(QTextBrowser):
             if is_code and start is None:
                 start = block.blockNumber()
             elif not is_code and start is not None:
-                ranges.append((start, block.blockNumber() - 1))
+                tail.append((start, block.blockNumber() - 1))
                 start = None
             block = block.next()
         if start is not None:
-            ranges.append((start, document.blockCount() - 1))
-        self._code_ranges = ranges
+            tail.append((start, document.blockCount() - 1))
+        self._code_ranges = prefix + tail
 
+        # Only the freshly scanned tail needs tinting/highlighting; the prefix
+        # kept its styling from earlier paints.
         background = QColor(self._colors["code_bg"])
-        for first, last in ranges:
+        for first, last in tail:
             block = document.findBlockByNumber(first)
             while block.isValid() and block.blockNumber() <= last:
                 if block.blockFormat().background().color() != background:
@@ -388,11 +433,9 @@ class ConversationView(QTextBrowser):
                 if edges.propertyCount():
                     QTextCursor(block).mergeBlockFormat(edges)
                 block = block.next()
-            end_block = document.findBlockByNumber(last)
-            if end_block.position() + end_block.length() >= changed_from:
-                self._highlight_range(first, last)
+            self._highlight_range(first, last)
 
-        while len(self._copy_buttons) < len(ranges):
+        while len(self._copy_buttons) < len(self._code_ranges):
             self._copy_buttons.append(self._make_copy_button())
         self._layout_copy_buttons()
 
@@ -530,6 +573,8 @@ class ConversationView(QTextBrowser):
                     "bash", message.get("command", ""),
                     detail=message.get("output", ""),
                 )
+        # Paint a trailing assistant reply now rather than after the timer.
+        self._flush_assistant()
 
 
 def _content_text(content) -> str:
