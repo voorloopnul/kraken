@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.config import load_state, save_state
 from app.side_bar import SideBar
 from app.themes import DEFAULT_THEME, UI_COLORS
 from app.workspace_bar import WorkspaceBar
@@ -43,9 +44,19 @@ class MainWindow(QMainWindow):
         self.set_theme(DEFAULT_THEME)
 
         self._create_menus()
-        # Open the launch directory as the first workspace so the window
-        # starts with a live set of panes.
-        self.workspace_bar.add_workspace(str(Path.cwd()))
+        # Reopen the workspaces from the last run (folders that vanished
+        # since are dropped); first launch falls back to the launch
+        # directory so the window starts with a live set of panes.
+        state = load_state()
+        workspaces = [p for p in state.get("workspaces", []) if Path(p).is_dir()]
+        if not workspaces:
+            workspaces = [str(Path.cwd())]
+        for path in workspaces:
+            self.workspace_bar.add_workspace(path, select=False)
+        current = state.get("current_workspace")
+        self.workspace_bar.add_workspace(
+            current if current in workspaces else workspaces[0]
+        )
 
     @property
     def current_view(self) -> WorkspaceView | None:
@@ -89,6 +100,9 @@ class MainWindow(QMainWindow):
         self._view_stack.setCurrentWidget(view)
         self.current_workspace = path
         self.setWindowTitle(f"Alpine — {Path(path).name}")
+        save_state(
+            workspaces=self.workspace_bar.workspaces, current_workspace=path
+        )
 
     def closeEvent(self, event) -> None:
         for view in self.views.values():
