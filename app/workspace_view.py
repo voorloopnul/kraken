@@ -49,6 +49,7 @@ class WorkspaceView(QWidget):
         # click, so opening a workspace stays instant.
         self.agent = PiAgent(path, self)
         self._model_label_set = False
+        self._tool_blocks: dict[str, int] = {}  # toolCallId -> transcript block
         self.agent.event.connect(self._on_agent_event)
         self.agent.notify.connect(self._on_agent_notify)
         self.agent.failed.connect(self._on_agent_failed)
@@ -105,11 +106,27 @@ class WorkspaceView(QWidget):
                 reason = delta.get("reason", "error")
                 conversation.add_info(f"({reason})", error=reason != "aborted")
         elif kind == "tool_execution_start":
-            from app.conversation import args_summary
+            from app.conversation import args_detail, args_summary
 
-            conversation.add_tool(
-                event.get("toolName", "?"), args_summary(event.get("args"))
+            index = conversation.add_tool(
+                event.get("toolName", "?"),
+                args_summary(event.get("args")),
+                detail=args_detail(event.get("args")),
             )
+            if event.get("toolCallId"):
+                self._tool_blocks[event["toolCallId"]] = index
+        elif kind == "tool_execution_end":
+            index = self._tool_blocks.pop(event.get("toolCallId"), None)
+            result = event.get("result") or {}
+            text = "\n".join(
+                part.get("text", "")
+                for part in result.get("content") or []
+                if isinstance(part, dict) and part.get("type") == "text"
+            ).strip()
+            if index is not None and text:
+                if event.get("isError"):
+                    text = f"(error)\n{text}"
+                conversation.append_tool_detail(index, text)
 
     def _on_agent_notify(self, message: str, notify_type: str) -> None:
         self.center_panel.conversation.add_info(message, error=notify_type == "error")

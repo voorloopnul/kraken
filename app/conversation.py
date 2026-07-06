@@ -126,11 +126,19 @@ class ConversationView(QTextBrowser):
         super().__init__(parent)
         self.setReadOnly(True)
         self.setOpenExternalLinks(False)
+        # Anchor clicks toggle tool blocks; without this QTextBrowser would
+        # try to navigate to the anchor and clear the document.
+        self.setOpenLinks(False)
+        self.anchorClicked.connect(self._on_anchor_clicked)
         # The transcript model: (kind, payload) per block. `kind` drives
         # block spacing; payload is a list of markdown source chunks for
-        # assistant blocks, a list of _Span for everything else.
-        self._blocks: list[tuple[str, list]] = []
+        # assistant blocks, a dict for collapsible tool blocks, and a list
+        # of _Span for everything else.
+        self._blocks: list[tuple[str, list | dict]] = []
         self._last_kind: str | None = None
+        # Whitespace-only assistant deltas held back until the message
+        # proves to have visible text; see append_assistant_delta.
+        self._pending_assistant = ""
         # Document position where the trailing assistant block's markdown
         # starts; None when the last block isn't assistant.
         self._assistant_start: int | None = None
@@ -150,13 +158,19 @@ class ConversationView(QTextBrowser):
         self.setStyleSheet(_STYLES[name])
         for button in self._copy_buttons:
             button.setStyleSheet(self._copy_style)
-        # Repaint existing content with the new palette.
+        self._repaint_all()
+
+    def _repaint_all(self) -> None:
+        """Re-render the whole document from the block model (theme change,
+        collapse toggle), keeping the scroll position."""
+        scroll = self.verticalScrollBar().value()
         self.clear()
         self._last_kind = None
         self._assistant_start = None
         for kind, payload in self._blocks:
             self._paint(kind, payload)
         self._sync_code_ui()
+        self.verticalScrollBar().setValue(scroll)
 
     def _format(self, role: str, bold: bool, italic: bool) -> QTextCharFormat:
         fmt = QTextCharFormat()
@@ -209,6 +223,9 @@ class ConversationView(QTextBrowser):
             if kind == "assistant":
                 self._assistant_start = cursor.position()
                 cursor.insertMarkdown("".join(payload))
+            elif kind == "tool":
+                self._assistant_start = None
+                self._paint_tool(cursor, payload)
             else:
                 self._assistant_start = None
                 for text, role, bold, italic in payload:
@@ -218,7 +235,37 @@ class ConversationView(QTextBrowser):
         if follow:
             scrollbar.setValue(scrollbar.maximum())
 
+    def _paint_tool(self, cursor: QTextCursor, payload: dict) -> None:
+        """One collapsible line: a clickable '▸/▾ ⚒ tool  summary' header;
+        expanded, the full detail (args, output) follows in monospace."""
+        arrow = "▾" if payload["expanded"] else "▸"
+        header = self._format("dim", False, True)
+        header.setAnchor(True)
+        header.setAnchorHref(f"tool:{payload['index']}")
+        cursor.insertText(f"{arrow} {payload['line']}", header)
+        if payload["expanded"] and payload["detail"]:
+            detail = self._format("dim", False, False)
+            detail.setFontFamilies(["monospace"])
+            detail.setFontFixedPitch(True)
+            detail.setFontPointSize(9.0)
+            cursor.insertText("\n" + payload["detail"], detail)
+
+    def _on_anchor_clicked(self, url) -> None:
+        target = url.toString()
+        if not target.startswith("tool:"):
+            return
+        index = int(target.split(":", 1)[1])
+        if 0 <= index < len(self._blocks) and self._blocks[index][0] == "tool":
+            payload = self._blocks[index][1]
+            payload["expanded"] = not payload["expanded"]
+            self._repaint_all()
+
     def _write(self, kind: str, payload: list) -> None:
+        # A non-assistant block ends any assistant message in progress, so
+        # held-back whitespace belonged to a text part that never became
+        # visible — drop it.
+        if kind != "assistant":
+            self._pending_assistant = ""
         # Merge consecutive assistant deltas into one block: its full
         # markdown source must be re-rendered together.
         if kind == "assistant" and self._blocks and self._blocks[-1][0] == "assistant":
@@ -232,13 +279,44 @@ class ConversationView(QTextBrowser):
         self._write("user", [("You\n", "user", True, False), (text, "text", False, False)])
 
     def append_assistant_delta(self, delta: str) -> None:
+        # Models often emit a whitespace-only text part (e.g. a single
+        # space) between thinking and tool calls; opening an assistant
+        # block for it renders nothing but still costs the blank-line
+        # separators on both sides. Until an assistant block is open,
+        # hold whitespace back and only write once visible text arrives.
+        if not (self._blocks and self._blocks[-1][0] == "assistant"):
+            if not (self._pending_assistant + delta).strip():
+                self._pending_assistant += delta
+                return
+            delta = self._pending_assistant + delta
+            self._pending_assistant = ""
         self._write("assistant", [delta])
 
-    def add_tool(self, name: str, summary: str) -> None:
+    def add_tool(self, name: str, summary: str, detail: str = "") -> int:
+        """Add a collapsible tool line; returns its block index so callers
+        can append the result once the tool finishes."""
         line = f"⚒ {name}"
         if summary:
             line += f"  {summary}"
-        self._write("tool", [(line, "dim", False, True)])
+        payload = {
+            "line": line,
+            "detail": _clip(detail),
+            "expanded": False,
+            "index": len(self._blocks),
+        }
+        self._blocks.append(("tool", payload))
+        self._paint("tool", payload)
+        return payload["index"]
+
+    def append_tool_detail(self, index: int, text: str) -> None:
+        """Append to a tool block's hidden detail (e.g. its result)."""
+        if not (0 <= index < len(self._blocks)) or self._blocks[index][0] != "tool":
+            return
+        payload = self._blocks[index][1]
+        joined = f"{payload['detail']}\n\n{text}" if payload["detail"] else text
+        payload["detail"] = _clip(joined)
+        if payload["expanded"]:
+            self._repaint_all()
 
     def add_info(self, text: str, error: bool = False) -> None:
         self._write("info", [(text, "error" if error else "dim", False, True)])
@@ -248,6 +326,7 @@ class ConversationView(QTextBrowser):
         self._blocks = []
         self._last_kind = None
         self._assistant_start = None
+        self._pending_assistant = ""
         self._sync_code_ui()
 
     # ---- Code blocks: background + copy buttons ----------------------------
@@ -396,6 +475,7 @@ class ConversationView(QTextBrowser):
     def render_messages(self, messages: list[dict]) -> None:
         """Replace the transcript with a session's stored messages."""
         self.clear_conversation()
+        tool_blocks: dict[str, int] = {}  # toolCallId -> block index
         for message in messages:
             role = message.get("role")
             if role == "user":
@@ -409,9 +489,23 @@ class ConversationView(QTextBrowser):
                     if part.get("type") == "text" and part.get("text"):
                         self.append_assistant_delta(part["text"])
                     elif part.get("type") == "toolCall":
-                        self.add_tool(part.get("name", "?"), args_summary(part.get("arguments")))
+                        index = self.add_tool(
+                            part.get("name", "?"),
+                            args_summary(part.get("arguments")),
+                            detail=args_detail(part.get("arguments")),
+                        )
+                        if part.get("id"):
+                            tool_blocks[part["id"]] = index
+            elif role == "toolResult":
+                index = tool_blocks.get(message.get("toolCallId"))
+                result = _content_text(message.get("content"))
+                if index is not None and result:
+                    self.append_tool_detail(index, result)
             elif role == "bashExecution":
-                self.add_tool("bash", message.get("command", ""))
+                self.add_tool(
+                    "bash", message.get("command", ""),
+                    detail=message.get("output", ""),
+                )
 
 
 def _content_text(content) -> str:
@@ -434,3 +528,19 @@ def args_summary(args) -> str:
             value = " ".join(args[key].split())
             return value if len(value) <= 80 else value[:79] + "…"
     return ""
+
+
+def args_detail(args) -> str:
+    """Full tool arguments for the expanded view."""
+    if not isinstance(args, dict) or not args:
+        return ""
+    import json
+
+    return json.dumps(args, indent=2, ensure_ascii=False)
+
+
+def _clip(text: str, limit: int = 4000) -> str:
+    text = text.strip()
+    if len(text) > limit:
+        return text[:limit] + "\n… (truncated)"
+    return text
