@@ -22,11 +22,16 @@ class WorkspaceView(QWidget):
         self._theme_name = DEFAULT_THEME
 
         self.left_panel = LeftPanel(cwd=path)
+        self.left_panel.setMinimumWidth(280)
+        self.left_panel.setMaximumWidth(380)
         self.center_panel = CenterPanel()
         # Per-workspace browser, like the terminals; it's lazily populated
         # on first show, so hidden panels cost no Chromium processes.
         self.browser_panel = BrowserPanel()
         self.right_panel = RightPanel(cwd=path)
+        # The terminal panel never shrinks below a usable width; the splitter
+        # stops the drag here rather than letting it collapse to a sliver.
+        self.right_panel.setMinimumWidth(380)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.left_panel)
