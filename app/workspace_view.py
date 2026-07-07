@@ -1,8 +1,9 @@
 """One workspace's set of panes — history (left), conversation (center), and
-terminals (right) in a splitter — plus its own Pi agent (RPC subprocess
-running in the workspace folder). MainWindow keeps one WorkspaceView per open
-workspace in a stack and switches between them, so each workspace keeps its
-own pane state, agent conversation, and running shells."""
+terminals (right) in a splitter. Unlike a single agent per workspace, this
+runs one Pi session per `SessionController`: the focused session shows in the
+center panel while others keep streaming in the background, so a running task
+never blocks starting or opening another session. MainWindow keeps one
+WorkspaceView per open workspace in a stack and switches between them."""
 
 from __future__ import annotations
 
@@ -10,14 +11,15 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QSplitter, QVBoxLayout, QWidget
 
 from app.panels import BrowserPanel, CenterPanel, LeftPanel, RightPanel
-from app.pi_rpc import PiAgent
-from app.themes import UI_COLORS
+from app.session_controller import SessionController
+from app.themes import DEFAULT_THEME, UI_COLORS
 
 
 class WorkspaceView(QWidget):
     def __init__(self, path: str, parent: QWidget | None = None):
         super().__init__(parent)
         self.path = path
+        self._theme_name = DEFAULT_THEME
 
         self.left_panel = LeftPanel(cwd=path)
         self.center_panel = CenterPanel()
@@ -45,157 +47,170 @@ class WorkspaceView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(splitter)
 
-        # The agent process starts lazily on the first prompt or history
-        # click, so opening a workspace stays instant.
-        self.agent = PiAgent(path, self)
-        self._model_label_set = False
-        self._tool_blocks: dict[str, int] = {}  # toolCallId -> transcript block
-        self.agent.event.connect(self._on_agent_event)
-        self.agent.notify.connect(self._on_agent_notify)
-        self.agent.failed.connect(self._on_agent_failed)
+        # Live sessions (one agent + transcript each). Agents start lazily on
+        # the first prompt, so opening a workspace stays instant. `unseen`
+        # holds sessions that finished in the background and haven't been
+        # opened since.
+        self.controllers: list[SessionController] = []
+        self.focused: SessionController | None = None
+        self.unseen: set[str] = set()
+
         self.center_panel.chat.submitted.connect(self._on_prompt)
-        self.center_panel.stop_button.clicked.connect(self.agent.abort)
+        self.center_panel.stop_button.clicked.connect(self._on_stop)
         self.left_panel.session_selected.connect(self._load_session)
         self.left_panel.new_session_requested.connect(self._new_session)
+        self.left_panel.session_removed.connect(self._on_session_removed)
 
-    # ---- Chat -> agent ---------------------------------------------------
+        # Start on a fresh, empty session ready to type in.
+        self._focus(self._new_controller())
+
+    # ---- Session pool ----------------------------------------------------
+
+    def _new_controller(self, session_path: str | None = None) -> SessionController:
+        controller = SessionController(
+            self.path, self._theme_name, session_path=session_path, parent=self
+        )
+        controller.streaming_changed.connect(
+            lambda streaming, c=controller: self._on_streaming_changed(c, streaming)
+        )
+        controller.path_known.connect(
+            lambda p, c=controller: self._on_path_known(c, p)
+        )
+        controller.model_known.connect(
+            lambda name, c=controller: self._on_model_known(c, name)
+        )
+        self.controllers.append(controller)
+        self.center_panel.add_conversation(controller.conversation)
+        return controller
+
+    def _controller_key(self, controller: SessionController) -> str:
+        """A stable history key for a live session: its file path once Pi has
+        assigned one, else a temporary id so it's still listed and clickable."""
+        return controller.session_path or f"live:{id(controller)}"
+
+    def _controller_for_key(self, key: str) -> SessionController | None:
+        for controller in self.controllers:
+            if self._controller_key(controller) == key:
+                return controller
+        return None
+
+    def _focus(self, controller: SessionController) -> None:
+        previous = self.focused
+        self.focused = controller
+        self.center_panel.set_focused_conversation(controller.conversation)
+        self.center_panel.set_busy(controller.is_streaming)
+        if controller.model_name:
+            self.center_panel.chat.set_model_label(controller.model_name)
+        # Retire the session we're leaving unless it's still streaming (then it
+        # stays live in the background so you can flip back and watch it).
+        if previous is not None and previous is not controller and not previous.is_streaming:
+            self._retire(previous)
+        self._sync_history()
+
+    def _retire(self, controller: SessionController) -> None:
+        controller.stop()
+        self.center_panel.remove_conversation(controller.conversation)
+        controller.conversation.deleteLater()
+        if controller in self.controllers:
+            self.controllers.remove(controller)
+        controller.deleteLater()
+
+    def _sync_history(self) -> None:
+        """Push the current live sessions and their running/unseen state to the
+        History panel and rebuild it."""
+        entries = [
+            (self._controller_key(c), c.title, c.session_path, c.is_streaming)
+            for c in self.controllers
+            if c.first_prompt is not None
+        ]
+        self.left_panel.set_live_sessions(entries)
+        running = {
+            self._controller_key(c) for c in self.controllers if c.is_streaming
+        }
+        self.left_panel.set_session_status(running, self.unseen)
+
+    # ---- Chat / controls -------------------------------------------------
 
     def _on_prompt(self, text: str) -> None:
-        conversation = self.center_panel.conversation
-        conversation.add_user(text)
-        was_streaming = self.agent.is_streaming
-        self.agent.prompt(text, self._on_prompt_response)
-        if was_streaming:
-            conversation.add_info("(queued: delivered after the current turn)")
-        self._sync_model_label()
+        if self.focused is None:
+            self._focus(self._new_controller())
+        self.focused.prompt(text)
+        # Surface the just-started session in History right away, so it's
+        # reachable even before Pi writes its file to disk.
+        self._sync_history()
 
-    def _on_prompt_response(self, response: dict) -> None:
-        if not response.get("success"):
-            self.center_panel.conversation.add_info(
-                f"Prompt rejected: {response.get('error', 'unknown error')}", error=True
-            )
-
-    def _sync_model_label(self) -> None:
-        if self._model_label_set:
-            return
-        self._model_label_set = True
-
-        def on_state(response: dict) -> None:
-            model = (response.get("data") or {}).get("model") or {}
-            if model.get("name"):
-                self.center_panel.chat.set_model_label(model["name"])
-
-        self.agent.get_state(on_state)
-
-    # ---- Agent events -> conversation -------------------------------------
-
-    def _on_agent_event(self, event: dict) -> None:
-        conversation = self.center_panel.conversation
-        kind = event.get("type")
-        if kind == "agent_start":
-            self.center_panel.set_busy(True)
-        elif kind == "agent_end":
-            self.center_panel.set_busy(False)
-            # The finished run was appended to the workspace's session file.
-            self.left_panel.refresh()
-        elif kind == "message_update":
-            delta = event.get("assistantMessageEvent") or {}
-            if delta.get("type") == "text_delta":
-                conversation.append_assistant_delta(delta.get("delta", ""))
-            elif delta.get("type") == "error":
-                reason = delta.get("reason", "error")
-                conversation.add_info(f"({reason})", error=reason != "aborted")
-        elif kind == "tool_execution_start":
-            from app.conversation import args_detail, args_summary
-
-            index = conversation.add_tool(
-                event.get("toolName", "?"),
-                args_summary(event.get("args")),
-                detail=args_detail(event.get("args")),
-            )
-            if event.get("toolCallId"):
-                self._tool_blocks[event["toolCallId"]] = index
-        elif kind == "tool_execution_end":
-            index = self._tool_blocks.pop(event.get("toolCallId"), None)
-            result = event.get("result") or {}
-            text = "\n".join(
-                part.get("text", "")
-                for part in result.get("content") or []
-                if isinstance(part, dict) and part.get("type") == "text"
-            ).strip()
-            if index is not None and text:
-                if event.get("isError"):
-                    text = f"(error)\n{text}"
-                conversation.append_tool_detail(index, text)
-
-    def _on_agent_notify(self, message: str, notify_type: str) -> None:
-        self.center_panel.conversation.add_info(message, error=notify_type == "error")
-
-    def _on_agent_failed(self, error: str) -> None:
-        self.center_panel.set_busy(False)
-        self.center_panel.conversation.add_info(
-            f"Pi agent unavailable: {error}", error=True
-        )
-
-    # ---- History -> agent --------------------------------------------------
+    def _on_stop(self) -> None:
+        if self.focused is not None:
+            self.focused.agent.abort()
 
     def _new_session(self) -> None:
-        conversation = self.center_panel.conversation
-        if self.agent.is_streaming:
-            conversation.add_info("Agent is busy — stop it before starting a new session.")
-            return
-        # No agent process yet means the transcript is already a fresh
-        # session; just make sure it's empty.
-        if not self.agent.running:
-            conversation.clear_conversation()
+        # Reuse the current session if it's already a fresh, unused one.
+        if (
+            self.focused is not None
+            and not self.focused.is_streaming
+            and self.focused.session_path is None
+            and self.focused.conversation.is_empty
+        ):
             self.left_panel.clear_selection()
             return
+        self._focus(self._new_controller())
+        self.left_panel.clear_selection()
 
-        def on_new(response: dict) -> None:
-            if not response.get("success"):
-                conversation.add_info(
-                    f"Could not start a new session: {response.get('error', 'unknown error')}",
-                    error=True,
-                )
-                return
-            if (response.get("data") or {}).get("cancelled"):
-                conversation.add_info("New session cancelled by an extension.")
-                return
-            conversation.clear_conversation()
-            self.left_panel.clear_selection()
-            self.left_panel.refresh()
+    def _on_session_removed(self, path: str) -> None:
+        # A session was archived or deleted from History. Drop its live agent
+        # if it has one; if it was the focused session, its transcript is now
+        # stale, so replace it with a fresh, empty session.
+        self.unseen.discard(path)
+        controller = self._controller_for_key(path)
+        if controller is not None:
+            was_focused = controller is self.focused
+            self._retire(controller)
+            if was_focused:
+                self.focused = None
+                self._focus(self._new_controller())
+        self._sync_history()
 
-        self.agent.new_session(on_new)
-
-    def _load_session(self, session_path: str) -> None:
-        conversation = self.center_panel.conversation
-        if self.agent.is_streaming:
-            conversation.add_info("Agent is busy — stop it before switching sessions.")
+    def _load_session(self, key: str) -> None:
+        # Opening a session clears its "finished, unread" badge.
+        self.unseen.discard(key)
+        # A live session (running or in-flight, maybe not yet on disk) is keyed
+        # by path-or-temp-id; jump straight to it without touching its agent.
+        live = self._controller_for_key(key)
+        if live is not None:
+            self._focus(live)
             return
+        # Otherwise it's a persisted session on disk: bind a fresh agent to it.
+        controller = self._new_controller(session_path=key)
+        self._focus(controller)
+        controller.load()
 
-        def on_messages(response: dict) -> None:
-            if response.get("success"):
-                messages = (response.get("data") or {}).get("messages") or []
-                conversation.render_messages(messages)
+    # ---- Controller signals ----------------------------------------------
 
-        def on_switched(response: dict) -> None:
-            if not response.get("success"):
-                conversation.add_info(
-                    f"Could not load session: {response.get('error', 'unknown error')}",
-                    error=True,
-                )
-                return
-            if (response.get("data") or {}).get("cancelled"):
-                conversation.add_info("Session switch cancelled by an extension.")
-                return
-            self.agent.get_messages(on_messages)
+    def _on_streaming_changed(self, controller: SessionController, streaming: bool) -> None:
+        if controller is self.focused:
+            self.center_panel.set_busy(streaming)
+        if not streaming:
+            # A turn finished; its messages are now on disk.
+            if controller is not self.focused:
+                # Background session completed: flag it unread, then retire it.
+                if controller.session_path:
+                    self.unseen.add(controller.session_path)
+                self._retire(controller)
+        self._sync_history()
 
-        self.agent.switch_session(session_path, on_switched)
-        self._sync_model_label()
+    def _on_path_known(self, controller: SessionController, path: str) -> None:
+        # A brand-new session's file path just became known; re-key its History
+        # row (and show its persisted row once Pi writes the file).
+        self._sync_history()
 
-    # ---- Theme / lifecycle ---------------------------------------------------
+    def _on_model_known(self, controller: SessionController, name: str) -> None:
+        if controller is self.focused:
+            self.center_panel.chat.set_model_label(name)
+
+    # ---- Theme / lifecycle -----------------------------------------------
 
     def set_theme(self, name: str) -> None:
+        self._theme_name = name
         ui = UI_COLORS[name]
         # Styling the splitter covers the view background and cascades text
         # color to every panel label.
@@ -207,7 +222,10 @@ class WorkspaceView(QWidget):
         self.center_panel.set_theme(name)
         self.browser_panel.set_theme(name)
         self.right_panel.set_theme(name)
+        for controller in self.controllers:
+            controller.set_theme(name)
 
     def shutdown(self) -> None:
-        self.agent.stop()
+        for controller in self.controllers:
+            controller.stop()
         self.right_panel.terminals.shutdown_all()

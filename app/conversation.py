@@ -356,6 +356,10 @@ class ConversationView(QTextBrowser):
     def add_info(self, text: str, error: bool = False) -> None:
         self._write("info", [(text, "error" if error else "dim", False, True)])
 
+    @property
+    def is_empty(self) -> bool:
+        return not self._blocks
+
     def clear_conversation(self) -> None:
         self._flush_timer.stop()
         self._assistant_dirty = False

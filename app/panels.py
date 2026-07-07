@@ -1,7 +1,7 @@
 """The three content panels. Replace the placeholder widgets with real content."""
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt, QSize, Signal
+from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
@@ -12,12 +12,28 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QStackedWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from app.themes import DEFAULT_THEME, LIGHT, UI_COLORS
+
+
+def _dot_icon(color: str) -> QIcon:
+    """A small filled circle used as a history-row status indicator."""
+    size = 10
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(color))
+    painter.drawEllipse(1, 1, size - 2, size - 2)
+    painter.end()
+    return QIcon(pixmap)
+
 
 _HISTORY_STYLES = {
     "dark": """
@@ -101,6 +117,7 @@ class LeftPanel(Panel):
 
     session_selected = Signal(str)
     new_session_requested = Signal()
+    session_removed = Signal(str)  # a session's path was archived or deleted
 
     def __init__(self, parent: QWidget | None = None, cwd: str | None = None):
         super().__init__(parent)
@@ -119,6 +136,18 @@ class LeftPanel(Panel):
         self._list.itemClicked.connect(self._on_item_clicked)
         self._list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._list.customContextMenuRequested.connect(self._on_context_menu)
+        # Per-session status shown as a coloured dot to the left of each row:
+        # amber = a turn is streaming now, green = finished with a result the
+        # user hasn't opened yet. Both are keyed by session file path.
+        self._list.setIconSize(QSize(10, 10))
+        self._running: set[str] = set()
+        self._unseen: set[str] = set()
+        # Live, in-flight sessions the workspace supplies: (key, title,
+        # path-or-None, running). They're listed even before Pi has written
+        # the session file to disk, so a running session is always reachable.
+        self._live: list[tuple[str, str, str | None, bool]] = []
+        self._running_icon = _dot_icon("#e0a030")
+        self._unseen_icon = _dot_icon("#2ea043")
         self._card.add_widget(title)
         self._card.add_widget(self._new_button)
         self._card.add_widget(self._list, stretch=1)
@@ -126,17 +155,34 @@ class LeftPanel(Panel):
         self.refresh()
 
     def refresh(self) -> None:
-        """Re-read the workspace's Pi sessions from disk."""
+        """Rebuild the list from live in-flight sessions plus the ones Pi has
+        written to disk (deduped by path)."""
         from app.pi_sessions import sessions_for
 
         selected = self._selected_path()
         self._list.clear()
         sessions = sessions_for(self._cwd) if self._cwd else []
-        if not sessions:
+        disk_paths = {str(s.path) for s in sessions}
+
+        # Live sessions first: those not yet on disk get their own row so the
+        # user can jump back to a running session mid-turn. A live session that
+        # Pi has already persisted is left to its disk row below (the running
+        # dot still marks it).
+        for key, title, path, _running in self._live:
+            if path and path in disk_paths:
+                continue
+            item = QListWidgetItem(f"{title}\nrunning…")
+            item.setData(Qt.ItemDataRole.UserRole, key)
+            self._list.addItem(item)
+            if key == selected:
+                item.setSelected(True)
+
+        if not sessions and not self._live:
             item = QListWidgetItem("No previous sessions")
             item.setFlags(Qt.ItemFlag.NoItemFlags)
             self._list.addItem(item)
             return
+
         for session in sessions:
             noun = "message" if session.message_count == 1 else "messages"
             item = QListWidgetItem(
@@ -149,6 +195,31 @@ class LeftPanel(Panel):
             self._list.addItem(item)
             if str(session.path) == selected:
                 item.setSelected(True)
+        self._apply_status()
+
+    def set_live_sessions(self, entries: list[tuple[str, str, str | None, bool]]) -> None:
+        """Supply the workspace's live, in-flight sessions (key, title, path,
+        running). Stored for the next refresh."""
+        self._live = list(entries)
+
+    def set_session_status(self, running: set[str], unseen: set[str]) -> None:
+        """Update which sessions show the running / done-unseen dot. Called by
+        the workspace as agents start, finish, and get opened. A full refresh
+        keeps live-session rows in sync with their running state."""
+        self._running = set(running)
+        self._unseen = set(unseen)
+        self.refresh()
+
+    def _apply_status(self) -> None:
+        for i in range(self._list.count()):
+            item = self._list.item(i)
+            path = item.data(Qt.ItemDataRole.UserRole)
+            if path in self._running:
+                item.setIcon(self._running_icon)
+            elif path in self._unseen:
+                item.setIcon(self._unseen_icon)
+            else:
+                item.setIcon(QIcon())
 
     def clear_selection(self) -> None:
         self._list.clearSelection()
@@ -164,7 +235,9 @@ class LeftPanel(Panel):
 
     def _on_context_menu(self, pos) -> None:
         item = self._list.itemAt(pos)
-        if item is None or not item.data(Qt.ItemDataRole.UserRole):
+        # Only persisted sessions (which carry a session id) can be archived or
+        # deleted; live in-flight rows have no file to act on.
+        if item is None or not item.data(Qt.ItemDataRole.UserRole + 1):
             return
         menu = QMenu(self._list)
         archive_action = menu.addAction("Archive")
@@ -181,6 +254,7 @@ class LeftPanel(Panel):
         session_id = item.data(Qt.ItemDataRole.UserRole + 1)
         archive_session(session_id)
         self.refresh()
+        self.session_removed.emit(item.data(Qt.ItemDataRole.UserRole))
 
     def _delete(self, item: QListWidgetItem) -> None:
         from app.pi_sessions import delete_session
@@ -194,8 +268,10 @@ class LeftPanel(Panel):
             != QMessageBox.StandardButton.Yes
         ):
             return
-        delete_session(item.data(Qt.ItemDataRole.UserRole))
+        path = item.data(Qt.ItemDataRole.UserRole)
+        delete_session(path)
         self.refresh()
+        self.session_removed.emit(path)
 
     def set_theme(self, name: str) -> None:
         ui = UI_COLORS[name]
@@ -205,15 +281,16 @@ class LeftPanel(Panel):
 
 
 class CenterPanel(Panel):
-    """Conversation pane: transcript, busy row (with Stop), and chat input."""
+    """Conversation pane: a stack of per-session transcripts (only the focused
+    one is shown), a busy row (with Stop), and the chat input. The workspace
+    owns one transcript widget per live session and flips between them here."""
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         from app.chat_input import ChatInput
-        from app.conversation import ConversationView
 
-        self.conversation = ConversationView()
-        self.add_widget(self.conversation, stretch=1)
+        self.conversation_stack = QStackedWidget()
+        self.add_widget(self.conversation_stack, stretch=1)
 
         self._busy_label = QLabel("Pi is working…")
         self.stop_button = QToolButton()
@@ -232,11 +309,26 @@ class CenterPanel(Panel):
         self.chat = ChatInput()
         self.add_widget(self.chat)
 
+    def add_conversation(self, view: QWidget) -> None:
+        if self.conversation_stack.indexOf(view) < 0:
+            self.conversation_stack.addWidget(view)
+
+    def remove_conversation(self, view: QWidget) -> None:
+        self.conversation_stack.removeWidget(view)
+
+    def set_focused_conversation(self, view: QWidget) -> None:
+        self.add_conversation(view)
+        self.conversation_stack.setCurrentWidget(view)
+
     def set_busy(self, busy: bool) -> None:
         self._busy_row.setVisible(busy)
 
     def set_theme(self, name: str) -> None:
-        self.conversation.set_theme(name)
+        # The transcripts paint transparent, so the stack that hosts them must
+        # carry the window background; the SessionControllers theme the text.
+        self.conversation_stack.setStyleSheet(
+            f"QStackedWidget {{ background: {UI_COLORS[name]['window']}; }}"
+        )
         self.chat.set_theme(name)
         dim, hover = ("#7a7d85", "#2c2e35") if name == "dark" else ("#5f6269", "#e0e0e4")
         self._busy_row.setStyleSheet(

@@ -28,9 +28,17 @@ class PiAgent(QObject):
     failed = Signal(str)  # process could not start / crashed
     finished = Signal()
 
-    def __init__(self, cwd: str, parent: QObject | None = None):
+    def __init__(
+        self,
+        cwd: str,
+        parent: QObject | None = None,
+        session_path: str | None = None,
+    ):
         super().__init__(parent)
         self._cwd = cwd
+        # When set, the process is launched already bound to this session file
+        # (`--session <path>`), so its history loads without a switch round-trip.
+        self._session_path = session_path
         self._proc: QProcess | None = None
         self._buffer = b""
         self._next_id = 0
@@ -57,7 +65,10 @@ class PiAgent(QObject):
         proc.errorOccurred.connect(self._on_error)
         proc.finished.connect(self._on_finished)
         self._proc = proc
-        proc.start("pi", ["--mode", "rpc"])
+        args = ["--mode", "rpc"]
+        if self._session_path:
+            args += ["--session", self._session_path]
+        proc.start("pi", args)
 
     def stop(self) -> None:
         if self._proc is None:
