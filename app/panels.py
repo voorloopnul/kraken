@@ -9,6 +9,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QListWidget,
     QListWidgetItem,
+    QMenu,
+    QMessageBox,
     QPushButton,
     QToolButton,
     QVBoxLayout,
@@ -115,6 +117,8 @@ class LeftPanel(Panel):
         )
         self._list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self._list.itemClicked.connect(self._on_item_clicked)
+        self._list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._list.customContextMenuRequested.connect(self._on_context_menu)
         self._card.add_widget(title)
         self._card.add_widget(self._new_button)
         self._card.add_widget(self._list, stretch=1)
@@ -140,6 +144,7 @@ class LeftPanel(Panel):
                 f" · {session.message_count} {noun}"
             )
             item.setData(Qt.ItemDataRole.UserRole, str(session.path))
+            item.setData(Qt.ItemDataRole.UserRole + 1, session.session_id)
             item.setToolTip(str(session.path))
             self._list.addItem(item)
             if str(session.path) == selected:
@@ -156,6 +161,41 @@ class LeftPanel(Panel):
         path = item.data(Qt.ItemDataRole.UserRole)
         if path:
             self.session_selected.emit(path)
+
+    def _on_context_menu(self, pos) -> None:
+        item = self._list.itemAt(pos)
+        if item is None or not item.data(Qt.ItemDataRole.UserRole):
+            return
+        menu = QMenu(self._list)
+        archive_action = menu.addAction("Archive")
+        delete_action = menu.addAction("Delete")
+        chosen = menu.exec(self._list.viewport().mapToGlobal(pos))
+        if chosen is archive_action:
+            self._archive(item)
+        elif chosen is delete_action:
+            self._delete(item)
+
+    def _archive(self, item: QListWidgetItem) -> None:
+        from app.pi_sessions import archive_session
+
+        session_id = item.data(Qt.ItemDataRole.UserRole + 1)
+        archive_session(session_id)
+        self.refresh()
+
+    def _delete(self, item: QListWidgetItem) -> None:
+        from app.pi_sessions import delete_session
+
+        if (
+            QMessageBox.question(
+                self,
+                "Delete session",
+                "Permanently delete this session? This cannot be undone.",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        delete_session(item.data(Qt.ItemDataRole.UserRole))
+        self.refresh()
 
     def set_theme(self, name: str) -> None:
         ui = UI_COLORS[name]

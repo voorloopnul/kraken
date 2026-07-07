@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from app import config
+
 SESSIONS_ROOT = Path.home() / ".pi" / "agent" / "sessions"
 
 
@@ -78,10 +80,31 @@ def _load_session(path: Path, header: dict) -> PiSession:
     )
 
 
+def _archived_ids() -> set[str]:
+    return set(config.load_state().get("archived_sessions", []))
+
+
+def archive_session(session_id: str) -> None:
+    """Hide a session from the history without deleting its file on disk."""
+    archived = _archived_ids()
+    archived.add(session_id)
+    config.save_state(archived_sessions=sorted(archived))
+
+
+def delete_session(path: Path | str) -> None:
+    """Permanently remove a session's file from disk."""
+    try:
+        Path(path).unlink()
+    except OSError:
+        pass
+
+
 def sessions_for(cwd: str, root: Path | None = None) -> list[PiSession]:
-    """All Pi sessions recorded for the project folder `cwd`, newest first."""
+    """All Pi sessions recorded for the project folder `cwd`, newest first.
+    Sessions the user has archived are omitted."""
     root = root or SESSIONS_ROOT
     target = str(Path(cwd).expanduser().resolve())
+    archived = _archived_ids()
     sessions: list[PiSession] = []
     if not root.is_dir():
         return sessions
@@ -91,6 +114,8 @@ def sessions_for(cwd: str, root: Path | None = None) -> list[PiSession]:
         for path in directory.glob("*.jsonl"):
             header = _read_header(path)
             if header is None or header.get("cwd") != target:
+                continue
+            if header.get("id", path.stem) in archived:
                 continue
             sessions.append(_load_session(path, header))
     sessions.sort(key=lambda s: s.started, reverse=True)
