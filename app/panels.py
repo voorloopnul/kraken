@@ -110,6 +110,9 @@ class LeftPanel(Panel):
         self._new_button.clicked.connect(self.new_session_requested)
         self._list = QListWidget()
         self._list.setWordWrap(True)
+        self._list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         self._list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self._list.itemClicked.connect(self._on_item_clicked)
         self._card.add_widget(title)
