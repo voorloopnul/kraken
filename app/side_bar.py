@@ -105,6 +105,34 @@ def _git_icon(color: str) -> QIcon:
     return QIcon(pixmap)
 
 
+def _camera_icon(color: str) -> QIcon:
+    """Camera: rounded body with a viewfinder bump and a lens circle."""
+    pixmap = QPixmap(36, 36)
+    pixmap.setDevicePixelRatio(2.0)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(color))
+    pen.setWidthF(1.4)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.drawRoundedRect(QRectF(2.0, 5.0, 14.0, 9.5), 2.0, 2.0)
+    painter.drawPolyline(
+        QPolygonF(
+            [
+                QPointF(6.5, 5.0),
+                QPointF(7.5, 3.0),
+                QPointF(10.5, 3.0),
+                QPointF(11.5, 5.0),
+            ]
+        )
+    )
+    painter.drawEllipse(QPointF(9.0, 9.75), 2.6, 2.6)
+    painter.end()
+    return QIcon(pixmap)
+
+
 def _power_icon(color: str) -> QIcon:
     """Power symbol: a circle with a top gap and a vertical bar through it."""
     pixmap = QPixmap(36, 36)
@@ -187,11 +215,13 @@ _ICON_FACTORIES = {
     "Terminal Panel": _terminal_icon,
     "Browser Panel": _globe_icon,
     "Git Panel": _git_icon,
+    "Screenshot": _camera_icon,
     "Menu Bar": _menubar_icon,
     "Quit": _power_icon,
 }
 
 _BOTTOM_ITEMS = (
+    ("", "Screenshot"),
     ("", "Menu Bar"),
     ("", "Toggle Theme"),
     ("", "Quit"),

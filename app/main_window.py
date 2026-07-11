@@ -8,7 +8,9 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
     QMenuBar,
+    QMessageBox,
     QStackedWidget,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -230,6 +232,32 @@ class MainWindow(QMainWindow):
             view.shutdown()
         super().closeEvent(event)
 
+    def _screenshot_browser(self) -> None:
+        """Save the current browser tab's rendered page as screenshot.png in
+        the workspace folder, with the outcome shown as a tooltip."""
+        button = self.side_bar.buttons["Screenshot"]
+        pos = button.mapToGlobal(button.rect().center())
+        view = self.current_view
+        browser = None
+        if view is not None and view.browser_panel.browsers is not None:
+            browser = view.browser_panel.browsers.current_browser
+        if browser is None or not view.browser_panel.isVisible():
+            QToolTip.showText(pos, "Open the browser panel first", button)
+            return
+        pixmap = browser.web.grab()
+        if pixmap.isNull():
+            QMessageBox.warning(
+                self, "Screenshot failed", "The browser produced an empty capture."
+            )
+            return
+        path = Path(self.current_workspace or ".") / "screenshot.png"
+        if pixmap.save(str(path)):
+            QToolTip.showText(pos, f"Saved {path}", button)
+        else:
+            QMessageBox.warning(
+                self, "Screenshot failed", f"Could not write {path}."
+            )
+
     def _on_branch_switched(self) -> None:
         """A title-bar branch switch moved HEAD; redraw the visible git panel."""
         view = self.current_view
@@ -312,6 +340,7 @@ class MainWindow(QMainWindow):
             self._panel_actions[side].toggled.connect(toggle.setChecked)
             self._panel_actions[side].setChecked(False)
 
+        self.side_bar.buttons["Screenshot"].clicked.connect(self._screenshot_browser)
         self.side_bar.buttons["Quit"].clicked.connect(self.close)
         # Menu bar starts hidden; setVisible(False) is explicit because
         # setChecked(False) on a fresh action doesn't emit toggled.
