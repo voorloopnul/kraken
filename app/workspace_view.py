@@ -19,6 +19,8 @@ class WorkspaceView(QWidget):
     # A transcript link needs the browser panel; MainWindow syncs the
     # View-menu toggle (which is what actually shows the panel).
     browser_requested = Signal()
+    # Focused conversation's title, for the window title bar.
+    title_changed = Signal(str)
 
     def __init__(self, path: str, parent: QWidget | None = None):
         super().__init__(parent)
@@ -142,6 +144,9 @@ class WorkspaceView(QWidget):
             self._controller_key(c) for c in self.controllers if c.is_streaming
         }
         self.left_panel.set_session_status(running, self.unseen)
+        self.title_changed.emit(
+            self.focused.title if self.focused is not None else ""
+        )
 
     # ---- Chat / controls -------------------------------------------------
 
