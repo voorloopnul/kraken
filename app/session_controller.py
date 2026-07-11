@@ -18,6 +18,7 @@ from app.conversation import (
     _content_text,
     args_detail,
     args_summary,
+    error_summary,
 )
 from app.pi_rpc import PiAgent
 
@@ -140,6 +141,13 @@ class SessionController(QObject):
         if kind == "agent_start":
             self.streaming_changed.emit(True)
         elif kind == "agent_end":
+            # A request the provider rejected outright (e.g. HTTP 400) ends
+            # the run with an errored assistant message but streams no
+            # message_update events — without this the turn fails silently.
+            for message in event.get("messages") or []:
+                error = error_summary(message)
+                if error:
+                    conversation.add_info(f"Turn failed: {error}", error=True)
             self.streaming_changed.emit(False)
         elif kind == "message_update":
             delta = event.get("assistantMessageEvent") or {}

@@ -255,12 +255,15 @@ class ConversationView(QTextBrowser):
 
     def _separator(self, cursor: QTextCursor, kind: str) -> None:
         """Blocks of different kinds get a blank line between them,
-        consecutive tool/info lines just a newline. Inserted with default
-        formats so markdown block styles (lists, headings) don't leak."""
+        consecutive tool/info lines just a newline. Consecutive user
+        messages also get the full break: without it they'd land in the
+        same text block and render as one merged bubble. Inserted with
+        default formats so markdown block styles (lists, headings) don't
+        leak."""
         if self._last_kind is None:
             return
         block_fmt, char_fmt = QTextBlockFormat(), QTextCharFormat()
-        if kind != self._last_kind:
+        if kind != self._last_kind or kind == "user":
             cursor.insertBlock(block_fmt, char_fmt)
             cursor.insertBlock(block_fmt, char_fmt)
         elif kind in ("tool", "info"):
@@ -784,6 +787,9 @@ class ConversationView(QTextBrowser):
                         )
                         if part.get("id"):
                             tool_blocks[part["id"]] = index
+                error = error_summary(message)
+                if error:
+                    self.add_info(f"Turn failed: {error}", error=True)
             elif role == "toolResult":
                 index = tool_blocks.get(message.get("toolCallId"))
                 result = _content_text(message.get("content"))
@@ -796,6 +802,16 @@ class ConversationView(QTextBrowser):
                 )
         # Paint a trailing assistant reply now rather than after the timer.
         self._flush_assistant()
+
+
+def error_summary(message: dict) -> str | None:
+    """One-line summary of an errored assistant message, or None. Provider
+    error payloads can be pages of repeated JSON; one clipped line keeps the
+    transcript readable while naming the actual failure."""
+    if message.get("role") != "assistant" or message.get("stopReason") != "error":
+        return None
+    text = " ".join((message.get("errorMessage") or "unknown error").split())
+    return text[:299] + "…" if len(text) > 300 else text
 
 
 def _content_text(content) -> str:
