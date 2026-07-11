@@ -47,12 +47,14 @@ QTextBrowser { background: transparent; border: none; color: #1a1c21;
 # enough to stay comfortably readable while still reading as secondary.
 _PALETTE = {
     "dark": {
-        "user": "#61afef", "text": "#d6d8dd", "dim": "#7a7d85", "error": "#e06c75",
+        "text": "#d6d8dd", "dim": "#7a7d85", "error": "#e06c75",
         "code_bg": "#17181d", "code_border": "#2c2e35",
+        "user_bg": "#26282e", "user_border": "#33353c",
     },
     "light": {
-        "user": "#02669c", "text": "#1a1c21", "dim": "#5f6269", "error": "#a8232e",
+        "text": "#1a1c21", "dim": "#5f6269", "error": "#a8232e",
         "code_bg": "#f0ebdc", "code_border": "#d8d3c4",
+        "user_bg": "#dfe0e4", "user_border": "#c9cbd2",
     },
 }
 
@@ -126,6 +128,17 @@ _CODE_CARD_PAD_Y = 10.0       # vertical breathing room inside the card
 _CODE_CARD_PAD_X = 14.0       # horizontal inset of the code text inside the card
 _CODE_BLOCK_MARGIN = _CODE_CARD_GAP + _CODE_CARD_PAD_Y
 
+# User messages render right-aligned inside a rounded bubble (painted in
+# paintEvent, like the code cards). The bubble hugs the text: its left edge
+# follows the widest laid-out line, and the block margins reserve the
+# interior padding plus a gap to neighbouring blocks.
+_BUBBLE_RADIUS = 10.0
+_BUBBLE_GAP = 6.0
+_BUBBLE_PAD_Y = 8.0
+_BUBBLE_PAD_X = 14.0
+_BUBBLE_MIN_LEFT = 48.0       # keeps a bubble from spanning the full width
+_BUBBLE_MARGIN = _BUBBLE_GAP + _BUBBLE_PAD_Y
+
 # Lexer lookup is not free; cache per fence language (None = no lexer).
 _LEXERS: dict[str, object] = {}
 
@@ -177,6 +190,9 @@ class ConversationView(QTextBrowser):
         # Floating "Copy" buttons, one per code block; _code_ranges holds
         # the matching (first, last) text-block numbers.
         self._code_ranges: list[tuple[int, int]] = []
+        # (first, last) text-block numbers of each user message, for the
+        # bubbles painted behind them in paintEvent.
+        self._user_ranges: list[tuple[int, int]] = []
         self._copy_buttons: list[QToolButton] = []
         self.verticalScrollBar().valueChanged.connect(self._layout_copy_buttons)
         self.set_theme(DEFAULT_THEME)
@@ -203,6 +219,7 @@ class ConversationView(QTextBrowser):
         self.clear()
         self._last_kind = None
         self._assistant_start = None
+        self._user_ranges = []
         for kind, payload in self._blocks:
             self._paint(kind, payload)
         self._sync_code_ui()
@@ -262,6 +279,9 @@ class ConversationView(QTextBrowser):
             elif kind == "tool":
                 self._assistant_start = None
                 self._paint_tool(cursor, payload)
+            elif kind == "user":
+                self._assistant_start = None
+                self._paint_user(cursor, payload)
             else:
                 self._assistant_start = None
                 for text, role, bold, italic in payload:
@@ -285,6 +305,28 @@ class ConversationView(QTextBrowser):
             detail.setFontFixedPitch(True)
             detail.setFontPointSize(9.0)
             cursor.insertText("\n" + payload["detail"], detail)
+
+    def _paint_user(self, cursor: QTextCursor, payload: list) -> None:
+        """Right-aligned message in a bubble. The side margins inset the text
+        from the bubble edges; the gap+pad vertical margins go on the first
+        and last block only so a multi-line message stays compact."""
+        base = QTextBlockFormat()
+        base.setAlignment(Qt.AlignmentFlag.AlignRight)
+        base.setLeftMargin(_BUBBLE_MIN_LEFT)
+        base.setRightMargin(_BUBBLE_PAD_X)
+        cursor.setBlockFormat(base)
+        first = cursor.blockNumber()
+        for text, role, bold, italic in payload:
+            cursor.insertText(text, self._format(role, bold, italic))
+        last = cursor.blockNumber()
+        document = self.document()
+        top = QTextBlockFormat()
+        top.setTopMargin(_BUBBLE_MARGIN)
+        QTextCursor(document.findBlockByNumber(first)).mergeBlockFormat(top)
+        bottom = QTextBlockFormat()
+        bottom.setBottomMargin(_BUBBLE_MARGIN)
+        QTextCursor(document.findBlockByNumber(last)).mergeBlockFormat(bottom)
+        self._user_ranges.append((first, last))
 
     def _on_anchor_clicked(self, url) -> None:
         target = url.toString()
@@ -329,7 +371,7 @@ class ConversationView(QTextBrowser):
             self._paint("assistant", self._blocks[-1][1])
 
     def add_user(self, text: str) -> None:
-        self._write("user", [("You\n", "user", True, False), (text, "text", False, False)])
+        self._write("user", [(text, "text", False, False)])
 
     def append_assistant_delta(self, delta: str) -> None:
         # Models often emit a whitespace-only text part (e.g. a single
@@ -387,6 +429,7 @@ class ConversationView(QTextBrowser):
         self._last_kind = None
         self._assistant_start = None
         self._pending_assistant = ""
+        self._user_ranges = []
         self._sync_code_ui()
 
     # ---- Code blocks: background + copy buttons ----------------------------
@@ -576,11 +619,14 @@ class ConversationView(QTextBrowser):
         self._layout_copy_buttons()
 
     def paintEvent(self, event) -> None:
-        # Draw the code-block cards behind the text: super().paintEvent paints
-        # the (transparent) document background and the text on top, so the
-        # rounded, bordered card shows through underneath.
+        # Draw the code-block cards and user bubbles behind the text:
+        # super().paintEvent paints the (transparent) document background and
+        # the text on top, so the rounded, bordered shapes show through
+        # underneath.
         if self._code_ranges:
             self._paint_code_cards()
+        if self._user_ranges:
+            self._paint_user_bubbles()
         super().paintEvent(event)
 
     def _paint_code_cards(self) -> None:
@@ -620,6 +666,49 @@ class ConversationView(QTextBrowser):
                 left + 0.5, top + 0.5, (right - left) - 1.0, (bottom - top) - 1.0
             )
             painter.drawRoundedRect(rect, _CODE_CARD_RADIUS, _CODE_CARD_RADIUS)
+        painter.end()
+
+    def _paint_user_bubbles(self) -> None:
+        """Paint a rounded bubble behind each user message, flush right and
+        hugging the text: the left edge tracks the leftmost laid-out line
+        across the message's blocks."""
+        document = self.document()
+        layout = document.documentLayout()
+        viewport = self.viewport()
+        scroll = self.verticalScrollBar().value()
+        margin = document.documentMargin()
+        right = viewport.width() - margin
+        painter = QPainter(viewport)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor(self._colors["user_border"]))
+        pen.setWidthF(1.0)
+        painter.setPen(pen)
+        painter.setBrush(QColor(self._colors["user_bg"]))
+        for first, last in self._user_ranges:
+            top_block = document.findBlockByNumber(first)
+            bottom_block = document.findBlockByNumber(last)
+            if not top_block.isValid() or not bottom_block.isValid():
+                continue
+            top = layout.blockBoundingRect(top_block).top() - scroll - _BUBBLE_PAD_Y
+            bottom = (
+                layout.blockBoundingRect(bottom_block).bottom() - scroll + _BUBBLE_PAD_Y
+            )
+            if bottom < 0 or top > viewport.height():
+                continue
+            left = right
+            block = top_block
+            while block.isValid() and block.blockNumber() <= last:
+                text_layout = block.layout()
+                x = text_layout.position().x()
+                for i in range(text_layout.lineCount()):
+                    line_rect = text_layout.lineAt(i).naturalTextRect()
+                    left = min(left, x + line_rect.left())
+                block = block.next()
+            left -= _BUBBLE_PAD_X
+            rect = QRectF(
+                left + 0.5, top + 0.5, (right - left) - 1.0, (bottom - top) - 1.0
+            )
+            painter.drawRoundedRect(rect, _BUBBLE_RADIUS, _BUBBLE_RADIUS)
         painter.end()
 
     # ---- Rendering stored messages ----------------------------------------

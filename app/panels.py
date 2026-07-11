@@ -12,7 +12,9 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QScrollBar,
     QStackedWidget,
+    QStyle,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -283,14 +285,43 @@ class LeftPanel(Panel):
 class CenterPanel(Panel):
     """Conversation pane: a stack of per-session transcripts (only the focused
     one is shown), a busy row (with Stop), and the chat input. The workspace
-    owns one transcript widget per live session and flips between them here."""
+    owns one transcript widget per live session and flips between them here.
+
+    The content is capped at MAX_CONTENT_WIDTH and centred: it takes all
+    width until it hits its maximum, then the zero-stretch side spacers split
+    the leftover equally. The transcripts' own scrollbars are hidden; one
+    external scrollbar at the panel's right edge mirrors whichever transcript
+    is focused, so the bar sits on the panel rather than the content column.
+    The rows below reserve the scrollbar's width so their centring matches
+    the transcript row's."""
+
+    MAX_CONTENT_WIDTH = 1000
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         from app.chat_input import ChatInput
 
+        self._scrollbar = QScrollBar(Qt.Orientation.Vertical)
+        # Keep the transcript row's width stable when the bar hides.
+        policy = self._scrollbar.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)
+        self._scrollbar.setSizePolicy(policy)
+        self._scrollbar.hide()
+        self._bound: QScrollBar | None = None  # mirrored inner scrollbar
+
         self.conversation_stack = QStackedWidget()
-        self.add_widget(self.conversation_stack, stretch=1)
+        self.conversation_stack.setMaximumWidth(self.MAX_CONTENT_WIDTH)
+        top = QHBoxLayout()
+        top.addStretch()
+        top.addWidget(self.conversation_stack, stretch=1)
+        top.addStretch()
+        top.addWidget(self._scrollbar)
+        self._layout.addLayout(top, stretch=1)
+
+        bottom_content = QWidget()
+        bottom_content.setMaximumWidth(self.MAX_CONTENT_WIDTH)
+        column = QVBoxLayout(bottom_content)
+        column.setContentsMargins(0, 0, 0, 0)
 
         self._busy_label = QLabel("Pi is working…")
         self.stop_button = QToolButton()
@@ -304,13 +335,24 @@ class CenterPanel(Panel):
         row_layout.addStretch(1)
         row_layout.addWidget(self.stop_button)
         busy_row.setVisible(False)
-        self.add_widget(busy_row)
+        column.addWidget(busy_row)
 
         self.chat = ChatInput()
-        self.add_widget(self.chat)
+        column.addWidget(self.chat)
+
+        bottom = QHBoxLayout()
+        bottom.addStretch()
+        bottom.addWidget(bottom_content, stretch=1)
+        bottom.addStretch()
+        bottom.addSpacing(
+            self.style().pixelMetric(QStyle.PixelMetric.PM_ScrollBarExtent)
+        )
+        self._layout.addLayout(bottom)
 
     def add_conversation(self, view: QWidget) -> None:
         if self.conversation_stack.indexOf(view) < 0:
+            # The external panel-edge scrollbar replaces the built-in one.
+            view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             self.conversation_stack.addWidget(view)
 
     def remove_conversation(self, view: QWidget) -> None:
@@ -319,6 +361,31 @@ class CenterPanel(Panel):
     def set_focused_conversation(self, view: QWidget) -> None:
         self.add_conversation(view)
         self.conversation_stack.setCurrentWidget(view)
+        self._bind_scrollbar(view.verticalScrollBar())
+
+    def _bind_scrollbar(self, inner: QScrollBar) -> None:
+        """Mirror the focused transcript's (hidden) scrollbar onto the
+        external one: ranges and values stay in sync both ways. setValue is
+        a no-op at the current value, so the mutual connection can't loop."""
+        if inner is self._bound:
+            return
+        if self._bound is not None:
+            self._bound.rangeChanged.disconnect(self._on_inner_range)
+            self._bound.valueChanged.disconnect(self._scrollbar.setValue)
+            self._scrollbar.valueChanged.disconnect(self._bound.setValue)
+        self._bound = inner
+        inner.rangeChanged.connect(self._on_inner_range)
+        inner.valueChanged.connect(self._scrollbar.setValue)
+        self._scrollbar.valueChanged.connect(inner.setValue)
+        self._on_inner_range(inner.minimum(), inner.maximum())
+        self._scrollbar.setValue(inner.value())
+
+    def _on_inner_range(self, minimum: int, maximum: int) -> None:
+        self._scrollbar.setRange(minimum, maximum)
+        if self._bound is not None:
+            self._scrollbar.setPageStep(self._bound.pageStep())
+            self._scrollbar.setSingleStep(self._bound.singleStep())
+        self._scrollbar.setVisible(maximum > minimum)
 
     def set_busy(self, busy: bool) -> None:
         self._busy_row.setVisible(busy)
@@ -330,6 +397,20 @@ class CenterPanel(Panel):
             f"QStackedWidget {{ background: {UI_COLORS[name]['window']}; }}"
         )
         self.chat.set_theme(name)
+        handle, handle_hover = (
+            ("#3a3d45", "#4a4e58") if name == "dark" else ("#c9c4b4", "#b3ae9e")
+        )
+        self._scrollbar.setStyleSheet(
+            "QScrollBar:vertical { background: transparent; border: none;"
+            " width: 10px; margin: 0; }"
+            f" QScrollBar::handle:vertical {{ background: {handle};"
+            " border-radius: 5px; min-height: 24px; }"
+            f" QScrollBar::handle:vertical:hover {{ background: {handle_hover}; }}"
+            " QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical"
+            " { height: 0; }"
+            " QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical"
+            " { background: transparent; }"
+        )
         dim, hover = ("#7a7d85", "#2c2e35") if name == "dark" else ("#5f6269", "#e0e0e4")
         self._busy_row.setStyleSheet(
             f"QLabel {{ color: {dim}; font-size: 12px; font-style: italic; }}"
