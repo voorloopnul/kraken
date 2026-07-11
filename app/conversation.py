@@ -13,10 +13,12 @@ accumulated source on every delta.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QRectF, QTimer
 from PySide6.QtGui import (
     QColor,
     QFont,
+    QPainter,
+    QPen,
     QTextBlockFormat,
     QTextCharFormat,
     QTextCursor,
@@ -46,11 +48,11 @@ QTextBrowser { background: transparent; border: none; color: #1a1c21;
 _PALETTE = {
     "dark": {
         "user": "#61afef", "text": "#d6d8dd", "dim": "#7a7d85", "error": "#e06c75",
-        "code_bg": "#17181d",
+        "code_bg": "#17181d", "code_border": "#2c2e35",
     },
     "light": {
         "user": "#02669c", "text": "#1a1c21", "dim": "#5f6269", "error": "#a8232e",
-        "code_bg": "#f0ebdc",
+        "code_bg": "#f0ebdc", "code_border": "#d8d3c4",
     },
 }
 
@@ -105,7 +107,24 @@ _HIGHLIGHT = {
 # insertMarkdown lays out headings and code fences with no vertical
 # margins; these are merged into the block formats after each render.
 _HEADING_TOP_MARGIN = 14.0
-_CODE_BLOCK_MARGIN = 8.0
+# Qt sizes markdown headings with a relative FontSizeAdjustment step over
+# the 15px body font (its defaults: h1=+3≈30px, h2=+2≈22px, h3=+1≈18px).
+# An absolute FontPixelSize is ignored by the layout — the default font's
+# pixel size wins the resolve — so headings are toned down by lowering the
+# adjustment itself, one step gentler than Qt's default. Levels past 3 sit
+# at body size but bold.
+_HEADING_ADJUST = {1: 2, 2: 1, 3: 0}
+_HEADING_DEFAULT_ADJUST = 0
+# Code blocks render as a rounded, bordered card (painted in paintEvent)
+# with the text inset inside it. The fence blocks carry margins that leave
+# room for the card: the top/bottom fence margin is the outer gap to the
+# surrounding text plus the interior vertical padding, and the left/right
+# margin insets the text horizontally from the card border.
+_CODE_CARD_RADIUS = 8.0
+_CODE_CARD_GAP = 6.0          # gap between the card edge and neighbouring text
+_CODE_CARD_PAD_Y = 10.0       # vertical breathing room inside the card
+_CODE_CARD_PAD_X = 14.0       # horizontal inset of the code text inside the card
+_CODE_BLOCK_MARGIN = _CODE_CARD_GAP + _CODE_CARD_PAD_Y
 
 # Lexer lookup is not free; cache per fence language (None = no lexer).
 _LEXERS: dict[str, object] = {}
@@ -394,10 +413,23 @@ class ConversationView(QTextBrowser):
         block = document.findBlockByNumber(rescan_from)
         while block.isValid():
             fmt = block.blockFormat()
-            if fmt.headingLevel() and fmt.topMargin() != _HEADING_TOP_MARGIN:
+            level = fmt.headingLevel()
+            if level and fmt.topMargin() != _HEADING_TOP_MARGIN:
                 margin = QTextBlockFormat()
                 margin.setTopMargin(_HEADING_TOP_MARGIN)
                 QTextCursor(block).mergeBlockFormat(margin)
+                # Rein in Qt's oversized heading font to our own scale by
+                # lowering its size-adjustment step (see _HEADING_ADJUST).
+                adjust = _HEADING_ADJUST.get(level, _HEADING_DEFAULT_ADJUST)
+                char = QTextCharFormat()
+                char.setProperty(QTextFormat.Property.FontSizeAdjustment, adjust)
+                cursor = QTextCursor(block)
+                cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                cursor.movePosition(
+                    QTextCursor.MoveOperation.EndOfBlock,
+                    QTextCursor.MoveMode.KeepAnchor,
+                )
+                cursor.mergeCharFormat(char)
             is_code = (
                 fmt.property(QTextFormat.Property.BlockCodeLanguage) is not None
             )
@@ -411,27 +443,29 @@ class ConversationView(QTextBrowser):
             tail.append((start, document.blockCount() - 1))
         self._code_ranges = prefix + tail
 
-        # Only the freshly scanned tail needs tinting/highlighting; the prefix
-        # kept its styling from earlier paints.
-        background = QColor(self._colors["code_bg"])
+        # Only the freshly scanned tail needs margins/highlighting; the prefix
+        # kept its styling from earlier paints. The card fill and border are
+        # painted in paintEvent; here we only inset the text so it sits inside
+        # that card.
         for first, last in tail:
             block = document.findBlockByNumber(first)
             while block.isValid() and block.blockNumber() <= last:
-                if block.blockFormat().background().color() != background:
-                    fmt = QTextBlockFormat()
-                    fmt.setBackground(background)
-                    QTextCursor(block).mergeBlockFormat(fmt)
-                # Margins go on the fence edges only; putting them on every
-                # block would space out the individual code lines.
+                fmt = block.blockFormat()
                 edges = QTextBlockFormat()
+                # Horizontal inset applies to every line of the block.
+                if fmt.leftMargin() != _CODE_CARD_PAD_X:
+                    edges.setLeftMargin(_CODE_CARD_PAD_X)
+                    edges.setRightMargin(_CODE_CARD_PAD_X)
+                # Vertical margins go on the fence edges only; putting them on
+                # every block would space out the individual code lines.
                 if (
                     block.blockNumber() == first
-                    and block.blockFormat().topMargin() != _CODE_BLOCK_MARGIN
+                    and fmt.topMargin() != _CODE_BLOCK_MARGIN
                 ):
                     edges.setTopMargin(_CODE_BLOCK_MARGIN)
                 if (
                     block.blockNumber() == last
-                    and block.blockFormat().bottomMargin() != _CODE_BLOCK_MARGIN
+                    and fmt.bottomMargin() != _CODE_BLOCK_MARGIN
                 ):
                     edges.setBottomMargin(_CODE_BLOCK_MARGIN)
                 if edges.propertyCount():
@@ -540,6 +574,53 @@ class ConversationView(QTextBrowser):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._layout_copy_buttons()
+
+    def paintEvent(self, event) -> None:
+        # Draw the code-block cards behind the text: super().paintEvent paints
+        # the (transparent) document background and the text on top, so the
+        # rounded, bordered card shows through underneath.
+        if self._code_ranges:
+            self._paint_code_cards()
+        super().paintEvent(event)
+
+    def _paint_code_cards(self) -> None:
+        """Paint a rounded, bordered card behind each code block. Qt's text
+        block backgrounds are flat, square, and full-width, so the card look
+        (border, radius, side inset) is drawn here rather than via block
+        formats; the text is inset into it by the code-block margins."""
+        document = self.document()
+        layout = document.documentLayout()
+        viewport = self.viewport()
+        scroll = self.verticalScrollBar().value()
+        margin = document.documentMargin()
+        left = margin
+        right = viewport.width() - margin
+        painter = QPainter(viewport)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor(self._colors["code_border"]))
+        pen.setWidthF(1.0)
+        painter.setPen(pen)
+        painter.setBrush(QColor(self._colors["code_bg"]))
+        for first, last in self._code_ranges:
+            top_block = document.findBlockByNumber(first)
+            bottom_block = document.findBlockByNumber(last)
+            if not top_block.isValid() or not bottom_block.isValid():
+                continue
+            # blockBoundingRect covers the text lines only, not the fence
+            # margins, so the card is grown past the text by the interior pad;
+            # the fence margins (gap + pad) reserve room so it clears neighbours.
+            top = layout.blockBoundingRect(top_block).top() - scroll - _CODE_CARD_PAD_Y
+            bottom = (
+                layout.blockBoundingRect(bottom_block).bottom() - scroll + _CODE_CARD_PAD_Y
+            )
+            if bottom < 0 or top > viewport.height():
+                continue
+            # Half-pixel inset keeps the 1px stroke on a crisp pixel boundary.
+            rect = QRectF(
+                left + 0.5, top + 0.5, (right - left) - 1.0, (bottom - top) - 1.0
+            )
+            painter.drawRoundedRect(rect, _CODE_CARD_RADIUS, _CODE_CARD_RADIUS)
+        painter.end()
 
     # ---- Rendering stored messages ----------------------------------------
 
