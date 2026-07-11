@@ -123,6 +123,8 @@ class WorkspaceView(QWidget):
         self.unseen: set[str] = set()
 
         self.center_panel.chat.submitted.connect(self._on_prompt)
+        self.center_panel.chat.model_menu_requested.connect(self._on_model_menu)
+        self.center_panel.chat.model_selected.connect(self._on_model_selected)
         self.center_panel.stop_button.clicked.connect(self._on_stop)
         self.left_panel.session_selected.connect(self._load_session)
         self.left_panel.new_session_requested.connect(self._new_session)
@@ -174,8 +176,7 @@ class WorkspaceView(QWidget):
         self.focused = controller
         self.center_panel.set_focused_conversation(controller.conversation)
         self.center_panel.set_busy(controller.is_streaming)
-        if controller.model_name:
-            self.center_panel.chat.set_model_label(controller.model_name)
+        self.center_panel.chat.set_model_label(controller.model_name)
         # Retire the session we're leaving unless it's still streaming (then it
         # stays live in the background so you can flip back and watch it).
         if previous is not None and previous is not controller and not previous.is_streaming:
@@ -220,6 +221,23 @@ class WorkspaceView(QWidget):
     def _on_stop(self) -> None:
         if self.focused is not None:
             self.focused.agent.abort()
+
+    def _on_model_menu(self) -> None:
+        if self.focused is None:
+            return
+        controller = self.focused
+
+        def show(models: list, provider: str | None, model_id: str | None) -> None:
+            # The fetch is async; only pop the menu if this session is still
+            # the one on screen.
+            if controller is self.focused and models:
+                self.center_panel.chat.show_model_menu(models, provider, model_id)
+
+        controller.request_models(show)
+
+    def _on_model_selected(self, provider: str, model_id: str) -> None:
+        if self.focused is not None:
+            self.focused.set_model(provider, model_id)
 
     def _new_session(self) -> None:
         # Reuse the current session if it's already a fresh, unused one.

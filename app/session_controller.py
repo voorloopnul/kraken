@@ -39,12 +39,13 @@ class SessionController(QObject):
         super().__init__(parent)
         self.session_path = session_path
         self.model_name: str | None = None
+        self.model_provider: str | None = None
+        self.model_id: str | None = None
         self.first_prompt: str | None = None  # first user message; the title
         self.conversation = ConversationView()
         self.conversation.set_theme(theme_name)
         self.agent = PiAgent(cwd, self, session_path=session_path)
         self._tool_blocks: dict[str, int] = {}  # toolCallId -> transcript block
-        self._model_emitted = False
 
         self.agent.event.connect(self._on_event)
         self.agent.notify.connect(self._on_notify)
@@ -128,13 +129,43 @@ class SessionController(QObject):
             if session_file and session_file != self.session_path:
                 self.session_path = session_file
                 self.path_known.emit(session_file)
-            model = data.get("model") or {}
-            if model.get("name") and not self._model_emitted:
-                self._model_emitted = True
-                self.model_name = model["name"]
-                self.model_known.emit(model["name"])
+            self._set_current_model(data.get("model") or {})
 
         self.agent.get_state(on_state)
+
+    def _set_current_model(self, model: dict) -> None:
+        self.model_provider = model.get("provider") or self.model_provider
+        self.model_id = model.get("id") or self.model_id
+        if model.get("name") and model["name"] != self.model_name:
+            self.model_name = model["name"]
+            self.model_known.emit(model["name"])
+
+    # ---- Model selection --------------------------------------------------
+
+    def request_models(self, callback) -> None:
+        """Fetch the agent's configured models (Pi's /model list) plus the
+        current selection; `callback(models, provider, model_id)`."""
+        # Refresh the current selection first; the agent answers commands in
+        # order, so it lands before the model list does.
+        self._sync_state()
+
+        def on_models(response: dict) -> None:
+            models = (response.get("data") or {}).get("models") or []
+            callback(models, self.model_provider, self.model_id)
+
+        self.agent.get_available_models(on_models)
+
+    def set_model(self, provider: str, model_id: str) -> None:
+        def on_response(response: dict) -> None:
+            if not response.get("success"):
+                self.conversation.add_info(
+                    f"Model switch failed: {response.get('error', 'unknown error')}",
+                    error=True,
+                )
+                return
+            self._set_current_model(response.get("data") or {})
+
+        self.agent.set_model(provider, model_id, on_response)
 
     # ---- Agent events -> conversation -----------------------------------
 

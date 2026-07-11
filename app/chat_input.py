@@ -9,13 +9,16 @@ import base64
 import mimetypes
 from pathlib import Path
 
-from PySide6.QtCore import QBuffer, QIODevice, Qt, Signal
+from PySide6.QtCore import QBuffer, QEvent, QIODevice, QPoint, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QPlainTextEdit,
     QToolButton,
     QVBoxLayout,
@@ -37,6 +40,14 @@ QToolButton {
 }
 QToolButton:hover { background: #26282e; color: #ffffff; }
 QToolButton:disabled { color: #55575d; }
+#modelMenu { background: #1b1c1f; border: 1px solid #33353c; border-radius: 8px; }
+#modelMenu QLineEdit {
+    background: #131417; border: 1px solid #33353c; border-radius: 4px;
+    color: #d6d8dd; font-size: 12px; padding: 3px 6px;
+}
+#modelMenu QListWidget { background: transparent; border: none; color: #c8cad0; font-size: 12px; }
+#modelMenu QListWidget::item { padding: 3px 6px; border-radius: 4px; }
+#modelMenu QListWidget::item:selected { background: #26282e; color: #ffffff; }
 #sep { color: #3a3c42; }
 #attachChip { background: #26282e; border: 1px solid #33353c; border-radius: 6px; }
 #attachChip QLabel { color: #c8cad0; font-size: 11px; }
@@ -53,11 +64,103 @@ QToolButton {
 }
 QToolButton:hover { background: #e8e8ec; color: #1b1d22; }
 QToolButton:disabled { color: #b0b2b8; }
+#modelMenu { background: #ffffff; border: 1px solid #d8d8dd; border-radius: 8px; }
+#modelMenu QLineEdit {
+    background: #f2f2f4; border: 1px solid #d8d8dd; border-radius: 4px;
+    color: #26282e; font-size: 12px; padding: 3px 6px;
+}
+#modelMenu QListWidget { background: transparent; border: none; color: #4a4d55; font-size: 12px; }
+#modelMenu QListWidget::item { padding: 3px 6px; border-radius: 4px; }
+#modelMenu QListWidget::item:selected { background: #e8e8ec; color: #1b1d22; }
 #sep { color: #d0d0d5; }
 #attachChip { background: #f2f2f4; border: 1px solid #d8d8dd; border-radius: 6px; }
 #attachChip QLabel { color: #4a4d55; font-size: 11px; }
 """,
 }
+
+
+class _ModelPopup(QFrame):
+    """Searchable model picker for the chat footer: a filter field over the
+    agent's configured model list. Closes on outside click, Esc, or pick."""
+
+    selected = Signal(str, str)  # (provider, model_id)
+
+    def __init__(
+        self,
+        models: list[dict],
+        current_provider: str | None,
+        current_id: str | None,
+        parent: QWidget,
+    ):
+        super().__init__(parent, Qt.WindowType.Popup)
+        self.setObjectName("modelMenu")
+        self._models = models
+        self._current = (current_provider, current_id)
+
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("Search models…")
+        self._search.textChanged.connect(self._refilter)
+        self._search.installEventFilter(self)
+        self._list = QListWidget()
+        self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._list.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self._list.itemClicked.connect(self._choose)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(4)
+        layout.addWidget(self._search)
+        layout.addWidget(self._list)
+        self.setFixedSize(400, 320)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+
+        self._refilter("")
+        self._search.setFocus()
+
+    def _refilter(self, text: str) -> None:
+        words = text.strip().lower().split()
+        self._list.clear()
+        current_row = None
+        for model in self._models:
+            provider = model.get("provider", "")
+            model_id = model.get("id", "")
+            haystack = f"{model_id} {model.get('name', '')} {provider}".lower()
+            if not all(word in haystack for word in words):
+                continue
+            is_current = (provider, model_id) == self._current
+            mark = "✓ " if is_current else "   "
+            item = QListWidgetItem(f"{mark}{model_id}  [{provider}]")
+            item.setData(Qt.ItemDataRole.UserRole, (provider, model_id))
+            self._list.addItem(item)
+            if is_current:
+                current_row = self._list.count() - 1
+        if self._list.count():
+            self._list.setCurrentRow(current_row if current_row is not None else 0)
+
+    def _choose(self, item: QListWidgetItem) -> None:
+        provider, model_id = item.data(Qt.ItemDataRole.UserRole)
+        self.close()
+        self.selected.emit(provider, model_id)
+
+    def eventFilter(self, obj, event) -> bool:
+        # The search field keeps focus; arrows/Enter drive the list from it.
+        if obj is self._search and event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            if key == Qt.Key.Key_Down:
+                row = min(self._list.currentRow() + 1, self._list.count() - 1)
+                self._list.setCurrentRow(row)
+                return True
+            if key == Qt.Key.Key_Up:
+                self._list.setCurrentRow(max(self._list.currentRow() - 1, 0))
+                return True
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                if self._list.currentItem() is not None:
+                    self._choose(self._list.currentItem())
+                return True
+            if key == Qt.Key.Key_Escape:
+                self.close()
+                return True
+        return super().eventFilter(obj, event)
 
 
 class ChatInput(QFrame):
@@ -66,6 +169,11 @@ class ChatInput(QFrame):
     # (text, images) — images are prompt-ready dicts:
     # {"type": "image", "data": <base64>, "mimeType": "image/png"}.
     submitted = Signal(str, list)
+    # The model button was clicked; the owner fetches the agent's model list
+    # and calls show_model_menu with it.
+    model_menu_requested = Signal()
+    # (provider, model_id) — the user picked a model from the menu.
+    model_selected = Signal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -99,7 +207,9 @@ class ChatInput(QFrame):
         self._attach = tool_button("+")
         self._attach.setToolTip("Attach images or files")
         self._attach.clicked.connect(self._pick_files)
-        self._model = tool_button("Opus 4.6 (1M)  ⌄")
+        self._model = tool_button("Model  ⌄")
+        self._model.setToolTip("Switch model")
+        self._model.clicked.connect(self.model_menu_requested)
         self._mode = tool_button("Ask  ⌄")
         self._send = tool_button("Send")
         self._send.setEnabled(False)
@@ -229,8 +339,30 @@ class ChatInput(QFrame):
         self._attach_row.hide()
         self._on_text_changed()
 
-    def set_model_label(self, text: str) -> None:
-        self._model.setText(f"{text}  ⌄")
+    def set_model_label(self, text: str | None) -> None:
+        self._model.setText(f"{text or 'Model'}  ⌄")
+
+    def show_model_menu(
+        self,
+        models: list[dict],
+        current_provider: str | None,
+        current_id: str | None,
+    ) -> None:
+        """Pop a searchable model list at the model button. Entries mirror
+        Pi's /model selector: the model id with a [provider] badge, the
+        current selection marked."""
+        popup = _ModelPopup(models, current_provider, current_id, self)
+        popup.selected.connect(self.model_selected)
+        corner = self._model.mapToGlobal(QPoint(0, 0))
+        screen = self._model.screen().availableGeometry()
+        x = min(corner.x(), screen.right() - popup.width())
+        # The chat box sits at the bottom of the window, so prefer opening
+        # upward; fall back to below the button when there's no room.
+        y = corner.y() - popup.height() - 4
+        if y < screen.top():
+            y = corner.y() + self._model.height() + 4
+        popup.move(x, y)
+        popup.show()
 
     def text(self) -> str:
         return self._edit.toPlainText()

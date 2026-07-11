@@ -121,6 +121,20 @@ class PiAgent(QObject):
     def get_state(self, callback: Callable[[dict], None]) -> None:
         self.send({"type": "get_state"}, callback)
 
+    def get_available_models(self, callback: Callable[[dict], None]) -> None:
+        self.send({"type": "get_available_models"}, callback)
+
+    def set_model(
+        self,
+        provider: str,
+        model_id: str,
+        callback: Callable[[dict], None] | None = None,
+    ) -> None:
+        self.send(
+            {"type": "set_model", "provider": provider, "modelId": model_id},
+            callback,
+        )
+
     def get_messages(self, callback: Callable[[dict], None]) -> None:
         self.send({"type": "get_messages"}, callback)
 
