@@ -1,34 +1,53 @@
 """Custom window decoration bar replacing the native title bar: workspace
-folder and git branch on the left, the focused conversation's title in the
-center, and memory usage plus the minimize/maximize/close buttons on the
-right. Dragging the bar moves the window; double-clicking toggles maximize.
-Shares the side bar's background so the chrome reads as one surface."""
+folder and a git branch switcher on the left, the focused conversation's
+title in the center, and memory usage plus the minimize/maximize/close
+buttons on the right. Dragging the bar moves the window; double-clicking
+toggles maximize. Shares the side bar's background so the chrome reads as
+one surface."""
 
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QToolButton, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QMenu,
+    QMessageBox,
+    QToolButton,
+    QWidget,
+)
 
 from app.themes import DEFAULT_THEME
 
+# The bare QToolButton rules style the circular window buttons; the branch
+# switcher opts out via its id selector.
 _STYLES = {
     "dark": """
 #titleBar { background: #1b1c21; border-bottom: 1px solid #33353c; }
 #folderLabel { color: #c8cad0; font-weight: 600; }
-#branchLabel, #memoryLabel, #conversationLabel { color: #9a9da5; }
+#memoryLabel, #conversationLabel { color: #9a9da5; }
 QToolButton { background: #2c2e35; border: none; border-radius: 11px; }
 QToolButton:hover { background: #3a3d45; }
+#branchButton { background: transparent; border-radius: 6px;
+                color: #9a9da5; padding: 2px 8px 2px 6px; }
+#branchButton:hover { background: #2c2e35; }
+#branchButton::menu-indicator { image: none; }
 """,
     "light": """
 #titleBar { background: #fafafa; border-bottom: 1px solid #e0e0e0; }
 #folderLabel { color: #383a42; font-weight: 600; }
-#branchLabel, #memoryLabel, #conversationLabel { color: #5a5d65; }
+#memoryLabel, #conversationLabel { color: #5a5d65; }
 QToolButton { background: #ebebee; border: none; border-radius: 11px; }
 QToolButton:hover { background: #dcdce1; }
+#branchButton { background: transparent; border-radius: 6px;
+                color: #5a5d65; padding: 2px 8px 2px 6px; }
+#branchButton:hover { background: #e8e8ec; }
+#branchButton::menu-indicator { image: none; }
 """,
 }
 
@@ -142,6 +161,9 @@ def _window_icon(kind: str, color: str) -> QIcon:
 
 
 class TitleBar(QWidget):
+    # HEAD moved via the branch dropdown; lets the window refresh git views.
+    branch_changed = Signal()
+
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("titleBar")
@@ -153,9 +175,22 @@ class TitleBar(QWidget):
 
         self.folder_label = QLabel()
         self.folder_label.setObjectName("folderLabel")
-        self._branch_icon = QLabel()
-        self.branch_label = QLabel()
-        self.branch_label.setObjectName("branchLabel")
+        # Branch switcher: shows the current branch, clicking opens a menu of
+        # the repo's local branches; picking one checks it out.
+        self.branch_button = QToolButton()
+        self.branch_button.setObjectName("branchButton")
+        self.branch_button.setToolTip("Switch branch")
+        self.branch_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.branch_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        self.branch_button.setIconSize(QSize(16, 16))
+        self.branch_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        self._branch_menu = QMenu(self.branch_button)
+        self._branch_menu.aboutToShow.connect(self._populate_branch_menu)
+        self.branch_button.setMenu(self._branch_menu)
         self.conversation_label = QLabel()
         self.conversation_label.setObjectName("conversationLabel")
         self.memory_label = QLabel()
@@ -175,8 +210,7 @@ class TitleBar(QWidget):
         layout.setSpacing(6)
         layout.addWidget(self.folder_label)
         layout.addSpacing(4)
-        layout.addWidget(self._branch_icon)
-        layout.addWidget(self.branch_label)
+        layout.addWidget(self.branch_button)
         layout.addStretch(1)
         layout.addWidget(self.conversation_label)
         layout.addStretch(1)
@@ -222,8 +256,68 @@ class TitleBar(QWidget):
 
     def _refresh_branch(self) -> None:
         branch = git_branch(self._workspace_path) if self._workspace_path else ""
-        self.branch_label.setText(branch)
-        self._branch_icon.setVisible(bool(branch))
+        self.branch_button.setText(branch)
+        self.branch_button.setVisible(bool(branch))
+
+    # ---- Branch switching ---------------------------------------------------
+
+    def _local_branches(self) -> list[str]:
+        try:
+            result = subprocess.run(
+                [
+                    "git", "-C", self._workspace_path, "for-each-ref",
+                    "--format=%(refname:short)", "refs/heads",
+                ],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        if result.returncode != 0:
+            return []
+        return result.stdout.split()
+
+    def _populate_branch_menu(self) -> None:
+        """Rebuild the dropdown as it opens, so it always lists the repo's
+        current local branches with the checked-out one ticked."""
+        self._branch_menu.clear()
+        current = git_branch(self._workspace_path) if self._workspace_path else ""
+        branches = self._local_branches()
+        if not branches:
+            self._branch_menu.addAction("No branches").setEnabled(False)
+            return
+        for name in branches:
+            action = self._branch_menu.addAction(name)
+            action.setCheckable(True)
+            action.setChecked(name == current)
+            if name != current:
+                action.triggered.connect(
+                    lambda _=False, b=name: self._switch_branch(b)
+                )
+
+    def _switch_branch(self, branch: str) -> None:
+        try:
+            result = subprocess.run(
+                ["git", "-C", self._workspace_path, "checkout", branch],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            QMessageBox.warning(self, "Checkout failed", str(exc))
+            return
+        if result.returncode != 0:
+            QMessageBox.warning(
+                self,
+                "Checkout failed",
+                result.stderr.strip() or "git checkout failed",
+            )
+            return
+        self._refresh_branch()
+        self.branch_changed.emit()
 
     # ---- Window dragging ----------------------------------------------------
 
@@ -247,8 +341,7 @@ class TitleBar(QWidget):
         self._theme_name = name
         self.setStyleSheet(_STYLES[name])
         color = _ICON_COLORS[name]
-        pixmap = _branch_icon(color).pixmap(QSize(16, 16))
-        self._branch_icon.setPixmap(pixmap)
+        self.branch_button.setIcon(_branch_icon(color))
         self.buttons["Minimize"].setIcon(_window_icon("min", color))
         self.buttons["Close"].setIcon(_window_icon("close", color))
         self.set_maximized(self._maximized)

@@ -97,6 +97,7 @@ class MainWindow(QMainWindow):
         self.title_bar.buttons["Minimize"].clicked.connect(self.showMinimized)
         self.title_bar.buttons["Maximize"].clicked.connect(self._toggle_maximized)
         self.title_bar.buttons["Close"].clicked.connect(self.close)
+        self.title_bar.branch_changed.connect(self._on_branch_switched)
 
         # The frameless window hosts its own menu bar in the layout (below
         # the title bar) instead of QMainWindow's built-in slot, which would
@@ -230,6 +231,12 @@ class MainWindow(QMainWindow):
         for view in self.views.values():
             view.shutdown()
         super().closeEvent(event)
+
+    def _on_branch_switched(self) -> None:
+        """A title-bar branch switch moved HEAD; redraw the visible git panel."""
+        view = self.current_view
+        if view is not None and view.git_panel.isVisible():
+            view.git_panel.refresh()
 
     def _toggle_maximized(self) -> None:
         if self.isMaximized():
