@@ -18,6 +18,8 @@ def main() -> int:
     # panel imports it lazily, after app startup).
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)
+    app.setApplicationName("Kraken")
+    app.setApplicationDisplayName("Kraken")
     window = MainWindow()
     window.show()
     return app.exec()

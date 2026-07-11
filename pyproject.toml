@@ -1,7 +1,7 @@
 [project]
-name = "alpine"
+name = "kraken"
 version = "0.1.0"
-description = "Add your description here"
+description = "Kraken desktop front-end for the Pi coding agent"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [

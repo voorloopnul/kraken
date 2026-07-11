@@ -151,24 +151,6 @@ def _power_icon(color: str) -> QIcon:
     return QIcon(pixmap)
 
 
-def _menubar_icon(color: str) -> QIcon:
-    """Window outline with a bar across the top."""
-    pixmap = QPixmap(36, 36)
-    pixmap.setDevicePixelRatio(2.0)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    pen = QPen(QColor(color))
-    pen.setWidthF(1.6)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-    painter.setPen(pen)
-    painter.drawRoundedRect(QRectF(2.5, 3.5, 13.0, 11.0), 2.0, 2.0)
-    painter.drawLine(QPointF(2.5, 6.5), QPointF(15.5, 6.5))
-    painter.end()
-    return QIcon(pixmap)
-
-
 def _sun_icon(color: str) -> QIcon:
     """Sun: small circle with eight rays."""
     pixmap = QPixmap(36, 36)
@@ -216,13 +198,11 @@ _ICON_FACTORIES = {
     "Browser Panel": _globe_icon,
     "Git Panel": _git_icon,
     "Screenshot": _camera_icon,
-    "Menu Bar": _menubar_icon,
     "Quit": _power_icon,
 }
 
 _BOTTOM_ITEMS = (
     ("", "Screenshot"),
-    ("", "Menu Bar"),
     ("", "Toggle Theme"),
     ("", "Quit"),
 )

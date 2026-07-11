@@ -61,8 +61,7 @@ class _GripHandle(QSplitterHandle):
 
 
 class WorkspaceView(QWidget):
-    # A transcript link needs the browser panel; MainWindow syncs the
-    # View-menu toggle (which is what actually shows the panel).
+    # A transcript link asks MainWindow to show the browser panel.
     browser_requested = Signal()
     # Focused conversation's title, for the window title bar.
     title_changed = Signal(str)
