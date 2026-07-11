@@ -86,20 +86,27 @@ class WorkspaceView(QWidget):
         # stops the drag here rather than letting it collapse to a sliver.
         self.right_panel.setMinimumWidth(380)
 
+        # Terminals and git history share the rightmost column, terminals on
+        # top; the column drops out entirely when both are toggled off (see
+        # set_panel_visible).
+        self._right_column = _GripSplitter(Qt.Orientation.Vertical)
+        self._right_column.addWidget(self.right_panel)
+        self._right_column.addWidget(self.git_panel)
+        self._right_column.setChildrenCollapsible(False)
+        self._right_column.setSizes([420, 300])
+
         splitter = _GripSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.left_panel)
         splitter.addWidget(self.center_panel)
         splitter.addWidget(self.browser_panel)
-        splitter.addWidget(self.git_panel)
-        splitter.addWidget(self.right_panel)
+        splitter.addWidget(self._right_column)
 
         # Center panel absorbs extra space when the window resizes.
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
         splitter.setStretchFactor(3, 0)
-        splitter.setStretchFactor(4, 0)
-        splitter.setSizes([300, 500, 480, 380, 480])
+        splitter.setSizes([300, 500, 480, 480])
         splitter.setChildrenCollapsible(False)
         self._splitter = splitter
 
@@ -278,6 +285,23 @@ class WorkspaceView(QWidget):
         if controller is self.focused:
             self.center_panel.chat.set_model_label(name)
 
+    # ---- Panels ------------------------------------------------------------
+
+    def set_panel_visible(self, side: str, visible: bool) -> None:
+        panel = {
+            "left": self.left_panel,
+            "browser": self.browser_panel,
+            "git": self.git_panel,
+            "right": self.right_panel,
+        }[side]
+        panel.setVisible(visible)
+        # The right column only earns splitter space while it has a visible
+        # pane; a hidden QSplitter child gives up its slot, but the column
+        # widget itself would still claim one.
+        self._right_column.setVisible(
+            not self.right_panel.isHidden() or not self.git_panel.isHidden()
+        )
+
     # ---- Theme / lifecycle -----------------------------------------------
 
     def set_theme(self, name: str) -> None:
@@ -290,7 +314,9 @@ class WorkspaceView(QWidget):
             f" QLabel {{ color: {ui['text']}; }}"
         )
         # Same handle colors as the conversation scrollbar, per theme.
-        self._splitter.set_grip_color("#3a3d45" if name == "dark" else "#c9c4b4")
+        grip = "#3a3d45" if name == "dark" else "#c9c4b4"
+        self._splitter.set_grip_color(grip)
+        self._right_column.set_grip_color(grip)
         self.left_panel.set_theme(name)
         self.center_panel.set_theme(name)
         self.browser_panel.set_theme(name)

@@ -208,10 +208,8 @@ class MainWindow(QMainWindow):
                 )
             )
             # New views follow the current pane-visibility toggles.
-            view.left_panel.setVisible(self._panel_actions["left"].isChecked())
-            view.browser_panel.setVisible(self._panel_actions["browser"].isChecked())
-            view.git_panel.setVisible(self._panel_actions["git"].isChecked())
-            view.right_panel.setVisible(self._panel_actions["right"].isChecked())
+            for side, action in self._panel_actions.items():
+                view.set_panel_visible(side, action.isChecked())
             self.views[path] = view
             self._view_stack.addWidget(view)
         else:
@@ -273,13 +271,7 @@ class MainWindow(QMainWindow):
     def _set_panel_visible(self, side: str, visible: bool) -> None:
         """Pane visibility toggles are global: they apply to every workspace."""
         for view in self.views.values():
-            panel = {
-                "left": view.left_panel,
-                "browser": view.browser_panel,
-                "git": view.git_panel,
-                "right": view.right_panel,
-            }[side]
-            panel.setVisible(visible)
+            view.set_panel_visible(side, visible)
 
     def _create_menus(self) -> None:
         file_menu = self._menu_bar.addMenu("&File")
