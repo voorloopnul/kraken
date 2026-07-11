@@ -622,15 +622,21 @@ class GitPanel(Panel):
         self._list.clear()
         if not self._cwd:
             return
+        # Branches, tags, remotes, and HEAD — not --all, which also walks
+        # tool-owned refs (editor local-history, agent checkpoints) and shows
+        # "history" in repos whose branches have no commits at all. HEAD is
+        # listed explicitly so a detached checkout (from the context menu)
+        # stays visible, but only when it resolves: an unborn branch's HEAD
+        # would make git log fail outright.
+        revs = ["--branches", "--tags", "--remotes"]
+        if self._head_exists():
+            revs.append("HEAD")
         # \x1f-separated fields after the graph prefix; continuation lines
         # (pure graph, like "|/") carry no record at all.
         try:
             result = subprocess.run(
                 [
-                    # --all keeps every ref visible, so a detached checkout
-                    # (from the context menu) can't hide the branch tips you
-                    # would need to get back.
-                    "git", "-C", self._cwd, "log", "--graph", "--all",
+                    "git", "-C", self._cwd, "log", "--graph", *revs,
                     "--format=%x1f%h%x1f%H%x1f%d%x1f%s%x1f%an%x1f%ar",
                     f"-{self._MAX_COMMITS}",
                 ],
@@ -693,6 +699,25 @@ class GitPanel(Panel):
             else:
                 item = QListWidgetItem(_mono(graph.rstrip(), text_color))
             self._list.addItem(item)
+        if self._list.count() == 0:
+            # rc 0 but nothing listed: branches exist but are unborn.
+            item = QListWidgetItem(_mono("No commits", text_color))
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            self._list.addItem(item)
+
+    def _head_exists(self) -> bool:
+        try:
+            return (
+                subprocess.run(
+                    ["git", "-C", self._cwd, "rev-parse", "--verify",
+                     "--quiet", "HEAD"],
+                    capture_output=True,
+                    timeout=5,
+                ).returncode
+                == 0
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
 
     def _main_line_hashes(self) -> set[str] | None:
         """Full hashes reachable from master (or main), or None when neither
