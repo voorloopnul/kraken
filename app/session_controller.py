@@ -78,12 +78,15 @@ class SessionController(QObject):
 
     # ---- Chat -> agent --------------------------------------------------
 
-    def prompt(self, text: str) -> None:
+    def prompt(self, text: str, images: list | None = None) -> None:
         if self.first_prompt is None:
-            self.first_prompt = text
-        self.conversation.add_user(text)
+            self.first_prompt = text or "(image)"
+        self.conversation.add_user(text or "(image)")
+        if images:
+            noun = "image" if len(images) == 1 else "images"
+            self.conversation.add_info(f"({len(images)} {noun} attached)")
         was_streaming = self.agent.is_streaming
-        self.agent.prompt(text, self._on_prompt_response)
+        self.agent.prompt(text, images=images, callback=self._on_prompt_response)
         if was_streaming:
             self.conversation.add_info("(queued: delivered after the current turn)")
         self._sync_state()

@@ -98,8 +98,17 @@ class PiAgent(QObject):
         data = json.dumps(command) + "\n"
         self._proc.write(data.encode())
 
-    def prompt(self, message: str, callback: Callable[[dict], None] | None = None) -> None:
+    def prompt(
+        self,
+        message: str,
+        images: list | None = None,
+        callback: Callable[[dict], None] | None = None,
+    ) -> None:
         command: dict = {"type": "prompt", "message": message}
+        if images:
+            # Prompt-ready dicts: {"type": "image", "data": <base64>,
+            # "mimeType": ...}, per the pi RPC protocol.
+            command["images"] = images
         if self.is_streaming:
             # Queue instead of erroring while the agent is mid-response.
             command["streamingBehavior"] = "steer"

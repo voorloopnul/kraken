@@ -233,8 +233,8 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _screenshot_browser(self) -> None:
-        """Save the current browser tab's rendered page as screenshot.png in
-        the workspace folder, with the outcome shown as a tooltip."""
+        """Capture the current browser tab's rendered page and attach it to
+        the chat input, ready to send with the next prompt."""
         button = self.side_bar.buttons["Screenshot"]
         pos = button.mapToGlobal(button.rect().center())
         view = self.current_view
@@ -250,13 +250,8 @@ class MainWindow(QMainWindow):
                 self, "Screenshot failed", "The browser produced an empty capture."
             )
             return
-        path = Path(self.current_workspace or ".") / "screenshot.png"
-        if pixmap.save(str(path)):
-            QToolTip.showText(pos, f"Saved {path}", button)
-        else:
-            QMessageBox.warning(
-                self, "Screenshot failed", f"Could not write {path}."
-            )
+        view.center_panel.chat.attach_image(pixmap)
+        QToolTip.showText(pos, "Screenshot attached to the message", button)
 
     def _on_branch_switched(self) -> None:
         """A title-bar branch switch moved HEAD; redraw the visible git panel."""

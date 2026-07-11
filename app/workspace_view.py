@@ -209,10 +209,10 @@ class WorkspaceView(QWidget):
 
     # ---- Chat / controls -------------------------------------------------
 
-    def _on_prompt(self, text: str) -> None:
+    def _on_prompt(self, text: str, images: list | None = None) -> None:
         if self.focused is None:
             self._focus(self._new_controller())
-        self.focused.prompt(text)
+        self.focused.prompt(text, images)
         # Surface the just-started session in History right away, so it's
         # reachable even before Pi writes its file to disk.
         self._sync_history()
