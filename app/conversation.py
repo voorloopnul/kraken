@@ -31,14 +31,26 @@ from pygments.util import ClassNotFound
 
 from app.themes import DEFAULT_THEME
 
+# The horizontal scrollbar (wide code blocks) matches the panel-edge
+# vertical one: a bare rounded handle on a transparent track, no steppers.
 _STYLES = {
     "dark": """
 QTextBrowser { background: transparent; border: none; color: #d6d8dd;
                font-size: 15px; padding: 4px; }
+QScrollBar:horizontal { background: transparent; border: none; height: 10px; margin: 0; }
+QScrollBar::handle:horizontal { background: #3a3d45; border-radius: 5px; min-width: 24px; }
+QScrollBar::handle:horizontal:hover { background: #4a4e58; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
 """,
     "light": """
 QTextBrowser { background: transparent; border: none; color: #1a1c21;
                font-size: 15px; padding: 4px; }
+QScrollBar:horizontal { background: transparent; border: none; height: 10px; margin: 0; }
+QScrollBar::handle:horizontal { background: #c9c4b4; border-radius: 5px; min-width: 24px; }
+QScrollBar::handle:horizontal:hover { background: #b3ae9e; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
 """,
 }
 
