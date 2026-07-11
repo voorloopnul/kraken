@@ -251,26 +251,31 @@ class LeftPanel(Panel):
         item = self._list.itemAt(pos)
         # Only persisted sessions (which carry a session id) can be archived or
         # deleted; live in-flight rows have no file to act on.
-        if item is None or not item.data(Qt.ItemDataRole.UserRole + 1):
+        if item is None:
+            return
+        # Keep plain Python values across menu/dialog nested event loops. A
+        # concurrent refresh can delete the underlying QListWidgetItem.
+        path = item.data(Qt.ItemDataRole.UserRole)
+        session_id = item.data(Qt.ItemDataRole.UserRole + 1)
+        if not session_id:
             return
         menu = QMenu(self._list)
         archive_action = menu.addAction("Archive")
         delete_action = menu.addAction("Delete")
         chosen = menu.exec(self._list.viewport().mapToGlobal(pos))
         if chosen is archive_action:
-            self._archive(item)
+            self._archive(path, session_id)
         elif chosen is delete_action:
-            self._delete(item)
+            self._delete(path)
 
-    def _archive(self, item: QListWidgetItem) -> None:
+    def _archive(self, path: str, session_id: str) -> None:
         from app.pi_sessions import archive_session
 
-        session_id = item.data(Qt.ItemDataRole.UserRole + 1)
         archive_session(session_id)
         self.refresh()
-        self.session_removed.emit(item.data(Qt.ItemDataRole.UserRole))
+        self.session_removed.emit(path)
 
-    def _delete(self, item: QListWidgetItem) -> None:
+    def _delete(self, path: str) -> None:
         from app.pi_sessions import delete_session
 
         if (
@@ -282,7 +287,6 @@ class LeftPanel(Panel):
             != QMessageBox.StandardButton.Yes
         ):
             return
-        path = item.data(Qt.ItemDataRole.UserRole)
         delete_session(path)
         self.refresh()
         self.session_removed.emit(path)
@@ -742,9 +746,12 @@ class GitPanel(Panel):
         commit = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
         if not commit:
             return
+        # The list may refresh while QMenu.exec runs its nested event loop.
+        branches = item.data(Qt.ItemDataRole.UserRole + 1) or []
+        full_hash = item.data(Qt.ItemDataRole.UserRole + 2)
         menu = QMenu(self._list)
         targets = {}
-        for branch in item.data(Qt.ItemDataRole.UserRole + 1) or []:
+        for branch in branches:
             targets[menu.addAction(f"Checkout {branch}")] = branch
         targets[menu.addAction(f"Checkout {commit}")] = commit
         menu.addSeparator()
@@ -752,9 +759,7 @@ class GitPanel(Panel):
         chosen = menu.exec(self._list.viewport().mapToGlobal(pos))
         if chosen is copy_action:
             # The full hash: short ones go ambiguous as a repo grows.
-            QGuiApplication.clipboard().setText(
-                item.data(Qt.ItemDataRole.UserRole + 2)
-            )
+            QGuiApplication.clipboard().setText(full_hash)
         elif chosen is not None:
             self._checkout(targets[chosen])
 
