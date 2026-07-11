@@ -1,9 +1,10 @@
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QAction, QPixmap
+from PySide6.QtGui import QAction, QIcon, QPixmap
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -47,19 +48,21 @@ class _HomeScreen(QWidget):
         self._logo = QLabel()
         self._logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._logo.setScaledContents(False)
-        self._pixmap = QPixmap(str(Path(__file__).resolve().parents[1] / "logo.png"))
         self._logo.setMinimumSize(1, 1)
+        self._logo_dir = Path(__file__).resolve().parents[1]
+        self._pixmap = QPixmap()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.addStretch(1)
         layout.addWidget(self._logo)
         layout.addStretch(1)
-        self._update_logo()
 
     def set_theme(self, name: str) -> None:
         ui = UI_COLORS[name]
         self.setStyleSheet(f"background: {ui['window']};")
+        self._pixmap = QPixmap(str(self._logo_dir / f"{name}.png"))
+        self._update_logo()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -69,6 +72,7 @@ class _HomeScreen(QWidget):
         if self._pixmap.isNull():
             self._logo.setText("Kraken")
             return
+        self._logo.setText("")
         target_w = max(240, min(self.width() - 96, 420))
         target_h = max(180, min(self.height() - 96, 420))
         self._logo.setPixmap(
@@ -116,6 +120,10 @@ class _EdgeGrip(QWidget):
                 self._edges_at(event.position().toPoint())
             )
             event.accept()
+
+
+def _theme_icon(name: str) -> QIcon:
+    return QIcon(str(Path(__file__).resolve().parents[1] / f"{name}.png"))
 
 
 class MainWindow(QMainWindow):
@@ -207,11 +215,17 @@ class MainWindow(QMainWindow):
         """Apply the selected theme throughout the application."""
         self._theme_name = name
         ui = UI_COLORS[name]
+        icon = _theme_icon(name)
+        self.setWindowIcon(icon)
+        app = QApplication.instance()
+        if app is not None:
+            app.setWindowIcon(icon)
         self._view_stack.setStyleSheet(
             f"QStackedWidget {{ background: {ui['window']}; }}"
         )
         for view in self.views.values():
             view.set_theme(name)
+        self._home_screen.set_theme(name)
         self.side_bar.set_theme(name)
         self.workspace_bar.set_theme(name)
         self.title_bar.set_theme(name)
