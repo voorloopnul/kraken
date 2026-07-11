@@ -7,7 +7,7 @@ WorkspaceView per open workspace in a stack and switches between them."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QSplitter, QVBoxLayout, QWidget
 
 from app.panels import BrowserPanel, CenterPanel, LeftPanel, RightPanel
@@ -16,6 +16,10 @@ from app.themes import DEFAULT_THEME, UI_COLORS
 
 
 class WorkspaceView(QWidget):
+    # A transcript link needs the browser panel; MainWindow syncs the
+    # View-menu toggle (which is what actually shows the panel).
+    browser_requested = Signal()
+
     def __init__(self, path: str, parent: QWidget | None = None):
         super().__init__(parent)
         self.path = path
@@ -85,8 +89,13 @@ class WorkspaceView(QWidget):
             lambda name, c=controller: self._on_model_known(c, name)
         )
         self.controllers.append(controller)
+        controller.conversation.link_clicked.connect(self._open_link)
         self.center_panel.add_conversation(controller.conversation)
         return controller
+
+    def _open_link(self, url: str) -> None:
+        self.browser_requested.emit()
+        self.browser_panel.open_url(url)
 
     def _controller_key(self, controller: SessionController) -> str:
         """A stable history key for a live session: its file path once Pi has

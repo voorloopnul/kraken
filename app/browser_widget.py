@@ -37,7 +37,10 @@ QLineEdit {
 class BrowserWidget(QWidget):
     """One browser instance with back/forward/reload/address bar."""
 
-    def __init__(self, parent: QWidget | None = None, initial_url: str = "https://duckduckgo.com"):
+    # New tabs start on about:blank: a blank page costs ~0 memory, while a
+    # real start page costs its full content (~40MB for duckduckgo.com) in
+    # every open tab.
+    def __init__(self, parent: QWidget | None = None, initial_url: str = "about:blank"):
         super().__init__(parent)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
@@ -59,7 +62,10 @@ class BrowserWidget(QWidget):
         reload.setFixedSize(28, 24)
         reload.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        self._url_bar = QLineEdit(initial_url)
+        self._url_bar = QLineEdit(
+            "" if initial_url == "about:blank" else initial_url
+        )
+        self._url_bar.setPlaceholderText("Enter address")
         self._url_bar.setCursor(Qt.CursorShape.IBeamCursor)
 
         go = QToolButton()
@@ -99,15 +105,20 @@ class BrowserWidget(QWidget):
     # ---- Navigation ----------------------------------------------------
 
     def _go(self) -> None:
-        text = self._url_bar.text().strip()
-        if not text:
+        self.navigate(self._url_bar.text())
+
+    def navigate(self, url: str) -> None:
+        url = url.strip()
+        if not url:
             return
-        if not text.startswith(("http://", "https://")):
-            text = "https://" + text
-        self.web.load(QUrl(text))
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
+        self._url_bar.setText(url)
+        self.web.load(QUrl(url))
 
     def _update_url(self, url: QUrl) -> None:
-        self._url_bar.setText(url.toString())
+        text = url.toString()
+        self._url_bar.setText("" if text == "about:blank" else text)
 
     # ---- Theme ---------------------------------------------------------
 

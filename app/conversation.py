@@ -13,7 +13,7 @@ accumulated source on every delta.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QRectF, QTimer
+from PySide6.QtCore import Qt, QRectF, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -50,11 +50,13 @@ _PALETTE = {
         "text": "#d6d8dd", "dim": "#7a7d85", "error": "#e06c75",
         "code_bg": "#17181d", "code_border": "#2c2e35",
         "user_bg": "#26282e", "user_border": "#33353c",
+        "link": "#61afef",
     },
     "light": {
         "text": "#1a1c21", "dim": "#5f6269", "error": "#a8232e",
         "code_bg": "#f0ebdc", "code_border": "#d8d3c4",
         "user_bg": "#dfe0e4", "user_border": "#c9cbd2",
+        "link": "#02669c",
     },
 }
 
@@ -159,6 +161,10 @@ _Span = tuple[str, str, bool, bool]
 
 
 class ConversationView(QTextBrowser):
+    # A web link in the transcript was clicked; the workspace routes it to
+    # the embedded browser panel.
+    link_clicked = Signal(str)
+
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setReadOnly(True)
@@ -330,13 +336,14 @@ class ConversationView(QTextBrowser):
 
     def _on_anchor_clicked(self, url) -> None:
         target = url.toString()
-        if not target.startswith("tool:"):
-            return
-        index = int(target.split(":", 1)[1])
-        if 0 <= index < len(self._blocks) and self._blocks[index][0] == "tool":
-            payload = self._blocks[index][1]
-            payload["expanded"] = not payload["expanded"]
-            self._repaint_all()
+        if target.startswith("tool:"):
+            index = int(target.split(":", 1)[1])
+            if 0 <= index < len(self._blocks) and self._blocks[index][0] == "tool":
+                payload = self._blocks[index][1]
+                payload["expanded"] = not payload["expanded"]
+                self._repaint_all()
+        elif url.scheme() in ("http", "https"):
+            self.link_clicked.emit(target)
 
     def _write(self, kind: str, payload: list) -> None:
         # A non-assistant block ends any assistant message in progress, so
@@ -473,6 +480,7 @@ class ConversationView(QTextBrowser):
                     QTextCursor.MoveMode.KeepAnchor,
                 )
                 cursor.mergeCharFormat(char)
+            self._retint_links(block)
             is_code = (
                 fmt.property(QTextFormat.Property.BlockCodeLanguage) is not None
             )
@@ -519,6 +527,33 @@ class ConversationView(QTextBrowser):
         while len(self._copy_buttons) < len(self._code_ranges):
             self._copy_buttons.append(self._make_copy_button())
         self._layout_copy_buttons()
+
+    def _retint_links(self, block) -> None:
+        """Recolor markdown anchors to the theme's link color. insertMarkdown
+        stamps them with the application palette's link blue, which is far
+        too dark to read on the dark background. Tool-header anchors carry
+        their own color and are skipped. Already-recolored fragments are
+        skipped too, keeping the pass idempotent across repaints."""
+        link = QColor(self._colors["link"])
+        spans: list[tuple[int, int]] = []
+        it = block.begin()
+        while not it.atEnd():
+            fragment = it.fragment()
+            fmt = fragment.charFormat()
+            if (
+                fmt.isAnchor()
+                and not (fmt.anchorHref() or "").startswith("tool:")
+                and fmt.foreground().color() != link
+            ):
+                spans.append((fragment.position(), fragment.length()))
+            it += 1
+        recolor = QTextCharFormat()
+        recolor.setForeground(link)
+        for position, length in spans:
+            cursor = QTextCursor(self.document())
+            cursor.setPosition(position)
+            cursor.setPosition(position + length, QTextCursor.MoveMode.KeepAnchor)
+            cursor.mergeCharFormat(recolor)
 
     def _highlight_range(self, first: int, last: int) -> None:
         """Apply pygments token colors to one code block. The fence language

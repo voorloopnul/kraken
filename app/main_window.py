@@ -100,6 +100,11 @@ class MainWindow(QMainWindow):
         if view is None:
             view = WorkspaceView(path)
             view.set_theme(self._theme_name)
+            # A clicked transcript link opens the browser panel; checking the
+            # menu action shows the panel and keeps the toggles in sync.
+            view.browser_requested.connect(
+                lambda: self._panel_actions["browser"].setChecked(True)
+            )
             # New views follow the current pane-visibility toggles.
             view.left_panel.setVisible(self._panel_actions["left"].isChecked())
             view.browser_panel.setVisible(self._panel_actions["browser"].isChecked())

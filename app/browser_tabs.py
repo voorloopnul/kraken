@@ -118,6 +118,11 @@ class BrowserTabs(QWidget):
     def browsers(self) -> list[BrowserWidget]:
         return [self._stack.widget(i) for i in range(self._stack.count())]  # type: ignore[arg-type]
 
+    def open_url(self, url: str) -> None:
+        """Load a URL in the current tab (creating one if none exist)."""
+        browser = self.current_browser or self.add_browser()
+        browser.navigate(url)
+
     def add_browser(self) -> BrowserWidget:
         browser = BrowserWidget(self)
         if self._theme_name != DEFAULT_THEME:

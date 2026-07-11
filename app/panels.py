@@ -435,6 +435,9 @@ class BrowserPanel(Panel):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        self._ensure_tabs()
+
+    def _ensure_tabs(self) -> None:
         # Re-entrancy guard: web view construction can pump the event loop
         # (Chromium/GL init), letting a second showEvent arrive while the
         # first BrowserTabs is still mid-construction — without the flag
@@ -451,6 +454,14 @@ class BrowserPanel(Panel):
             self.browsers = tabs
         finally:
             self._creating = False
+
+    def open_url(self, url: str) -> None:
+        """Load a URL in the panel's current tab, revealing the panel (and
+        building the lazily-created tabs) if needed."""
+        self.show()
+        self._ensure_tabs()
+        if self.browsers is not None:
+            self.browsers.open_url(url)
 
     def set_theme(self, name: str) -> None:
         self._theme_name = name
