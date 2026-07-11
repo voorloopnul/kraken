@@ -1,9 +1,17 @@
 """The three content panels. Replace the placeholder widgets with real content."""
 
+import html
 import subprocess
 
 from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPainter, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QGuiApplication,
+    QIcon,
+    QPainter,
+    QPixmap,
+    QTextDocument,
+)
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
@@ -17,6 +25,8 @@ from PySide6.QtWidgets import (
     QScrollBar,
     QStackedWidget,
     QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -509,6 +519,60 @@ QAbstractScrollArea::corner { background: transparent; border: none; }
 }
 
 
+class _RichTextDelegate(QStyledItemDelegate):
+    """Paints item text as HTML so parts of a row (the commit hash) can be
+    colored independently; backgrounds still come from the widget style."""
+
+    def paint(self, painter, option, index) -> None:
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        doc = self._document(opt)
+        opt.text = ""
+        style = opt.widget.style()
+        style.drawControl(
+            QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget
+        )
+        rect = style.subElementRect(
+            QStyle.SubElement.SE_ItemViewItemText, opt, opt.widget
+        )
+        painter.save()
+        painter.translate(
+            rect.left(), rect.top() + (rect.height() - doc.size().height()) / 2
+        )
+        doc.drawContents(painter)
+        painter.restore()
+
+    def sizeHint(self, option, index) -> QSize:
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        doc = self._document(opt)
+        # Mirror the stylesheet's 2px/4px item padding.
+        return QSize(int(doc.idealWidth()) + 8, int(doc.size().height()) + 4)
+
+    @staticmethod
+    def _document(opt: QStyleOptionViewItem) -> QTextDocument:
+        doc = QTextDocument()
+        doc.setDocumentMargin(0)
+        doc.setDefaultFont(opt.font)
+        doc.setHtml(opt.text)
+        return doc
+
+
+def _mono(text: str, color: str) -> str:
+    """Escape one span of row text, keeping runs of spaces (graph columns)."""
+    return (
+        f'<span style="color: {color};">'
+        f'{html.escape(text).replace(" ", "&nbsp;")}</span>'
+    )
+
+
+# Row text per theme, plus the hash accents: pastel green for commits on the
+# main line (reachable from master/main), light gray for side-branch work.
+_GIT_TEXT_COLORS = {"dark": "#c8cad0", "light": "#4a4d55"}
+_MAIN_HASH_COLORS = {"dark": "#98c379", "light": "#50a14f"}
+_OFF_MAIN_COLORS = {"dark": "#7a7d85", "light": "#9a9da5"}
+
+
 class GitPanel(Panel):
     """Git history pane: the workspace repo's commit graph, one row per
     `git log --graph` line. Refreshes whenever the panel becomes visible —
@@ -520,6 +584,7 @@ class GitPanel(Panel):
     def __init__(self, parent: QWidget | None = None, cwd: str | None = None):
         super().__init__(parent)
         self._cwd = cwd
+        self._theme_name = DEFAULT_THEME
         self._card = Card()
 
         header = QWidget()
@@ -541,6 +606,9 @@ class GitPanel(Panel):
         self._list.setWordWrap(False)
         self._list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._list.customContextMenuRequested.connect(self._on_context_menu)
+        # Rows are HTML (see _RichTextDelegate) so the hash can carry its
+        # own color while the rest of the row keeps the theme text color.
+        self._list.setItemDelegate(_RichTextDelegate(self._list))
 
         self._card.add_widget(header)
         self._card.add_widget(self._list, stretch=1)
@@ -573,6 +641,7 @@ class GitPanel(Panel):
             )
         except (OSError, subprocess.TimeoutExpired):
             result = None
+        text_color = _GIT_TEXT_COLORS[self._theme_name]
         if result is None or result.returncode != 0:
             stderr = result.stderr.lower() if result is not None else ""
             message = (
@@ -580,17 +649,28 @@ class GitPanel(Panel):
                 if "not a git repository" in stderr
                 else "No commits"
             )
-            item = QListWidgetItem(message)
+            item = QListWidgetItem(_mono(message, text_color))
             item.setFlags(Qt.ItemFlag.NoItemFlags)
             self._list.addItem(item)
             return
+        main_line = self._main_line_hashes()
         for line in result.stdout.splitlines():
             graph, sep, record = line.partition("\x1f")
             if sep:
                 short_hash, full_hash, refs, subject, author, when = record.split(
                     "\x1f"
                 )
-                item = QListWidgetItem(f"{graph}{short_hash}{refs}  {subject}")
+                if main_line is None:
+                    hash_color = text_color  # no master/main to compare with
+                elif full_hash in main_line:
+                    hash_color = _MAIN_HASH_COLORS[self._theme_name]
+                else:
+                    hash_color = _OFF_MAIN_COLORS[self._theme_name]
+                item = QListWidgetItem(
+                    _mono(graph, text_color)
+                    + _mono(short_hash, hash_color)
+                    + _mono(f"{refs}  {subject}", text_color)
+                )
                 item.setToolTip(f"{subject}\n{short_hash} — {author}, {when}")
                 item.setData(Qt.ItemDataRole.UserRole, short_hash)
                 item.setData(Qt.ItemDataRole.UserRole + 2, full_hash)
@@ -611,8 +691,25 @@ class GitPanel(Panel):
                     font.setBold(True)
                     item.setFont(font)
             else:
-                item = QListWidgetItem(graph.rstrip())
+                item = QListWidgetItem(_mono(graph.rstrip(), text_color))
             self._list.addItem(item)
+
+    def _main_line_hashes(self) -> set[str] | None:
+        """Full hashes reachable from master (or main), or None when neither
+        exists to compare against."""
+        for ref in ("master", "main"):
+            try:
+                result = subprocess.run(
+                    ["git", "-C", self._cwd, "rev-list", ref, "--"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                return None
+            if result.returncode == 0:
+                return set(result.stdout.split())
+        return None
 
     def _on_context_menu(self, pos) -> None:
         item = self._list.itemAt(pos)
@@ -659,9 +756,15 @@ class GitPanel(Panel):
         self.refresh()
 
     def set_theme(self, name: str) -> None:
+        changed = name != self._theme_name
+        self._theme_name = name
         ui = UI_COLORS[name]
         self._card.set_colors(ui["card"], ui["card_border"])
         self._list.setStyleSheet(_GIT_LOG_STYLES[name])
+        # Row colors are baked into each item's HTML, so re-render on a
+        # theme flip (hidden panels re-render on their next showEvent).
+        if changed and self.isVisible():
+            self.refresh()
         dim, hover = (
             ("#7a7d85", "#2c2e35") if name == "dark" else ("#5f6269", "#e8e8ec")
         )
