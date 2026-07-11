@@ -1,13 +1,13 @@
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QAction, QActionGroup
+from PySide6.QtGui import QAction, QPixmap
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
+    QLabel,
     QMainWindow,
-    QMenuBar,
     QMessageBox,
     QStackedWidget,
     QToolTip,
@@ -38,6 +38,47 @@ _EDGE_CURSORS = {
     Qt.Edge.TopEdge | Qt.Edge.RightEdge: Qt.CursorShape.SizeBDiagCursor,
     Qt.Edge.BottomEdge | Qt.Edge.LeftEdge: Qt.CursorShape.SizeBDiagCursor,
 }
+
+
+class _HomeScreen(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._logo = QLabel()
+        self._logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._logo.setScaledContents(False)
+        self._pixmap = QPixmap(str(Path(__file__).resolve().parents[1] / "logo.png"))
+        self._logo.setMinimumSize(1, 1)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.addStretch(1)
+        layout.addWidget(self._logo)
+        layout.addStretch(1)
+        self._update_logo()
+
+    def set_theme(self, name: str) -> None:
+        ui = UI_COLORS[name]
+        self.setStyleSheet(f"background: {ui['window']};")
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_logo()
+
+    def _update_logo(self) -> None:
+        if self._pixmap.isNull():
+            self._logo.setText("Kraken")
+            return
+        target_w = max(240, min(self.width() - 96, 420))
+        target_h = max(180, min(self.height() - 96, 420))
+        self._logo.setPixmap(
+            self._pixmap.scaled(
+                target_w,
+                target_h,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
 
 
 class _EdgeGrip(QWidget):
@@ -80,7 +121,7 @@ class _EdgeGrip(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Alpine")
+        self.setWindowTitle("Kraken")
         # The TitleBar widget replaces the native decoration.
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
         self.resize(1200, 720)
@@ -90,6 +131,9 @@ class MainWindow(QMainWindow):
         # workspace, keyed by absolute path; the stack shows the current one.
         self.views: dict[str, WorkspaceView] = {}
         self._view_stack = QStackedWidget()
+        self._home_screen = _HomeScreen()
+        self._view_stack.addWidget(self._home_screen)
+        self._view_stack.setCurrentWidget(self._home_screen)
 
         self.side_bar = SideBar()
         self.workspace_bar = WorkspaceBar()
@@ -100,12 +144,6 @@ class MainWindow(QMainWindow):
         self.title_bar.buttons["Maximize"].clicked.connect(self._toggle_maximized)
         self.title_bar.buttons["Close"].clicked.connect(self.close)
         self.title_bar.branch_changed.connect(self._on_branch_switched)
-
-        # The frameless window hosts its own menu bar in the layout (below
-        # the title bar) instead of QMainWindow's built-in slot, which would
-        # sit above it.
-        self._menu_bar = QMenuBar()
-        self._menu_bar.setNativeMenuBar(False)
 
         content = QWidget()
         content_layout = QHBoxLayout(content)
@@ -120,7 +158,6 @@ class MainWindow(QMainWindow):
         central_layout.setContentsMargins(0, 0, 0, 0)
         central_layout.setSpacing(0)
         central_layout.addWidget(self.title_bar)
-        central_layout.addWidget(self._menu_bar)
         central_layout.addWidget(content, stretch=1)
 
         # Adding the first render-to-texture widget (the browser panel's
@@ -135,6 +172,8 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
         self.set_theme(DEFAULT_THEME)
+        self.title_bar.set_workspace(None)
+        self.title_bar.set_conversation("")
 
         # Frameless windows lose native edge resizing; thin grip strips
         # overlaid on the window borders bring it back (see _EdgeGrip).
@@ -148,7 +187,7 @@ class MainWindow(QMainWindow):
             )
         ]
 
-        self._create_menus()
+        self._create_actions()
         # Reopen the workspaces from the last run (folders that vanished
         # since are dropped); first launch falls back to the launch
         # directory so the window starts with a live set of panes.
@@ -158,10 +197,6 @@ class MainWindow(QMainWindow):
             workspaces = [str(Path.cwd())]
         for path in workspaces:
             self.workspace_bar.add_workspace(path, select=False)
-        current = state.get("current_workspace")
-        self.workspace_bar.add_workspace(
-            current if current in workspaces else workspaces[0]
-        )
 
     @property
     def current_view(self) -> WorkspaceView | None:
@@ -169,7 +204,7 @@ class MainWindow(QMainWindow):
         return widget if isinstance(widget, WorkspaceView) else None
 
     def set_theme(self, name: str) -> None:
-        """Theme the whole application; the menu bar keeps its native look."""
+        """Apply the selected theme throughout the application."""
         self._theme_name = name
         ui = UI_COLORS[name]
         self._view_stack.setStyleSheet(
@@ -180,9 +215,6 @@ class MainWindow(QMainWindow):
         self.side_bar.set_theme(name)
         self.workspace_bar.set_theme(name)
         self.title_bar.set_theme(name)
-        # Keep the View > Theme radio items in sync (empty until menus exist).
-        for action_name, action in getattr(self, "_theme_actions", {}).items():
-            action.setChecked(action_name == name)
 
     def _add_workspace(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Add Workspace")
@@ -195,8 +227,8 @@ class MainWindow(QMainWindow):
         if view is None:
             view = WorkspaceView(path)
             view.set_theme(self._theme_name)
-            # A clicked transcript link opens the browser panel; checking the
-            # menu action shows the panel and keeps the toggles in sync.
+            # A clicked transcript link opens the browser panel through the
+            # same action used by its side-bar toggle.
             view.browser_requested.connect(
                 lambda: self._panel_actions["browser"].setChecked(True)
             )
@@ -218,7 +250,7 @@ class MainWindow(QMainWindow):
             view.left_panel.refresh()
         self._view_stack.setCurrentWidget(view)
         self.current_workspace = path
-        self.setWindowTitle(f"Alpine — {Path(path).name}")
+        self.setWindowTitle(f"Kraken — {Path(path).name}")
         self.title_bar.set_workspace(path)
         self.title_bar.set_conversation(
             view.focused.title if view.focused is not None else ""
@@ -296,18 +328,17 @@ class MainWindow(QMainWindow):
         for view in self.views.values():
             view.set_panel_visible(side, visible)
 
-    def _create_menus(self) -> None:
-        file_menu = self._menu_bar.addMenu("&File")
-        add_workspace_action = QAction("&Add Workspace…", self)
+    def _create_actions(self) -> None:
+        # Keep keyboard shortcuts available without exposing a menu bar.
+        add_workspace_action = QAction("Add Workspace", self)
         add_workspace_action.setShortcut("Ctrl+O")
         add_workspace_action.triggered.connect(self._add_workspace)
-        file_menu.addAction(add_workspace_action)
-        quit_action = QAction("&Quit", self)
+        self.addAction(add_workspace_action)
+        quit_action = QAction("Quit", self)
         quit_action.setShortcut("Ctrl+Q")
         quit_action.triggered.connect(self.close)
-        file_menu.addAction(quit_action)
+        self.addAction(quit_action)
 
-        view_menu = self._menu_bar.addMenu("&View")
         self._panel_actions: dict[str, QAction] = {}
         for label, side in (
             ("Left Panel", "left"),
@@ -319,11 +350,10 @@ class MainWindow(QMainWindow):
             action.toggled.connect(
                 lambda checked, s=side: self._set_panel_visible(s, checked)
             )
-            view_menu.addAction(action)
             self._panel_actions[side] = action
 
-        # Side-bar icons toggle the terminal (right), browser, and git panels,
-        # staying in sync with their View menu checkboxes. Hidden by default.
+        # Side-bar icons toggle the terminal (right), browser, and git panels.
+        # They are hidden by default.
         for button_name, side in (
             ("Terminal Panel", "right"),
             ("Browser Panel", "browser"),
@@ -337,23 +367,6 @@ class MainWindow(QMainWindow):
 
         self.side_bar.buttons["Screenshot"].clicked.connect(self._screenshot_browser)
         self.side_bar.buttons["Quit"].clicked.connect(self.close)
-        # Menu bar starts hidden; setVisible(False) is explicit because
-        # setChecked(False) on a fresh action doesn't emit toggled.
-        menu_toggle = self.side_bar.buttons["Menu Bar"]
-        menu_toggle.setCheckable(True)
-        menu_toggle.toggled.connect(self._menu_bar.setVisible)
-        self._menu_bar.setVisible(False)
         self.side_bar.buttons["Toggle Theme"].clicked.connect(
             lambda: self.set_theme("light" if self._theme_name == "dark" else "dark")
         )
-
-        theme_menu = view_menu.addMenu("Theme")
-        theme_group = QActionGroup(self)
-        self._theme_actions = {}
-        for label, name in (("Dark", "dark"), ("Light", "light")):
-            action = QAction(label, self, checkable=True)
-            action.setActionGroup(theme_group)
-            action.setChecked(name == self._theme_name)
-            action.triggered.connect(lambda _=False, n=name: self.set_theme(n))
-            theme_menu.addAction(action)
-            self._theme_actions[name] = action
