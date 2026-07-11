@@ -209,6 +209,7 @@ class MainWindow(QMainWindow):
             # New views follow the current pane-visibility toggles.
             view.left_panel.setVisible(self._panel_actions["left"].isChecked())
             view.browser_panel.setVisible(self._panel_actions["browser"].isChecked())
+            view.git_panel.setVisible(self._panel_actions["git"].isChecked())
             view.right_panel.setVisible(self._panel_actions["right"].isChecked())
             self.views[path] = view
             self._view_stack.addWidget(view)
@@ -268,6 +269,7 @@ class MainWindow(QMainWindow):
             panel = {
                 "left": view.left_panel,
                 "browser": view.browser_panel,
+                "git": view.git_panel,
                 "right": view.right_panel,
             }[side]
             panel.setVisible(visible)
@@ -288,6 +290,7 @@ class MainWindow(QMainWindow):
         for label, side in (
             ("Left Panel", "left"),
             ("Browser Panel", "browser"),
+            ("Git Panel", "git"),
             ("Right Panel", "right"),
         ):
             action = QAction(label, self, checkable=True, checked=True)
@@ -297,20 +300,18 @@ class MainWindow(QMainWindow):
             view_menu.addAction(action)
             self._panel_actions[side] = action
 
-        # First side-bar icon toggles the terminal (right) panel, staying in
-        # sync with the View menu checkbox. Hidden by default.
-        toggle = self.side_bar.buttons["Terminal Panel"]
-        toggle.setCheckable(True)
-        toggle.toggled.connect(self._panel_actions["right"].setChecked)
-        self._panel_actions["right"].toggled.connect(toggle.setChecked)
-        self._panel_actions["right"].setChecked(False)
-
-        # Same deal for the browser panel and its globe icon.
-        browser_toggle = self.side_bar.buttons["Browser Panel"]
-        browser_toggle.setCheckable(True)
-        browser_toggle.toggled.connect(self._panel_actions["browser"].setChecked)
-        self._panel_actions["browser"].toggled.connect(browser_toggle.setChecked)
-        self._panel_actions["browser"].setChecked(False)
+        # Side-bar icons toggle the terminal (right), browser, and git panels,
+        # staying in sync with their View menu checkboxes. Hidden by default.
+        for button_name, side in (
+            ("Terminal Panel", "right"),
+            ("Browser Panel", "browser"),
+            ("Git Panel", "git"),
+        ):
+            toggle = self.side_bar.buttons[button_name]
+            toggle.setCheckable(True)
+            toggle.toggled.connect(self._panel_actions[side].setChecked)
+            self._panel_actions[side].toggled.connect(toggle.setChecked)
+            self._panel_actions[side].setChecked(False)
 
         self.side_bar.buttons["Quit"].clicked.connect(self.close)
         # Menu bar starts hidden; setVisible(False) is explicit because

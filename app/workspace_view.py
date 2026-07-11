@@ -7,12 +7,57 @@ WorkspaceView per open workspace in a stack and switches between them."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QSplitter, QVBoxLayout, QWidget
+from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QPainter
+from PySide6.QtWidgets import QSplitter, QSplitterHandle, QVBoxLayout, QWidget
 
-from app.panels import BrowserPanel, CenterPanel, LeftPanel, RightPanel
+from app.panels import BrowserPanel, CenterPanel, GitPanel, LeftPanel, RightPanel
 from app.session_controller import SessionController
 from app.themes import DEFAULT_THEME, UI_COLORS
+
+
+class _GripSplitter(QSplitter):
+    """Splitter whose handles paint a short rounded grip bar; the stock
+    dotted handle nearly vanishes against the light theme's background."""
+
+    def __init__(self, orientation: Qt.Orientation, parent: QWidget | None = None):
+        super().__init__(orientation, parent)
+        self.grip_color = QColor("#c9c4b4")
+        self.setHandleWidth(8)
+
+    def set_grip_color(self, color: str) -> None:
+        self.grip_color = QColor(color)
+        for i in range(1, self.count()):
+            self.handle(i).update()
+
+    def createHandle(self) -> QSplitterHandle:
+        return _GripHandle(self.orientation(), self)
+
+
+class _GripHandle(QSplitterHandle):
+    _LENGTH = 36.0
+    _THICKNESS = 3.0
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(self.splitter().grip_color)
+        if self.orientation() == Qt.Orientation.Horizontal:
+            rect = QRectF(
+                (self.width() - self._THICKNESS) / 2,
+                (self.height() - self._LENGTH) / 2,
+                self._THICKNESS,
+                self._LENGTH,
+            )
+        else:
+            rect = QRectF(
+                (self.width() - self._LENGTH) / 2,
+                (self.height() - self._THICKNESS) / 2,
+                self._LENGTH,
+                self._THICKNESS,
+            )
+        painter.drawRoundedRect(rect, self._THICKNESS / 2, self._THICKNESS / 2)
 
 
 class WorkspaceView(QWidget):
@@ -34,15 +79,18 @@ class WorkspaceView(QWidget):
         # Per-workspace browser, like the terminals; it's lazily populated
         # on first show, so hidden panels cost no Chromium processes.
         self.browser_panel = BrowserPanel()
+        self.git_panel = GitPanel(cwd=path)
+        self.git_panel.setMinimumWidth(320)
         self.right_panel = RightPanel(cwd=path)
         # The terminal panel never shrinks below a usable width; the splitter
         # stops the drag here rather than letting it collapse to a sliver.
         self.right_panel.setMinimumWidth(380)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter = _GripSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.left_panel)
         splitter.addWidget(self.center_panel)
         splitter.addWidget(self.browser_panel)
+        splitter.addWidget(self.git_panel)
         splitter.addWidget(self.right_panel)
 
         # Center panel absorbs extra space when the window resizes.
@@ -50,7 +98,8 @@ class WorkspaceView(QWidget):
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
         splitter.setStretchFactor(3, 0)
-        splitter.setSizes([300, 500, 480, 480])
+        splitter.setStretchFactor(4, 0)
+        splitter.setSizes([300, 500, 480, 380, 480])
         splitter.setChildrenCollapsible(False)
         self._splitter = splitter
 
@@ -90,6 +139,9 @@ class WorkspaceView(QWidget):
         controller.model_known.connect(
             lambda name, c=controller: self._on_model_known(c, name)
         )
+        # A loaded session learns its title asynchronously; resyncing
+        # refreshes the History row and the window title bar.
+        controller.title_known.connect(lambda _title: self._sync_history())
         self.controllers.append(controller)
         controller.conversation.link_clicked.connect(self._open_link)
         self.center_panel.add_conversation(controller.conversation)
@@ -237,9 +289,12 @@ class WorkspaceView(QWidget):
             f"QSplitter {{ background: {ui['window']}; }}"
             f" QLabel {{ color: {ui['text']}; }}"
         )
+        # Same handle colors as the conversation scrollbar, per theme.
+        self._splitter.set_grip_color("#3a3d45" if name == "dark" else "#c9c4b4")
         self.left_panel.set_theme(name)
         self.center_panel.set_theme(name)
         self.browser_panel.set_theme(name)
+        self.git_panel.set_theme(name)
         self.right_panel.set_theme(name)
         for controller in self.controllers:
             controller.set_theme(name)

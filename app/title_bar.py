@@ -199,7 +199,7 @@ class TitleBar(QWidget):
 
     def set_workspace(self, path: str) -> None:
         self._workspace_path = path
-        self.folder_label.setText(Path(path).name)
+        self.folder_label.setText(path)
         self._refresh_branch()
 
     def set_conversation(self, title: str) -> None:

@@ -13,7 +13,12 @@ from __future__ import annotations
 
 from PySide6.QtCore import QObject, Signal
 
-from app.conversation import ConversationView, args_detail, args_summary
+from app.conversation import (
+    ConversationView,
+    _content_text,
+    args_detail,
+    args_summary,
+)
 from app.pi_rpc import PiAgent
 
 
@@ -21,6 +26,7 @@ class SessionController(QObject):
     streaming_changed = Signal(bool)  # agent started (True) / finished (False)
     path_known = Signal(str)  # the session's on-disk file path, once discovered
     model_known = Signal(str)  # the model display name, once discovered
+    title_known = Signal(str)  # the title, once a loaded session's messages arrive
 
     def __init__(
         self,
@@ -95,6 +101,16 @@ class SessionController(QObject):
             if response.get("success"):
                 messages = (response.get("data") or {}).get("messages") or []
                 self.conversation.render_messages(messages)
+                # A loaded session's title comes from its stored messages,
+                # the same way History derives it (first user message).
+                if self.first_prompt is None:
+                    for message in messages:
+                        if message.get("role") == "user":
+                            text = _content_text(message.get("content"))
+                            if text:
+                                self.first_prompt = text
+                                self.title_known.emit(self.title)
+                                break
 
         self.agent.get_messages(on_messages)
         self._sync_state()

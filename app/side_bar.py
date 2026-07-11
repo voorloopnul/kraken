@@ -83,6 +83,28 @@ def _globe_icon(color: str) -> QIcon:
     return QIcon(pixmap)
 
 
+def _git_icon(color: str) -> QIcon:
+    """Git branch: a trunk with top/bottom nodes and a branch node curving in."""
+    pixmap = QPixmap(36, 36)
+    pixmap.setDevicePixelRatio(2.0)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(color))
+    pen.setWidthF(1.4)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    painter.drawEllipse(QPointF(5.1, 4.3), 2.0, 2.0)
+    painter.drawEllipse(QPointF(5.1, 13.7), 2.0, 2.0)
+    painter.drawEllipse(QPointF(12.9, 7.0), 2.0, 2.0)
+    painter.drawLine(QPointF(5.1, 6.3), QPointF(5.1, 11.7))
+    path = QPainterPath(QPointF(5.1, 11.3))
+    path.cubicTo(QPointF(5.1, 9.0), QPointF(12.9, 10.7), QPointF(12.9, 9.0))
+    painter.drawPath(path)
+    painter.end()
+    return QIcon(pixmap)
+
+
 def _power_icon(color: str) -> QIcon:
     """Power symbol: a circle with a top gap and a vertical bar through it."""
     pixmap = QPixmap(36, 36)
@@ -164,6 +186,7 @@ def _moon_icon(color: str) -> QIcon:
 _ICON_FACTORIES = {
     "Terminal Panel": _terminal_icon,
     "Browser Panel": _globe_icon,
+    "Git Panel": _git_icon,
     "Menu Bar": _menubar_icon,
     "Quit": _power_icon,
 }
@@ -187,7 +210,7 @@ class SideBar(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 8, 4, 8)
         layout.setSpacing(6)
-        for name in ("Terminal Panel", "Browser Panel"):
+        for name in ("Terminal Panel", "Browser Panel", "Git Panel"):
             btn = self._make_button("", name)
             btn.setIconSize(QSize(18, 18))
             layout.addWidget(btn)

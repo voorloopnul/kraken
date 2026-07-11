@@ -1,7 +1,9 @@
 """The three content panels. Replace the placeholder widgets with real content."""
 
+import subprocess
+
 from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
@@ -469,6 +471,206 @@ class BrowserPanel(Panel):
         self._card.set_colors(ui["card"], ui["card_border"])
         if self.browsers is not None:
             self.browsers.set_theme(name)
+
+
+# Scrollbars match the conversation panel's external one: a bare rounded
+# handle on a transparent track, no stepper buttons.
+_GIT_LOG_STYLES = {
+    "dark": """
+QListWidget { background: transparent; border: none; color: #c8cad0;
+              font-family: monospace; font-size: 11px; }
+QListWidget::item { padding: 2px 4px; border-radius: 4px; }
+QListWidget::item:hover { background: #2c2e35; }
+QScrollBar:horizontal { background: transparent; border: none; height: 10px; margin: 0; }
+QScrollBar::handle:horizontal { background: #3a3d45; border-radius: 5px; min-width: 24px; }
+QScrollBar::handle:horizontal:hover { background: #4a4e58; }
+QScrollBar:vertical { background: transparent; border: none; width: 10px; margin: 0; }
+QScrollBar::handle:vertical { background: #3a3d45; border-radius: 5px; min-height: 24px; }
+QScrollBar::handle:vertical:hover { background: #4a4e58; }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+QAbstractScrollArea::corner { background: transparent; border: none; }
+""",
+    "light": """
+QListWidget { background: transparent; border: none; color: #4a4d55;
+              font-family: monospace; font-size: 11px; }
+QListWidget::item { padding: 2px 4px; border-radius: 4px; }
+QListWidget::item:hover { background: #e8e8ec; }
+QScrollBar:horizontal { background: transparent; border: none; height: 10px; margin: 0; }
+QScrollBar::handle:horizontal { background: #c9c4b4; border-radius: 5px; min-width: 24px; }
+QScrollBar::handle:horizontal:hover { background: #b3ae9e; }
+QScrollBar:vertical { background: transparent; border: none; width: 10px; margin: 0; }
+QScrollBar::handle:vertical { background: #c9c4b4; border-radius: 5px; min-height: 24px; }
+QScrollBar::handle:vertical:hover { background: #b3ae9e; }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+QAbstractScrollArea::corner { background: transparent; border: none; }
+""",
+}
+
+
+class GitPanel(Panel):
+    """Git history pane: the workspace repo's commit graph, one row per
+    `git log --graph` line. Refreshes whenever the panel becomes visible —
+    which covers toggling it on and switching workspaces — plus a manual
+    refresh button for commits made while it's showing."""
+
+    _MAX_COMMITS = 200
+
+    def __init__(self, parent: QWidget | None = None, cwd: str | None = None):
+        super().__init__(parent)
+        self._cwd = cwd
+        self._card = Card()
+
+        header = QWidget()
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        self.refresh_button = QToolButton()
+        self.refresh_button.setText("↻")
+        self.refresh_button.setToolTip("Refresh")
+        self.refresh_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.refresh_button.clicked.connect(self.refresh)
+        header_layout.addWidget(QLabel("Git History"))
+        header_layout.addStretch(1)
+        header_layout.addWidget(self.refresh_button)
+
+        # Rows act through their context menu only, so no selection; the
+        # monospace font keeps the graph columns aligned across rows.
+        self._list = QListWidget()
+        self._list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        self._list.setWordWrap(False)
+        self._list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._list.customContextMenuRequested.connect(self._on_context_menu)
+
+        self._card.add_widget(header)
+        self._card.add_widget(self._list, stretch=1)
+        self.add_widget(self._card, stretch=1)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.refresh()
+
+    def refresh(self) -> None:
+        self._list.clear()
+        if not self._cwd:
+            return
+        # \x1f-separated fields after the graph prefix; continuation lines
+        # (pure graph, like "|/") carry no record at all.
+        try:
+            result = subprocess.run(
+                [
+                    # --all keeps every ref visible, so a detached checkout
+                    # (from the context menu) can't hide the branch tips you
+                    # would need to get back.
+                    "git", "-C", self._cwd, "log", "--graph", "--all",
+                    "--format=%x1f%h%x1f%H%x1f%d%x1f%s%x1f%an%x1f%ar",
+                    f"-{self._MAX_COMMITS}",
+                ],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            result = None
+        if result is None or result.returncode != 0:
+            stderr = result.stderr.lower() if result is not None else ""
+            message = (
+                "Not a git repository"
+                if "not a git repository" in stderr
+                else "No commits"
+            )
+            item = QListWidgetItem(message)
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            self._list.addItem(item)
+            return
+        for line in result.stdout.splitlines():
+            graph, sep, record = line.partition("\x1f")
+            if sep:
+                short_hash, full_hash, refs, subject, author, when = record.split(
+                    "\x1f"
+                )
+                item = QListWidgetItem(f"{graph}{short_hash}{refs}  {subject}")
+                item.setToolTip(f"{subject}\n{short_hash} — {author}, {when}")
+                item.setData(Qt.ItemDataRole.UserRole, short_hash)
+                item.setData(Qt.ItemDataRole.UserRole + 2, full_hash)
+                # Branches decorating this commit, offered as attached
+                # checkouts in the context menu. "HEAD -> x" is the branch
+                # we're already on; tags and a bare detached "HEAD" checkout
+                # the same as the hash, so neither earns an entry.
+                ref_names = [r for r in refs.strip(" ()").split(", ") if r]
+                branches = [
+                    ref
+                    for ref in ref_names
+                    if ref != "HEAD" and not ref.startswith(("HEAD -> ", "tag: "))
+                ]
+                item.setData(Qt.ItemDataRole.UserRole + 1, branches)
+                # Bold the checked-out commit so the current state stands out.
+                if any(r == "HEAD" or r.startswith("HEAD -> ") for r in ref_names):
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
+            else:
+                item = QListWidgetItem(graph.rstrip())
+            self._list.addItem(item)
+
+    def _on_context_menu(self, pos) -> None:
+        item = self._list.itemAt(pos)
+        # Graph continuation rows ("|/") carry no commit to act on.
+        commit = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        if not commit:
+            return
+        menu = QMenu(self._list)
+        targets = {}
+        for branch in item.data(Qt.ItemDataRole.UserRole + 1) or []:
+            targets[menu.addAction(f"Checkout {branch}")] = branch
+        targets[menu.addAction(f"Checkout {commit}")] = commit
+        menu.addSeparator()
+        copy_action = menu.addAction("Copy hash")
+        chosen = menu.exec(self._list.viewport().mapToGlobal(pos))
+        if chosen is copy_action:
+            # The full hash: short ones go ambiguous as a repo grows.
+            QGuiApplication.clipboard().setText(
+                item.data(Qt.ItemDataRole.UserRole + 2)
+            )
+        elif chosen is not None:
+            self._checkout(targets[chosen])
+
+    def _checkout(self, commit: str) -> None:
+        try:
+            result = subprocess.run(
+                ["git", "-C", self._cwd, "checkout", commit],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            QMessageBox.warning(self, "Checkout failed", str(exc))
+            return
+        if result.returncode != 0:
+            QMessageBox.warning(
+                self,
+                "Checkout failed",
+                result.stderr.strip() or "git checkout failed",
+            )
+            return
+        # HEAD moved: redraw so the (HEAD -> …) decoration follows.
+        self.refresh()
+
+    def set_theme(self, name: str) -> None:
+        ui = UI_COLORS[name]
+        self._card.set_colors(ui["card"], ui["card_border"])
+        self._list.setStyleSheet(_GIT_LOG_STYLES[name])
+        dim, hover = (
+            ("#7a7d85", "#2c2e35") if name == "dark" else ("#5f6269", "#e8e8ec")
+        )
+        self.refresh_button.setStyleSheet(
+            f"QToolButton {{ background: transparent; border: none;"
+            f" border-radius: 4px; color: {dim}; font-size: 13px;"
+            f" padding: 0 4px; }}"
+            f" QToolButton:hover {{ background: {hover}; }}"
+        )
 
 
 class RightPanel(Panel):
