@@ -225,11 +225,20 @@ class MainWindow(QMainWindow):
             workspaces = [str(Path.cwd())]
         for path in workspaces:
             self.workspace_bar.add_workspace(path, select=False)
+        self._sync_chrome()
 
     @property
     def current_view(self) -> WorkspaceView | None:
         widget = self._view_stack.currentWidget()
         return widget if isinstance(widget, WorkspaceView) else None
+
+    def _sync_chrome(self) -> None:
+        """The side bar and the title-bar history toggle both act on a
+        workspace's panels, so hide them on the home screen where there's
+        nothing to toggle."""
+        on_workspace = self.current_view is not None
+        self.side_bar.setVisible(on_workspace)
+        self.title_bar.left_panel_toggle.setVisible(on_workspace)
 
     def set_theme(self, name: str) -> None:
         """Apply the selected theme throughout the application."""
@@ -283,6 +292,7 @@ class MainWindow(QMainWindow):
         else:
             view.left_panel.refresh()
         self._view_stack.setCurrentWidget(view)
+        self._sync_chrome()
         self.current_workspace = path
         self.setWindowTitle(f"Kraken — {Path(path).name}")
         self.title_bar.set_workspace(path)
