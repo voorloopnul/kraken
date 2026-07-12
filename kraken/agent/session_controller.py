@@ -15,8 +15,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
-from kraken.chat.conversation import (
-    ConversationView,
+from kraken.chat.conversation import ConversationView
+from kraken.chat.formatting import (
     _content_text,
     args_detail,
     args_summary,

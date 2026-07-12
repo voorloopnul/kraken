@@ -27,6 +27,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QWidget
 
 from kraken.terminal import ghostty_vt as g
+from kraken.terminal.keymap import QT_KEY_MAP, UNSHIFTED
 from kraken.ui.themes import DEFAULT_THEME, THEMES
 
 # Cell flag bits for the row model.
@@ -37,68 +38,6 @@ _STRIKE = 8
 _INVERSE = 16
 _FAINT = 32
 _INVISIBLE = 64
-
-# Qt key -> GhosttyKey name (W3C physical-ish mapping from logical Qt keys).
-_QT_KEY_MAP = {
-    Qt.Key.Key_Escape: "ESCAPE",
-    Qt.Key.Key_Tab: "TAB",
-    Qt.Key.Key_Backtab: "TAB",
-    Qt.Key.Key_Backspace: "BACKSPACE",
-    Qt.Key.Key_Return: "ENTER",
-    Qt.Key.Key_Enter: "NUMPAD_ENTER",
-    Qt.Key.Key_Insert: "INSERT",
-    Qt.Key.Key_Delete: "DELETE",
-    Qt.Key.Key_Home: "HOME",
-    Qt.Key.Key_End: "END",
-    Qt.Key.Key_PageUp: "PAGE_UP",
-    Qt.Key.Key_PageDown: "PAGE_DOWN",
-    Qt.Key.Key_Up: "ARROW_UP",
-    Qt.Key.Key_Down: "ARROW_DOWN",
-    Qt.Key.Key_Left: "ARROW_LEFT",
-    Qt.Key.Key_Right: "ARROW_RIGHT",
-    Qt.Key.Key_Space: "SPACE",
-    Qt.Key.Key_Minus: "MINUS",
-    Qt.Key.Key_Equal: "EQUAL",
-    Qt.Key.Key_BracketLeft: "BRACKET_LEFT",
-    Qt.Key.Key_BracketRight: "BRACKET_RIGHT",
-    Qt.Key.Key_Backslash: "BACKSLASH",
-    Qt.Key.Key_Semicolon: "SEMICOLON",
-    Qt.Key.Key_Apostrophe: "QUOTE",
-    Qt.Key.Key_QuoteLeft: "BACKQUOTE",
-    Qt.Key.Key_Comma: "COMMA",
-    Qt.Key.Key_Period: "PERIOD",
-    Qt.Key.Key_Slash: "SLASH",
-    Qt.Key.Key_CapsLock: "CAPS_LOCK",
-    Qt.Key.Key_NumLock: "NUM_LOCK",
-    Qt.Key.Key_ScrollLock: "SCROLL_LOCK",
-    Qt.Key.Key_Print: "PRINT_SCREEN",
-    Qt.Key.Key_Pause: "PAUSE",
-    Qt.Key.Key_Menu: "CONTEXT_MENU",
-    Qt.Key.Key_Shift: "SHIFT_LEFT",
-    Qt.Key.Key_Control: "CONTROL_LEFT",
-    Qt.Key.Key_Alt: "ALT_LEFT",
-    Qt.Key.Key_AltGr: "ALT_RIGHT",
-    Qt.Key.Key_Meta: "META_LEFT",
-}
-for _i in range(10):
-    _QT_KEY_MAP[Qt.Key(Qt.Key.Key_0 + _i)] = f"DIGIT_{_i}"
-for _i in range(26):
-    _QT_KEY_MAP[Qt.Key(Qt.Key.Key_A + _i)] = chr(ord("A") + _i)
-for _i in range(25):
-    _QT_KEY_MAP[Qt.Key(Qt.Key.Key_F1 + _i)] = f"F{_i + 1}"
-
-# GhosttyKey name -> unshifted codepoint, for keys that produce text.
-_UNSHIFTED = {f"DIGIT_{i}": ord(str(i)) for i in range(10)}
-_UNSHIFTED.update({chr(c): ord(chr(c).lower()) for c in range(ord("A"), ord("Z") + 1)})
-_UNSHIFTED.update(
-    {
-        "SPACE": ord(" "), "MINUS": ord("-"), "EQUAL": ord("="),
-        "BRACKET_LEFT": ord("["), "BRACKET_RIGHT": ord("]"),
-        "BACKSLASH": ord("\\"), "SEMICOLON": ord(";"), "QUOTE": ord("'"),
-        "BACKQUOTE": ord("`"), "COMMA": ord(","), "PERIOD": ord("."),
-        "SLASH": ord("/"),
-    }
-)
 
 
 def _check(result: int, what: str) -> None:
@@ -688,7 +627,7 @@ class GhosttyTerminalWidget(QWidget):
         return mods
 
     def _encode_key(self, ev, action: int) -> bytes:
-        key_name = _QT_KEY_MAP.get(Qt.Key(ev.key()), "UNIDENTIFIED")
+        key_name = QT_KEY_MAP.get(Qt.Key(ev.key()), "UNIDENTIFIED")
         mods = self._qt_mods_to_ghostty(ev.modifiers())
 
         text = ev.text()
@@ -707,7 +646,7 @@ class GhosttyTerminalWidget(QWidget):
         utf8 = text.encode() if printable else b""
         g.lib.ghostty_key_event_set_utf8(kev, utf8 or None, len(utf8))
 
-        unshifted = _UNSHIFTED.get(key_name, 0)
+        unshifted = UNSHIFTED.get(key_name, 0)
         if printable and len(text) == 1 and not unshifted:
             unshifted = ord(text.lower())
         g.lib.ghostty_key_event_set_unshifted_codepoint(kev, unshifted)
