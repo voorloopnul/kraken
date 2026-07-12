@@ -1,3 +1,4 @@
+from importlib.resources import files
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt
@@ -41,6 +42,23 @@ _EDGE_CURSORS = {
 }
 
 
+def _asset_pixmap(name: str) -> QPixmap:
+    """Load a bundled theme image as a pixmap.
+
+    Reads the bytes through importlib.resources so it works both from a source
+    checkout and from inside the packaged .pyz (where a filesystem path into
+    the archive would fail). Returns a null pixmap if the asset is missing, so
+    callers can fall back gracefully.
+    """
+    pixmap = QPixmap()
+    try:
+        data = files("app.assets").joinpath(f"{name}.png").read_bytes()
+    except (FileNotFoundError, ModuleNotFoundError, OSError):
+        return pixmap
+    pixmap.loadFromData(data)
+    return pixmap
+
+
 class _HomeScreen(QWidget):
     def __init__(self):
         super().__init__()
@@ -49,7 +67,6 @@ class _HomeScreen(QWidget):
         self._logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._logo.setScaledContents(False)
         self._logo.setMinimumSize(1, 1)
-        self._logo_dir = Path(__file__).resolve().parents[1]
         self._pixmap = QPixmap()
 
         layout = QVBoxLayout(self)
@@ -61,7 +78,7 @@ class _HomeScreen(QWidget):
     def set_theme(self, name: str) -> None:
         ui = UI_COLORS[name]
         self.setStyleSheet(f"background: {ui['window']};")
-        self._pixmap = QPixmap(str(self._logo_dir / f"{name}.png"))
+        self._pixmap = _asset_pixmap(name)
         self._update_logo()
 
     def resizeEvent(self, event) -> None:
@@ -123,7 +140,7 @@ class _EdgeGrip(QWidget):
 
 
 def _theme_icon(name: str) -> QIcon:
-    return QIcon(str(Path(__file__).resolve().parents[1] / f"{name}.png"))
+    return QIcon(_asset_pixmap(name))
 
 
 def _looks_blank(pixmap: QPixmap) -> bool:
