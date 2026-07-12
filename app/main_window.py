@@ -410,7 +410,7 @@ class MainWindow(QMainWindow):
         self._panel_actions["left"].toggled.connect(history_toggle.setChecked)
 
         self.side_bar.buttons["Screenshot"].clicked.connect(self._screenshot_browser)
-        self.side_bar.buttons["Quit"].clicked.connect(self.close)
-        self.side_bar.buttons["Toggle Theme"].clicked.connect(
+        self.workspace_bar.buttons["Quit"].clicked.connect(self.close)
+        self.workspace_bar.buttons["Toggle Theme"].clicked.connect(
             lambda: self.set_theme("light" if self._theme_name == "dark" else "dark")
         )

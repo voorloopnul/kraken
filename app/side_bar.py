@@ -4,8 +4,6 @@ Buttons are placeholders — connect to their `clicked` signals to add actions."
 
 from __future__ import annotations
 
-from math import cos, radians, sin
-
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import (
     QColor,
@@ -133,78 +131,17 @@ def _camera_icon(color: str) -> QIcon:
     return QIcon(pixmap)
 
 
-def _power_icon(color: str) -> QIcon:
-    """Power symbol: a circle with a top gap and a vertical bar through it."""
-    pixmap = QPixmap(36, 36)
-    pixmap.setDevicePixelRatio(2.0)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    pen = QPen(QColor(color))
-    pen.setWidthF(1.6)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    painter.setPen(pen)
-    # Arc angles are in 1/16 deg, 0 at 3 o'clock, CCW; leave a gap at the top.
-    painter.drawArc(QRectF(3.5, 4.5, 11.0, 11.0), 120 * 16, 300 * 16)
-    painter.drawLine(QPointF(9.0, 2.5), QPointF(9.0, 8.5))
-    painter.end()
-    return QIcon(pixmap)
-
-
-def _sun_icon(color: str) -> QIcon:
-    """Sun: small circle with eight rays."""
-    pixmap = QPixmap(36, 36)
-    pixmap.setDevicePixelRatio(2.0)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    pen = QPen(QColor(color))
-    pen.setWidthF(1.6)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    painter.setPen(pen)
-    painter.drawEllipse(QPointF(9.0, 9.0), 3.2, 3.2)
-    for i in range(8):
-        dx = cos(radians(i * 45.0))
-        dy = sin(radians(i * 45.0))
-        painter.drawLine(
-            QPointF(9.0 + dx * 5.2, 9.0 + dy * 5.2),
-            QPointF(9.0 + dx * 7.2, 9.0 + dy * 7.2),
-        )
-    painter.end()
-    return QIcon(pixmap)
-
-
-def _moon_icon(color: str) -> QIcon:
-    """Crescent moon, filled."""
-    pixmap = QPixmap(36, 36)
-    pixmap.setDevicePixelRatio(2.0)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    full = QPainterPath()
-    full.addEllipse(QRectF(3.5, 3.5, 11.0, 11.0))
-    bite = QPainterPath()
-    bite.addEllipse(QRectF(6.5, 1.5, 11.0, 11.0))
-    painter.fillPath(full.subtracted(bite), QColor(color))
-    painter.end()
-    return QIcon(pixmap)
-
-
 # Buttons rendered with painted icons instead of text glyphs; the factory is
-# re-run on theme change to recolor the icon. "Toggle Theme" is handled
-# separately since its glyph depends on the active theme.
+# re-run on theme change to recolor the icon.
 _ICON_FACTORIES = {
     "Terminal Panel": _terminal_icon,
     "Browser Panel": _globe_icon,
     "Git Panel": _git_icon,
     "Screenshot": _camera_icon,
-    "Quit": _power_icon,
 }
 
 _BOTTOM_ITEMS = (
     ("", "Screenshot"),
-    ("", "Toggle Theme"),
-    ("", "Quit"),
 )
 
 
@@ -246,6 +183,3 @@ class SideBar(QWidget):
         self.setStyleSheet(_STYLES[name])
         for button_name, factory in _ICON_FACTORIES.items():
             self.buttons[button_name].setIcon(factory(_ICON_COLORS[name]))
-        # Show the theme you'd switch to: sun in dark mode, moon in light.
-        toggle_factory = _sun_icon if name == "dark" else _moon_icon
-        self.buttons["Toggle Theme"].setIcon(toggle_factory(_ICON_COLORS[name]))

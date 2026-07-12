@@ -6,10 +6,11 @@ name. Emits `workspace_selected` when a workspace button is clicked."""
 from __future__ import annotations
 
 import re
+from math import cos, radians, sin
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QButtonGroup, QToolButton, QVBoxLayout, QWidget
 
 from app.themes import DEFAULT_THEME
@@ -55,6 +56,63 @@ def _plus_icon(color: str) -> QIcon:
     return QIcon(pixmap)
 
 
+def _power_icon(color: str) -> QIcon:
+    """Power symbol: a circle with a top gap and a vertical bar through it."""
+    pixmap = QPixmap(36, 36)
+    pixmap.setDevicePixelRatio(2.0)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(color))
+    pen.setWidthF(1.6)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    # Arc angles are in 1/16 deg, 0 at 3 o'clock, CCW; leave a gap at the top.
+    painter.drawArc(QRectF(3.5, 4.5, 11.0, 11.0), 120 * 16, 300 * 16)
+    painter.drawLine(QPointF(9.0, 2.5), QPointF(9.0, 8.5))
+    painter.end()
+    return QIcon(pixmap)
+
+
+def _sun_icon(color: str) -> QIcon:
+    """Sun: small circle with eight rays."""
+    pixmap = QPixmap(36, 36)
+    pixmap.setDevicePixelRatio(2.0)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(color))
+    pen.setWidthF(1.6)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    painter.drawEllipse(QPointF(9.0, 9.0), 3.2, 3.2)
+    for i in range(8):
+        dx = cos(radians(i * 45.0))
+        dy = sin(radians(i * 45.0))
+        painter.drawLine(
+            QPointF(9.0 + dx * 5.2, 9.0 + dy * 5.2),
+            QPointF(9.0 + dx * 7.2, 9.0 + dy * 7.2),
+        )
+    painter.end()
+    return QIcon(pixmap)
+
+
+def _moon_icon(color: str) -> QIcon:
+    """Crescent moon, filled."""
+    pixmap = QPixmap(36, 36)
+    pixmap.setDevicePixelRatio(2.0)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    full = QPainterPath()
+    full.addEllipse(QRectF(3.5, 3.5, 11.0, 11.0))
+    bite = QPainterPath()
+    bite.addEllipse(QRectF(6.5, 1.5, 11.0, 11.0))
+    painter.fillPath(full.subtracted(bite), QColor(color))
+    painter.end()
+    return QIcon(pixmap)
+
+
 def abbreviation(folder_name: str) -> str:
     """Two-letter label for a workspace: initials of the first two words for
     multi-word names ("my-project" -> "MP"), else the first two letters."""
@@ -77,6 +135,8 @@ class WorkspaceBar(QWidget):
         self._workspaces: dict[str, QToolButton] = {}
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
+        # Bottom-pinned app actions (theme toggle, quit); MainWindow wires them.
+        self.buttons: dict[str, QToolButton] = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 8, 4, 8)
@@ -87,8 +147,17 @@ class WorkspaceBar(QWidget):
         self.add_button.setFixedSize(28, 28)
         self.add_button.setIconSize(QSize(18, 18))
         layout.addWidget(self.add_button)
-        # Workspace buttons are inserted before this stretch, top to bottom.
+        # Workspace buttons fill the gap above this stretch, top to bottom; the
+        # action buttons below the stretch stay pinned to the bottom edge.
         layout.addStretch(1)
+        for name in ("Toggle Theme", "Quit"):
+            btn = QToolButton()
+            btn.setToolTip(name)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedSize(28, 28)
+            btn.setIconSize(QSize(18, 18))
+            layout.addWidget(btn)
+            self.buttons[name] = btn
         self._layout = layout
 
         self.set_theme(DEFAULT_THEME)
@@ -110,7 +179,9 @@ class WorkspaceBar(QWidget):
             btn.setCheckable(True)
             btn.clicked.connect(lambda _=False, p=path: self.workspace_selected.emit(p))
             self._group.addButton(btn)
-            self._layout.insertWidget(self._layout.count() - 1, btn)
+            # Insert just above the stretch: after the add button and the
+            # existing workspace buttons, before the bottom action group.
+            self._layout.insertWidget(1 + len(self._workspaces), btn)
             self._workspaces[path] = btn
         if select:
             btn.setChecked(True)
@@ -118,4 +189,9 @@ class WorkspaceBar(QWidget):
 
     def set_theme(self, name: str) -> None:
         self.setStyleSheet(_STYLES[name])
-        self.add_button.setIcon(_plus_icon(_ICON_COLORS[name]))
+        color = _ICON_COLORS[name]
+        self.add_button.setIcon(_plus_icon(color))
+        self.buttons["Quit"].setIcon(_power_icon(color))
+        # Show the theme you'd switch to: sun in dark mode, moon in light.
+        toggle_factory = _sun_icon if name == "dark" else _moon_icon
+        self.buttons["Toggle Theme"].setIcon(toggle_factory(color))
