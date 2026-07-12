@@ -10,6 +10,7 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import sys
 from ctypes import (
     CFUNCTYPE,
     POINTER,
@@ -27,17 +28,39 @@ from ctypes import (
     c_void_p,
 )
 
-_LIB_PATH = os.path.normpath(
-    os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "vendor",
-        "ghostty",
-        "zig-out",
-        "lib",
-        "libghostty-vt.so",
-    )
-)
+def _lib_filename() -> str:
+    return {
+        "darwin": "libghostty-vt.dylib",
+        "win32": "ghostty-vt.dll",
+    }.get(sys.platform, "libghostty-vt.so")
+
+
+def _resolve_lib_path() -> str:
+    """Locate libghostty-vt across dev checkouts and packaged installs.
+
+    Priority: an explicit KRAKEN_GHOSTTY_VT_LIB override (set by the packaged
+    launcher, which extracts the bundled library to disk), then the vendored
+    dev build tree, then a shared-data install dir alongside the launcher.
+    """
+    name = _lib_filename()
+    override = os.environ.get("KRAKEN_GHOSTTY_VT_LIB")
+    if override:
+        return override
+    candidates = [
+        os.path.join(
+            os.path.dirname(__file__), "..", "vendor", "ghostty", "zig-out", "lib", name
+        ),
+        os.path.join(os.path.expanduser("~/.local/share/kraken/lib"), name),
+    ]
+    for candidate in candidates:
+        candidate = os.path.normpath(candidate)
+        if os.path.exists(candidate):
+            return candidate
+    # Nothing found: return the dev path so CDLL raises a clear, familiar error.
+    return os.path.normpath(candidates[0])
+
+
+_LIB_PATH = _resolve_lib_path()
 
 lib = ctypes.CDLL(_LIB_PATH)
 
