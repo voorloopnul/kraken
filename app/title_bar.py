@@ -37,6 +37,9 @@ QToolButton:hover { background: #3a3d45; }
                 color: #9a9da5; padding: 2px 8px 2px 6px; }
 #branchButton:hover { background: #2c2e35; }
 #branchButton::menu-indicator { image: none; }
+#panelButton { background: transparent; border-radius: 6px; }
+#panelButton:hover { background: #2c2e35; }
+#panelButton:checked { background: #26282e; }
 """,
     "light": """
 #titleBar { background: #fafafa; border-bottom: 1px solid #e0e0e0; }
@@ -48,6 +51,9 @@ QToolButton:hover { background: #dcdce1; }
                 color: #5a5d65; padding: 2px 8px 2px 6px; }
 #branchButton:hover { background: #e8e8ec; }
 #branchButton::menu-indicator { image: none; }
+#panelButton { background: transparent; border-radius: 6px; }
+#panelButton:hover { background: #e8e8ec; }
+#panelButton:checked { background: #e0e0e5; }
 """,
 }
 
@@ -132,6 +138,24 @@ def _branch_icon(color: str) -> QIcon:
     return QIcon(pixmap)
 
 
+def _sidebar_icon(color: str) -> QIcon:
+    """Window outline with a divided left column: the History panel toggle."""
+    pixmap = QPixmap(32, 32)
+    pixmap.setDevicePixelRatio(2.0)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(color))
+    pen.setWidthF(1.2)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.drawRoundedRect(QRectF(2.0, 3.0, 12.0, 10.0), 2.0, 2.0)
+    painter.drawLine(QPointF(6.5, 3.0), QPointF(6.5, 13.0))
+    painter.end()
+    return QIcon(pixmap)
+
+
 def _window_icon(kind: str, color: str) -> QIcon:
     """Minimize / maximize / restore / close glyphs on a 12x12 canvas."""
     pixmap = QPixmap(24, 24)
@@ -173,6 +197,16 @@ class TitleBar(QWidget):
         self._workspace_path: str | None = None
         self._maximized = False
 
+        # Shows/hides the History (left) panel; MainWindow keeps it in sync
+        # with the panel action.
+        self.left_panel_toggle = QToolButton()
+        self.left_panel_toggle.setObjectName("panelButton")
+        self.left_panel_toggle.setToolTip("Toggle History Panel")
+        self.left_panel_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.left_panel_toggle.setCheckable(True)
+        self.left_panel_toggle.setFixedSize(24, 24)
+        self.left_panel_toggle.setIconSize(QSize(16, 16))
+
         self.folder_label = QLabel()
         self.folder_label.setObjectName("folderLabel")
         # Branch switcher: shows the current branch, clicking opens a menu of
@@ -206,8 +240,9 @@ class TitleBar(QWidget):
             self.buttons[name] = btn
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 0, 8, 0)
+        layout.setContentsMargins(8, 0, 8, 0)
         layout.setSpacing(6)
+        layout.addWidget(self.left_panel_toggle)
         layout.addWidget(self.folder_label)
         layout.addSpacing(4)
         layout.addWidget(self.branch_button)
@@ -342,6 +377,7 @@ class TitleBar(QWidget):
         self.setStyleSheet(_STYLES[name])
         color = _ICON_COLORS[name]
         self.branch_button.setIcon(_branch_icon(color))
+        self.left_panel_toggle.setIcon(_sidebar_icon(color))
         self.buttons["Minimize"].setIcon(_window_icon("min", color))
         self.buttons["Close"].setIcon(_window_icon("close", color))
         self.set_maximized(self._maximized)

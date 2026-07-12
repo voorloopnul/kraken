@@ -175,7 +175,7 @@ class WorkspaceView(QWidget):
         self.focused = controller
         self.center_panel.set_focused_conversation(controller.conversation)
         self.center_panel.set_busy(controller.is_streaming)
-        self.center_panel.chat.set_model_label(controller.model_name)
+        self.center_panel.chat.set_model_label(controller.model_label)
         # Retire the session we're leaving unless it's still streaming (then it
         # stays live in the background so you can flip back and watch it).
         if previous is not None and previous is not controller and not previous.is_streaming:
@@ -209,10 +209,12 @@ class WorkspaceView(QWidget):
 
     # ---- Chat / controls -------------------------------------------------
 
-    def _on_prompt(self, text: str, images: list | None = None) -> None:
+    def _on_prompt(
+        self, text: str, images: list | None = None, files: list | None = None
+    ) -> None:
         if self.focused is None:
             self._focus(self._new_controller())
-        self.focused.prompt(text, images)
+        self.focused.prompt(text, images, files)
         # Surface the just-started session in History right away, so it's
         # reachable even before Pi writes its file to disk.
         self._sync_history()
@@ -227,10 +229,15 @@ class WorkspaceView(QWidget):
         controller = self.focused
 
         def show(models: list, provider: str | None, model_id: str | None) -> None:
-            # The fetch is async; only pop the menu if this session is still
-            # the one on screen.
-            if controller is self.focused and models:
+            # The fetch is async; only act if this session is still on screen.
+            if controller is not self.focused:
+                return
+            if models:
                 self.center_panel.chat.show_model_menu(models, provider, model_id)
+            else:
+                # Empty means the fetch failed or the agent has no models
+                # configured; say so instead of leaving a dead button.
+                self.center_panel.chat.notify_model("No models available")
 
         controller.request_models(show)
 

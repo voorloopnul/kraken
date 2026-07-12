@@ -9,15 +9,11 @@ from pathlib import Path
 
 CONFIG_DIR = Path.home() / ".kraken"
 _STATE_FILE = CONFIG_DIR / "state.json"
-_LEGACY_STATE_FILE = Path.home() / ".alpine" / "state.json"
 
 
 def load_state() -> dict:
-    # Preserve existing settings on the first run after the rename. New saves
-    # are always written to ~/.kraken.
-    source = _STATE_FILE if _STATE_FILE.exists() else _LEGACY_STATE_FILE
     try:
-        return json.loads(source.read_text())
+        return json.loads(_STATE_FILE.read_text())
     except (OSError, ValueError):
         return {}
 

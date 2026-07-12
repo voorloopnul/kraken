@@ -126,6 +126,26 @@ def _theme_icon(name: str) -> QIcon:
     return QIcon(str(Path(__file__).resolve().parents[1] / f"{name}.png"))
 
 
+def _looks_blank(pixmap: QPixmap) -> bool:
+    """A GPU-composited QWebEngineView grab can come back a valid-but-uniform
+    image instead of the rendered page. Sampling a grid across it catches that
+    (a real page is never a single flat color) so a blank capture isn't
+    silently attached and sent."""
+    image = pixmap.toImage()
+    if image.isNull():
+        return True
+    w, h = image.width(), image.height()
+    first = image.pixel(0, 0)
+    cols, rows = min(32, w), min(32, h)
+    for r in range(rows):
+        y = r * (h - 1) // max(1, rows - 1)
+        for c in range(cols):
+            x = c * (w - 1) // max(1, cols - 1)
+            if image.pixel(x, y) != first:
+                return False
+    return True
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -291,9 +311,12 @@ class MainWindow(QMainWindow):
             QToolTip.showText(pos, "Open the browser panel first", button)
             return
         pixmap = browser.web.grab()
-        if pixmap.isNull():
+        if pixmap.isNull() or _looks_blank(pixmap):
             QMessageBox.warning(
-                self, "Screenshot failed", "The browser produced an empty capture."
+                self,
+                "Screenshot failed",
+                "The browser produced a blank capture. Give the page a moment "
+                "to finish rendering, then try again.",
             )
             return
         view.center_panel.chat.attach_image(pixmap)
@@ -378,6 +401,13 @@ class MainWindow(QMainWindow):
             toggle.toggled.connect(self._panel_actions[side].setChecked)
             self._panel_actions[side].toggled.connect(toggle.setChecked)
             self._panel_actions[side].setChecked(False)
+
+        # The title-bar button toggles the History (left) panel, which is
+        # visible by default.
+        history_toggle = self.title_bar.left_panel_toggle
+        history_toggle.setChecked(self._panel_actions["left"].isChecked())
+        history_toggle.toggled.connect(self._panel_actions["left"].setChecked)
+        self._panel_actions["left"].toggled.connect(history_toggle.setChecked)
 
         self.side_bar.buttons["Screenshot"].clicked.connect(self._screenshot_browser)
         self.side_bar.buttons["Quit"].clicked.connect(self.close)

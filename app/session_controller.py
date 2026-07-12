@@ -11,6 +11,8 @@ and when the session's file path and model become known.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import QObject, Signal
 
 from app.conversation import (
@@ -23,10 +25,20 @@ from app.conversation import (
 from app.pi_rpc import PiAgent
 
 
+def _files_title(files: list[str]) -> str:
+    """Short session title for a message that carries only file attachments:
+    the first file's name, plus a count of the rest."""
+    first = Path(files[0]).name or files[0]
+    extra = len(files) - 1
+    if extra:
+        return f"{first} (+{extra} file{'s' if extra > 1 else ''})"
+    return first
+
+
 class SessionController(QObject):
     streaming_changed = Signal(bool)  # agent started (True) / finished (False)
     path_known = Signal(str)  # the session's on-disk file path, once discovered
-    model_known = Signal(str)  # the model display name, once discovered
+    model_known = Signal(str)  # the footer label, whenever the model resolves
     title_known = Signal(str)  # the title, once a loaded session's messages arrive
 
     def __init__(
@@ -41,11 +53,19 @@ class SessionController(QObject):
         self.model_name: str | None = None
         self.model_provider: str | None = None
         self.model_id: str | None = None
+        self._last_model_label: str | None = None  # last label emitted
         self.first_prompt: str | None = None  # first user message; the title
         self.conversation = ConversationView()
         self.conversation.set_theme(theme_name)
         self.agent = PiAgent(cwd, self, session_path=session_path)
         self._tool_blocks: dict[str, int] = {}  # toolCallId -> transcript block
+        # An error was already surfaced during the current turn (reset each
+        # agent_start); keeps agent_end from reprinting the same failure that
+        # streamed in as a message_update.
+        self._turn_had_error = False
+        # Identities of errored messages already reported, so a replayed
+        # agent_end payload can't re-announce an earlier turn's failure.
+        self._reported_errors: set[str] = set()
 
         self.agent.event.connect(self._on_event)
         self.agent.notify.connect(self._on_notify)
@@ -79,15 +99,36 @@ class SessionController(QObject):
 
     # ---- Chat -> agent --------------------------------------------------
 
-    def prompt(self, text: str, images: list | None = None) -> None:
+    def prompt(
+        self,
+        text: str,
+        images: list | None = None,
+        files: list | None = None,
+    ) -> None:
+        images = images or []
+        files = files or []
+
+        # Wire message: pi's prompt carries images structurally but has no file
+        # channel, so file paths ride along in the text. Providers reject an
+        # empty message, so an image-only turn still needs a carrier line.
+        message = text
+        if files:
+            refs = "\n".join(f"- {path}" for path in files)
+            message = (f"{message}\n\n" if message else "") + f"Attached files:\n{refs}"
+        if not message and images:
+            message = "(see attached image)"
+
+        # Title and transcript stay the user's intent, never the path blob.
+        display = text or (_files_title(files) if files else "(image)")
         if self.first_prompt is None:
-            self.first_prompt = text or "(image)"
-        self.conversation.add_user(text or "(image)")
-        if images:
-            noun = "image" if len(images) == 1 else "images"
-            self.conversation.add_info(f"({len(images)} {noun} attached)")
+            self.first_prompt = display
+        self.conversation.add_user(display)
+        for noun, items in (("image", images), ("file", files)):
+            if items:
+                plural = noun if len(items) == 1 else f"{noun}s"
+                self.conversation.add_info(f"({len(items)} {plural} attached)")
         was_streaming = self.agent.is_streaming
-        self.agent.prompt(text, images=images, callback=self._on_prompt_response)
+        self.agent.prompt(message, images=images, callback=self._on_prompt_response)
         if was_streaming:
             self.conversation.add_info("(queued: delivered after the current turn)")
         self._sync_state()
@@ -133,12 +174,24 @@ class SessionController(QObject):
 
         self.agent.get_state(on_state)
 
+    @property
+    def model_label(self) -> str | None:
+        """Footer text for the current model: the friendly name if known, else
+        the raw id (still concrete), else None once nothing is known yet."""
+        return self.model_name or self.model_id
+
     def _set_current_model(self, model: dict) -> None:
         self.model_provider = model.get("provider") or self.model_provider
         self.model_id = model.get("id") or self.model_id
-        if model.get("name") and model["name"] != self.model_name:
+        if model.get("name"):
             self.model_name = model["name"]
-            self.model_known.emit(model["name"])
+        # Emit whenever the effective label changes, so a session that only
+        # knows its id (name not yet resolved) still shows a concrete model
+        # instead of staying on the "Model" placeholder.
+        label = self.model_label
+        if label and label != self._last_model_label:
+            self._last_model_label = label
+            self.model_known.emit(label)
 
     # ---- Model selection --------------------------------------------------
 
@@ -163,31 +216,56 @@ class SessionController(QObject):
                     error=True,
                 )
                 return
-            self._set_current_model(response.get("data") or {})
+            # We already know the chosen provider/id, so record them for the
+            # picker checkmark; refresh the display name from the agent's
+            # authoritative state rather than assuming set_model's reply shape.
+            self.model_provider = provider
+            self.model_id = model_id
+            self._sync_state()
 
         self.agent.set_model(provider, model_id, on_response)
 
     # ---- Agent events -> conversation -----------------------------------
 
+    def _mark_error_reported(self, message: dict) -> bool:
+        """True the first time an errored message is seen, False on repeats, so
+        a replayed agent_end payload doesn't re-announce old failures."""
+        key = str(
+            message.get("responseId")
+            or message.get("timestamp")
+            or message.get("errorMessage")
+            or ""
+        )
+        if key in self._reported_errors:
+            return False
+        self._reported_errors.add(key)
+        return True
+
     def _on_event(self, event: dict) -> None:
         conversation = self.conversation
         kind = event.get("type")
         if kind == "agent_start":
+            self._turn_had_error = False
             self.streaming_changed.emit(True)
         elif kind == "agent_end":
             # A request the provider rejected outright (e.g. HTTP 400) ends
             # the run with an errored assistant message but streams no
             # message_update events — without this the turn fails silently.
-            for message in event.get("messages") or []:
-                error = error_summary(message)
-                if error:
-                    conversation.add_info(f"Turn failed: {error}", error=True)
+            # Skip it when streaming already surfaced the error, and never
+            # report the same errored message twice (agent_end may replay
+            # earlier turns' messages).
+            if not self._turn_had_error:
+                for message in event.get("messages") or []:
+                    error = error_summary(message)
+                    if error and self._mark_error_reported(message):
+                        conversation.add_info(f"Turn failed: {error}", error=True)
             self.streaming_changed.emit(False)
         elif kind == "message_update":
             delta = event.get("assistantMessageEvent") or {}
             if delta.get("type") == "text_delta":
                 conversation.append_assistant_delta(delta.get("delta", ""))
             elif delta.get("type") == "error":
+                self._turn_had_error = True
                 reason = delta.get("reason", "error")
                 conversation.add_info(f"({reason})", error=reason != "aborted")
         elif kind == "tool_execution_start":

@@ -6,11 +6,10 @@ any attached images."""
 from __future__ import annotations
 
 import base64
-import mimetypes
 from pathlib import Path
 
 from PySide6.QtCore import QBuffer, QEvent, QIODevice, QPoint, Qt, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QImageReader, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -21,11 +20,34 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPlainTextEdit,
     QToolButton,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
 
 from app.themes import DEFAULT_THEME
+
+# Image formats model providers accept in the prompt payload, keyed by the
+# format name Qt sniffs from the file's content. Anything else travels as a
+# plain path reference like any other file.
+_QT_FORMAT_MIMES = {
+    "png": "image/png",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+}
+
+
+def _image_mime(data: bytes) -> str | None:
+    """The provider mime type for raw image bytes, detected from the content
+    itself (not the filename, which can lie — a JPEG saved as .png would else
+    ship mislabeled and get rejected). None if it isn't a supported image."""
+    buffer = QBuffer()
+    buffer.setData(data)
+    buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+    fmt = bytes(QImageReader(buffer).format()).decode("ascii", "replace").lower()
+    return _QT_FORMAT_MIMES.get(fmt)
+
 
 _STYLES = {
     "dark": """
@@ -166,9 +188,11 @@ class _ModelPopup(QFrame):
 class ChatInput(QFrame):
     """The prompt box; Send (or Ctrl+Enter) emits `submitted` and clears."""
 
-    # (text, images) — images are prompt-ready dicts:
-    # {"type": "image", "data": <base64>, "mimeType": "image/png"}.
-    submitted = Signal(str, list)
+    # (text, images, files) — images are prompt-ready dicts
+    # {"type": "image", "data": <base64>, "mimeType": "image/png"}; files are
+    # absolute path strings. The owner composes the wire message; keeping them
+    # separate lets it title the session from the real text, not a path blob.
+    submitted = Signal(str, list, list)
     # The model button was clicked; the owner fetches the agent's model list
     # and calls show_model_menu with it.
     model_menu_requested = Signal()
@@ -249,10 +273,6 @@ class ChatInput(QFrame):
 
     # ---- Attachments -------------------------------------------------------
 
-    # Image formats the model providers accept in the prompt payload; other
-    # image types travel as plain file paths like any other file.
-    _IMAGE_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
-
     def attach_image(self, pixmap: QPixmap, name: str = "screenshot.png") -> None:
         """Queue an image to be sent with the next prompt, shown as a chip."""
         buffer = QBuffer()
@@ -279,13 +299,20 @@ class ChatInput(QFrame):
         """Attach one file: images go into the prompt's image payload, any
         other file rides along as a path reference in the message text."""
         file = Path(path)
-        mime = mimetypes.guess_type(file.name)[0]
-        if mime in self._IMAGE_MIMES:
-            pixmap = QPixmap(str(file))
-            if not pixmap.isNull():
+        try:
+            data = file.read_bytes()
+        except OSError:
+            # Vanished or unreadable between the dialog and now; fall back to a
+            # path reference rather than crashing the slot.
+            self._add_attachment(str(file.absolute()), file.name)
+            return
+        mime = _image_mime(data)
+        if mime is not None:
+            pixmap = QPixmap()
+            if pixmap.loadFromData(data):
                 image = {
                     "type": "image",
-                    "data": base64.b64encode(file.read_bytes()).decode("ascii"),
+                    "data": base64.b64encode(data).decode("ascii"),
                     "mimeType": mime,
                 }
                 self._add_attachment(image, file.name, thumbnail=pixmap)
@@ -342,6 +369,12 @@ class ChatInput(QFrame):
     def set_model_label(self, text: str | None) -> None:
         self._model.setText(f"{text or 'Model'}  ⌄")
 
+    def notify_model(self, text: str) -> None:
+        """Transient tooltip at the model button — feedback for when the menu
+        can't open (e.g. the model list came back empty)."""
+        pos = self._model.mapToGlobal(self._model.rect().center())
+        QToolTip.showText(pos, text, self._model)
+
     def show_model_menu(
         self,
         models: list[dict],
@@ -389,9 +422,6 @@ class ChatInput(QFrame):
             return
         images = [p for p, _chip in self._attachments if isinstance(p, dict)]
         files = [p for p, _chip in self._attachments if isinstance(p, str)]
-        if files:
-            refs = "\n".join(f"- {path}" for path in files)
-            text = (f"{text}\n\n" if text else "") + f"Attached files:\n{refs}"
-        self.submitted.emit(text, images)
+        self.submitted.emit(text, images, files)
         self._edit.clear()
         self._clear_attachments()
