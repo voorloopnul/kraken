@@ -210,21 +210,23 @@ def _node_version(node):
 
 
 def _install_pi():
-    """Install the Pi agent via npm into a private prefix. Degrades gracefully:
-    returns False (with a clear message) if Node is missing or too old, without
-    aborting the rest of the install."""
+    """Install the Pi agent via npm into a private prefix.
+
+    If Node is missing or too old, abort installation entirely; missing npm
+    just skips the Pi agent install.
+    """
     need = ".".join(str(n) for n in NODE_MIN)
     node = shutil.which("node")
     if not node:
         print("\n⚠ Node.js not found. The Pi agent needs Node >= %s." % need)
-        print("  Install Node, then run:  %s --reinstall" % APP_NAME)
-        return False
+        print("  Install Node, then re-run Kraken.")
+        raise SystemExit(1)
     version = _node_version(node)
     if version is None or version < NODE_MIN:
         have = ".".join(str(n) for n in version) if version else "unknown"
-        print("\n⚠ Node %s is too old (need >= %s). Skipping Pi agent." % (have, need))
-        print("  Upgrade Node, then run:  %s --reinstall" % APP_NAME)
-        return False
+        print("\n⚠ Node %s is too old (need >= %s)." % (have, need))
+        print("  Upgrade Node, then re-run Kraken.")
+        raise SystemExit(1)
     npm = shutil.which("npm")
     if not npm:
         print("\n⚠ `npm` not found next to Node. Skipping Pi agent install.")
@@ -244,6 +246,19 @@ def _install_pi():
 
 
 def _install():
+    need = ".".join(str(n) for n in NODE_MIN)
+    node = shutil.which("node")
+    if not node:
+        print("\n⚠ Node.js not found. The Pi agent needs Node >= %s." % need)
+        print("Aborting Kraken installation.")
+        raise SystemExit(1)
+    version = _node_version(node)
+    if version is None or version < NODE_MIN:
+        have = ".".join(str(n) for n in version) if version else "unknown"
+        print("\n⚠ Node %s is too old (need >= %s)." % (have, need))
+        print("Aborting Kraken installation.")
+        raise SystemExit(1)
+
     print("Installing %s into %s ..." % (APP_DISPLAY, INSTALL_ROOT))
     uv = _ensure_uv()
     os.makedirs(INSTALL_ROOT, exist_ok=True)
