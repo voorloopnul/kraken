@@ -9,6 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+# Build output of packaging/build_pyz.sh
+kraken.pyz
+
 # Vendored ghostty source (see README for build steps)
 vendor/ghostty/
 vendor/toolchain/
