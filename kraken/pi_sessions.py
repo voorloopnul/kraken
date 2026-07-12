@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from app import config
+from kraken import config
 
 SESSIONS_ROOT = Path.home() / ".pi" / "agent" / "sessions"
 

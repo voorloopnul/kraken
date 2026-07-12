@@ -13,7 +13,7 @@ from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QButtonGroup, QToolButton, QVBoxLayout, QWidget
 
-from app.themes import DEFAULT_THEME
+from kraken.themes import DEFAULT_THEME
 
 _STYLES = {
     "dark": """

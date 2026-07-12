@@ -17,12 +17,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.config import load_state, save_state
-from app.side_bar import SideBar
-from app.themes import DEFAULT_THEME, UI_COLORS
-from app.title_bar import TitleBar
-from app.workspace_bar import WorkspaceBar
-from app.workspace_view import WorkspaceView
+from kraken.config import load_state, save_state
+from kraken.side_bar import SideBar
+from kraken.themes import DEFAULT_THEME, UI_COLORS
+from kraken.title_bar import TitleBar
+from kraken.workspace_bar import WorkspaceBar
+from kraken.workspace_view import WorkspaceView
 
 # Grabbing within this many pixels of a window edge starts a resize; the
 # custom title bar removes the native frame, and with it native resizing.
@@ -52,7 +52,7 @@ def _asset_pixmap(name: str) -> QPixmap:
     """
     pixmap = QPixmap()
     try:
-        data = files("app.assets").joinpath(f"{name}.png").read_bytes()
+        data = files("kraken.assets").joinpath(f"{name}.png").read_bytes()
     except (FileNotFoundError, ModuleNotFoundError, OSError):
         return pixmap
     pixmap.loadFromData(data)

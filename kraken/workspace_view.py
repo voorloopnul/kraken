@@ -11,9 +11,9 @@ from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QSplitter, QSplitterHandle, QVBoxLayout, QWidget
 
-from app.panels import BrowserPanel, CenterPanel, GitPanel, LeftPanel, RightPanel
-from app.session_controller import SessionController
-from app.themes import DEFAULT_THEME, UI_COLORS
+from kraken.panels import BrowserPanel, CenterPanel, GitPanel, LeftPanel, RightPanel
+from kraken.session_controller import SessionController
+from kraken.themes import DEFAULT_THEME, UI_COLORS
 
 
 class _GripSplitter(QSplitter):

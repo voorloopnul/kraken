@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt, QUrl
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QToolButton, QVBoxLayout, QWidget
 
-from app.themes import DEFAULT_THEME
+from kraken.themes import DEFAULT_THEME
 
 _BROWSER_STYLES = {
     "dark": """

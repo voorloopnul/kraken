@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.themes import DEFAULT_THEME
+from kraken.themes import DEFAULT_THEME
 
 # Image formats model providers accept in the prompt payload, keyed by the
 # format name Qt sniffs from the file's content. Anything else travels as a

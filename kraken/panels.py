@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.themes import DEFAULT_THEME, LIGHT, UI_COLORS
+from kraken.themes import DEFAULT_THEME, LIGHT, UI_COLORS
 
 
 def _dot_icon(color: str) -> QIcon:
@@ -171,7 +171,7 @@ class LeftPanel(Panel):
     def refresh(self) -> None:
         """Rebuild the list from live in-flight sessions plus the ones Pi has
         written to disk (deduped by path)."""
-        from app.pi_sessions import sessions_for
+        from kraken.pi_sessions import sessions_for
 
         selected = self._selected_path()
         self._list.clear()
@@ -269,14 +269,14 @@ class LeftPanel(Panel):
             self._delete(path)
 
     def _archive(self, path: str, session_id: str) -> None:
-        from app.pi_sessions import archive_session
+        from kraken.pi_sessions import archive_session
 
         archive_session(session_id)
         self.refresh()
         self.session_removed.emit(path)
 
     def _delete(self, path: str) -> None:
-        from app.pi_sessions import delete_session
+        from kraken.pi_sessions import delete_session
 
         if (
             QMessageBox.question(
@@ -315,7 +315,7 @@ class CenterPanel(Panel):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        from app.chat_input import ChatInput
+        from kraken.chat_input import ChatInput
 
         self._scrollbar = QScrollBar(Qt.Orientation.Vertical)
         # Keep the transcript row's width stable when the bar hides.
@@ -462,7 +462,7 @@ class BrowserPanel(Panel):
             return
         self._creating = True
         try:
-            from app.browser_tabs import BrowserTabs
+            from kraken.browser_tabs import BrowserTabs
 
             tabs = BrowserTabs(self)
             tabs.set_theme(self._theme_name)
@@ -809,7 +809,7 @@ class GitPanel(Panel):
 class RightPanel(Panel):
     def __init__(self, parent: QWidget | None = None, cwd: str | None = None):
         super().__init__(parent)
-        from app.terminal_tabs import TerminalTabs
+        from kraken.terminal_tabs import TerminalTabs
 
         self._card = Card()
         self.terminals = TerminalTabs(self, cwd=cwd)

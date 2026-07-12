@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.themes import DEFAULT_THEME
+from kraken.themes import DEFAULT_THEME
 
 # The bare QToolButton rules style the circular window buttons; the branch
 # switcher opts out via its id selector.

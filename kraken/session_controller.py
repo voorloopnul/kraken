@@ -15,14 +15,14 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
-from app.conversation import (
+from kraken.conversation import (
     ConversationView,
     _content_text,
     args_detail,
     args_summary,
     error_summary,
 )
-from app.pi_rpc import PiAgent
+from kraken.pi_rpc import PiAgent
 
 
 def _files_title(files: list[str]) -> str:

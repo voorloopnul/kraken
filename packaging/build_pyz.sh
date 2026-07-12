@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build kraken.pyz: bundle the app package, the bootstrap __main__, and the
+# Build kraken.pyz: bundle the kraken package, the bootstrap __main__, and the
 # native libghostty-vt library into a single self-installing zipapp.
 #
 # Run from anywhere; paths are resolved relative to the repo root.
@@ -22,9 +22,9 @@ fi
 mkdir -p "$STAGE/data"
 
 # App code (exclude bytecode caches).
-cp -r "$REPO/app" "$STAGE/app"
-find "$STAGE/app" -name '__pycache__' -type d -prune -exec rm -rf {} +
-find "$STAGE/app" -name '*.py[co]' -delete
+cp -r "$REPO/kraken" "$STAGE/kraken"
+find "$STAGE/kraken" -name '__pycache__' -type d -prune -exec rm -rf {} +
+find "$STAGE/kraken" -name '*.py[co]' -delete
 
 # Bootstrap entry point.
 cp "$HERE/__main__.py" "$STAGE/__main__.py"

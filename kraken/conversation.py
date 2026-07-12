@@ -29,7 +29,7 @@ from pygments.lexers import get_lexer_by_name
 from pygments.token import Token
 from pygments.util import ClassNotFound
 
-from app.themes import DEFAULT_THEME
+from kraken.themes import DEFAULT_THEME
 
 # The horizontal scrollbar (wide code blocks) matches the panel-edge
 # vertical one: a bare rounded handle on a transparent track, no steppers.

@@ -26,8 +26,8 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget
 
-from app import ghostty_vt as g
-from app.themes import DEFAULT_THEME, THEMES
+from kraken import ghostty_vt as g
+from kraken.themes import DEFAULT_THEME, THEMES
 
 # Cell flag bits for the row model.
 _BOLD = 1
