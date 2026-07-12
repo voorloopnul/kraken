@@ -48,7 +48,8 @@ def _resolve_lib_path() -> str:
         return override
     candidates = [
         os.path.join(
-            os.path.dirname(__file__), "..", "vendor", "ghostty", "zig-out", "lib", name
+            os.path.dirname(__file__),
+            "..", "..", "vendor", "ghostty", "zig-out", "lib", name,
         ),
         os.path.join(os.path.expanduser("~/.local/share/kraken/lib"), name),
     ]

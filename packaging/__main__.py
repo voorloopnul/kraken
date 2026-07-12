@@ -129,7 +129,7 @@ def _run_app():
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
 
-    from kraken.main_window import MainWindow
+    from kraken.shell.main_window import MainWindow
 
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)

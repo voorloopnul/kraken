@@ -16,7 +16,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QToolButton, QVBoxLayout, QWidget
 
-from kraken.themes import DEFAULT_THEME
+from kraken.ui.themes import DEFAULT_THEME
 
 _STYLES = {
     "dark": """
