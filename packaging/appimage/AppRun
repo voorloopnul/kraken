@@ -1,0 +1,26 @@
+#!/bin/bash
+# AppRun: entry point executed when the AppImage is launched (or mounted).
+# Everything Kraken needs — a private Python 3.14 + PySide6, a Node runtime,
+# the Pi coding agent, and libghostty-vt — lives under $HERE/usr, so this
+# script only has to point the app at those bundled copies and exec it.
+set -euo pipefail
+
+HERE="$(dirname "$(readlink -f "${0}")")"
+
+# Bundled Node (for anything that shells out to node) plus the Pi agent's
+# launcher: pi_rpc.py starts the agent with QProcess.start("pi", ...), i.e. by
+# bare name, so its directory must be on PATH.
+export PATH="$HERE/usr/node/bin:$HERE/usr/pi/node_modules/.bin:$PATH"
+
+# The terminal backend loads this via ctypes; ghostty_vt.py honours the override.
+export KRAKEN_GHOSTTY_VT_LIB="$HERE/usr/lib/libghostty-vt.so"
+
+# Make `import kraken` resolve to the bundled source tree.
+export PYTHONPATH="$HERE/usr/share/kraken${PYTHONPATH:+:$PYTHONPATH}"
+
+# QtWebEngine's Chromium sandbox needs a setuid helper we can't ship in an
+# AppImage, so disable it. Also cap Chromium at one shared renderer process.
+export QTWEBENGINE_DISABLE_SANDBOX=1
+export QTWEBENGINE_CHROMIUM_FLAGS="--renderer-process-limit=1 ${QTWEBENGINE_CHROMIUM_FLAGS:-}"
+
+exec "$HERE/usr/python/bin/python3" "$HERE/usr/share/kraken/main.py" "$@"
