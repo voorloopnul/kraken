@@ -52,6 +52,49 @@ def _pick_term() -> str:
     return "xterm-256color"
 
 
+def _spawn_session(shell: str, env: dict, slave_path: str) -> int:
+    """Start `shell` in a new session with `slave_path` as its controlling
+    terminal, returning the child pid.
+
+    The fast path is posix_spawn(setsid=True). Some CPython builds — notably
+    the relocatable python-build-standalone interpreter shipped inside the
+    AppImage — are compiled against a glibc too old for POSIX_SPAWN_SETSID, so
+    that call raises NotImplementedError regardless of the runtime glibc. Fall
+    back to an equivalent manual fork/setsid/exec.
+    """
+    try:
+        return os.posix_spawn(
+            shell,
+            [shell],
+            env,
+            file_actions=[
+                (os.POSIX_SPAWN_OPEN, 0, slave_path, os.O_RDWR, 0),
+                (os.POSIX_SPAWN_DUP2, 0, 1),
+                (os.POSIX_SPAWN_DUP2, 0, 2),
+            ],
+            setsid=True,
+        )
+    except NotImplementedError:
+        pass
+
+    pid = os.fork()
+    if pid != 0:
+        return pid
+    # --- child: give ourselves a new session, then adopt the pty slave as the
+    # controlling terminal by opening it (without O_NOCTTY) as fds 0/1/2.
+    try:
+        os.setsid()
+        fd = os.open(slave_path, os.O_RDWR)
+        os.dup2(fd, 0)
+        os.dup2(fd, 1)
+        os.dup2(fd, 2)
+        if fd > 2:
+            os.close(fd)
+        os.execve(shell, [shell], env)
+    except BaseException:
+        os._exit(127)
+
+
 class GhosttyTerminalWidget(QWidget):
     """Interactive shell terminal rendered from libghostty-vt render state."""
 
@@ -161,25 +204,15 @@ class GhosttyTerminalWidget(QWidget):
         env["TERM"] = _pick_term()
         env["COLORTERM"] = "truecolor"
 
-        # posix_spawn with setsid: the child opens the pty slave as fd 0
-        # after setsid(), which makes it the controlling terminal.
-        # posix_spawn has no cwd parameter, so chdir around it; Qt runs
-        # single-threaded here so nothing else observes the switch.
+        # The child opens the pty slave as fd 0 after setsid(), which makes it
+        # the controlling terminal. Neither spawn path has a cwd parameter, so
+        # chdir around it; Qt runs single-threaded here so nothing else
+        # observes the switch.
         old_cwd = os.getcwd() if self._cwd else None
         if self._cwd:
             os.chdir(self._cwd)
         try:
-            self._child_pid = os.posix_spawn(
-                shell,
-                [shell],
-                env,
-                file_actions=[
-                    (os.POSIX_SPAWN_OPEN, 0, slave_path, os.O_RDWR, 0),
-                    (os.POSIX_SPAWN_DUP2, 0, 1),
-                    (os.POSIX_SPAWN_DUP2, 0, 2),
-                ],
-                setsid=True,
-            )
+            self._child_pid = _spawn_session(shell, env, slave_path)
         finally:
             if old_cwd is not None:
                 os.chdir(old_cwd)
