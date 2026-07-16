@@ -1,7 +1,9 @@
 """History pane: previous Pi agent sessions for the workspace folder."""
 
+import html
+
 from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QTextDocument, QTextOption
 from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
@@ -9,25 +11,44 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QWidget,
 )
 
 from kraken.shell.panels.base import Card, Panel, _dot_icon
-from kraken.ui.themes import UI_COLORS
+from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 
+# Total item padding from the stylesheet below ("6px 8px"), which the
+# delegate has to account for itself when sizing rows.
+_ITEM_PAD_X = 16
+_ITEM_PAD_Y = 12
+
+
+# Row backgrounds only: the text color lives in _ROW_COLORS, because the
+# delegate paints the rows itself and a stylesheet `color` never reaches it —
+# Qt resolves that inside drawControl, on its own copy of the style option.
 _HISTORY_STYLES = {
     "dark": """
-QListWidget { background: transparent; border: none; color: #c8cad0; font-size: 12px; }
+QListWidget { background: transparent; border: none; font-size: 13px; }
 QListWidget::item { padding: 6px 8px; border-radius: 6px; }
 QListWidget::item:hover { background: #2c2e35; }
-QListWidget::item:selected { background: #1c2f50; color: #ffffff; }
+QListWidget::item:selected { background: #1c2f50; }
 """,
     "light": """
-QListWidget { background: transparent; border: none; color: #4a4d55; font-size: 12px; }
+QListWidget { background: transparent; border: none; font-size: 13px; }
 QListWidget::item { padding: 6px 8px; border-radius: 6px; }
 QListWidget::item:hover { background: #e8e8ec; }
-QListWidget::item:selected { background: #dce8fb; color: #1b1d22; }
+QListWidget::item:selected { background: #dce8fb; }
 """,
+}
+
+# Row text per theme, picked for contrast against the backgrounds above: the
+# selected row sits on a tinted band and needs its own value.
+_ROW_COLORS = {
+    "dark": {"text": "#c8cad0", "selected": "#ffffff"},
+    "light": {"text": "#4a4d55", "selected": "#1b1d22"},
 }
 
 _NEW_SESSION_STYLES = {
@@ -42,6 +63,92 @@ QPushButton { background: #f5f5f6; border: 1px solid #d8d8dd; border-radius: 6px
 QPushButton:hover { background: #e8e8ec; color: #1b1d22; }
 """,
 }
+
+
+def _row_html(title: str, subtitle: str) -> str:
+    """One history row: the session title in bold over its subtitle line."""
+    return f"<b>{html.escape(title)}</b><br>{html.escape(subtitle)}"
+
+
+class _SessionDelegate(QStyledItemDelegate):
+    """Paints a history row as HTML so the title can be bold while the
+    subtitle stays regular — an item's own font would apply to both lines.
+
+    Wrapping is done here rather than by the view: QListWidget's word wrap
+    only applies to its own plain-text painting, so the document is given the
+    row's text width and the row is sized from the height that produces.
+    """
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._colors = _ROW_COLORS[DEFAULT_THEME]
+
+    def set_theme(self, name: str) -> None:
+        self._colors = _ROW_COLORS[name]
+
+    def paint(self, painter, option, index) -> None:
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        style = opt.widget.style()
+        selected = bool(opt.state & QStyle.StateFlag.State_Selected)
+        # Draw the row itself (background, selection, status dot) without its
+        # text, then lay the document into the rect the style reserved for it.
+        text = opt.text
+        opt.text = ""
+        style.drawControl(
+            QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget
+        )
+        rect = style.subElementRect(
+            QStyle.SubElement.SE_ItemViewItemText, opt, opt.widget
+        )
+        doc = self._document(text, opt, rect.width(), selected)
+        painter.save()
+        painter.translate(rect.left(), rect.top())
+        doc.drawContents(painter)
+        painter.restore()
+
+    def sizeHint(self, option, index) -> QSize:
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        width = self._text_width(opt)
+        doc = self._document(opt.text, opt, width, False)
+        return QSize(int(width), int(doc.size().height()) + _ITEM_PAD_Y)
+
+    def _text_width(self, opt: QStyleOptionViewItem) -> float:
+        """Width available to the text. The option rect is not laid out yet
+        when the view asks for a size hint, so measure from the viewport and
+        leave room for the padding and the status dot."""
+        view = self.parent()
+        width = view.viewport().width() - _ITEM_PAD_X
+        if not opt.icon.isNull():
+            width -= opt.decorationSize.width() + _ITEM_PAD_X / 2
+        return max(width, 1)
+
+    def _document(
+        self, text: str, opt: QStyleOptionViewItem, width: float, selected: bool
+    ) -> QTextDocument:
+        doc = QTextDocument()
+        doc.setDocumentMargin(0)
+        doc.setDefaultFont(opt.font)
+        option = QTextOption()
+        option.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        doc.setDefaultTextOption(option)
+        color = self._colors["selected" if selected else "text"]
+        doc.setDefaultStyleSheet(f"body {{ color: {color}; }}")
+        doc.setHtml(f"<body>{text}</body>")
+        doc.setTextWidth(width)
+        return doc
+
+
+class _SessionList(QListWidget):
+    """The history list. Row heights depend on the viewport width, since the
+    delegate wraps long titles, and the view caches its size hints — so a
+    resize has to force a fresh layout or rows keep the height they were
+    given at the previous width."""
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.scheduleDelayedItemsLayout()
 
 
 class LeftPanel(Panel):
@@ -60,8 +167,12 @@ class LeftPanel(Panel):
         self._new_button = QPushButton("＋  New Session")
         self._new_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self._new_button.clicked.connect(self.new_session_requested)
-        self._list = QListWidget()
+        self._list = _SessionList()
         self._list.setWordWrap(True)
+        # Rows are HTML (see _SessionDelegate) so the title can be bold while
+        # the subtitle line stays regular.
+        self._delegate = _SessionDelegate(self._list)
+        self._list.setItemDelegate(self._delegate)
         self._list.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
@@ -104,7 +215,7 @@ class LeftPanel(Panel):
         for key, title, path, _running in self._live:
             if path and path in disk_paths:
                 continue
-            item = QListWidgetItem(f"{title}\nrunning…")
+            item = QListWidgetItem(_row_html(title, "running…"))
             item.setData(Qt.ItemDataRole.UserRole, key)
             self._list.addItem(item)
             if key == selected:
@@ -119,8 +230,11 @@ class LeftPanel(Panel):
         for session in sessions:
             noun = "message" if session.message_count == 1 else "messages"
             item = QListWidgetItem(
-                f"{session.title}\n{session.started:%b %d, %H:%M}"
-                f" · {session.message_count} {noun}"
+                _row_html(
+                    session.title,
+                    f"{session.started:%b %d, %H:%M}"
+                    f" · {session.message_count} {noun}",
+                )
             )
             item.setData(Qt.ItemDataRole.UserRole, str(session.path))
             item.setData(Qt.ItemDataRole.UserRole + 1, session.session_id)
@@ -215,3 +329,7 @@ class LeftPanel(Panel):
         self._card.set_colors(ui["card"], ui["card_border"])
         self._list.setStyleSheet(_HISTORY_STYLES[name])
         self._new_button.setStyleSheet(_NEW_SESSION_STYLES[name])
+        # The delegate paints the row text, so it needs the new colors too;
+        # the stylesheet change alone would repaint only the backgrounds.
+        self._delegate.set_theme(name)
+        self._list.viewport().update()
