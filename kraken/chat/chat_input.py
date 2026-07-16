@@ -8,8 +8,8 @@ from __future__ import annotations
 import base64
 from pathlib import Path
 
-from PySide6.QtCore import QBuffer, QEvent, QIODevice, QPoint, Qt, Signal
-from PySide6.QtGui import QImageReader, QPixmap
+from PySide6.QtCore import QBuffer, QEvent, QIODevice, QMimeData, QPoint, Qt, Signal
+from PySide6.QtGui import QImage, QImageReader, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -47,6 +47,63 @@ def _image_mime(data: bytes) -> str | None:
     buffer.open(QIODevice.OpenModeFlag.ReadOnly)
     fmt = bytes(QImageReader(buffer).format()).decode("ascii", "replace").lower()
     return _QT_FORMAT_MIMES.get(fmt)
+
+
+def _pasted_image_paths(source: QMimeData) -> list[str]:
+    """Local image files carried by mime data — what a file manager puts on
+    the clipboard when copying an image.
+
+    All or nothing: if anything in the payload isn't a local image file, the
+    whole paste falls through to Qt's default handling, so pasting a web link
+    or a path still types text rather than silently attaching something. The
+    format is sniffed from each file's header, matching _image_mime.
+    """
+    if not source.hasUrls():
+        return []
+    paths = []
+    for url in source.urls():
+        if not url.isLocalFile():
+            return []
+        path = url.toLocalFile()
+        fmt = bytes(QImageReader(path).format()).decode("ascii", "replace").lower()
+        if fmt not in _QT_FORMAT_MIMES:
+            return []
+        paths.append(path)
+    return paths
+
+
+class _PromptEdit(QPlainTextEdit):
+    """The prompt field, with images routed to the attachment row.
+
+    Qt funnels every paste (Ctrl+V, the context menu, middle-click) and every
+    drop through insertFromMimeData, so overriding it here covers them all.
+    Without it an image paste inserts nothing: QPlainTextEdit is text-only and
+    silently drops the image data.
+    """
+
+    image_pasted = Signal(QImage)
+    files_pasted = Signal(list)
+
+    def canInsertFromMimeData(self, source: QMimeData) -> bool:
+        # Also what enables Paste in the context menu.
+        if source.hasImage() or _pasted_image_paths(source):
+            return True
+        return super().canInsertFromMimeData(source)
+
+    def insertFromMimeData(self, source: QMimeData) -> None:
+        # File paths win over any bitmap in the same payload: they carry the
+        # original bytes and a real filename, where the bitmap would be a
+        # re-encoded copy called "pasted".
+        paths = _pasted_image_paths(source)
+        if paths:
+            self.files_pasted.emit(paths)
+            return
+        if source.hasImage():
+            image = QImage(source.imageData())
+            if not image.isNull():
+                self.image_pasted.emit(image)
+                return
+        super().insertFromMimeData(source)
 
 
 _STYLES = {
@@ -208,13 +265,15 @@ class ChatInput(QFrame):
         # RPC prompt only carries images).
         self._attachments: list[tuple[dict | str, QWidget]] = []
 
-        self._edit = QPlainTextEdit()
+        self._edit = _PromptEdit()
         self._edit.setPlaceholderText(
             "Follow-up on this task, @ for mentions, / for commands"
         )
         self._edit.setFixedHeight(64)
         self._edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._edit.textChanged.connect(self._on_text_changed)
+        self._edit.image_pasted.connect(self._attach_pasted_image)
+        self._edit.files_pasted.connect(self._attach_paths)
         self._edit.installEventFilter(self)
 
         def tool_button(text: str) -> QToolButton:
@@ -285,6 +344,16 @@ class ChatInput(QFrame):
         }
         self._add_attachment(image, name, thumbnail=pixmap)
 
+    def _attach_pasted_image(self, image: QImage) -> None:
+        """A bitmap pasted from the clipboard (a screenshot, a browser's
+        "Copy image"). It has no filename of its own, so the chip gets a
+        generic one."""
+        self.attach_image(QPixmap.fromImage(image), "pasted.png")
+
+    def _attach_paths(self, paths: list[str]) -> None:
+        for path in paths:
+            self._attach_path(path)
+
     def _pick_files(self) -> None:
         paths, _filter = QFileDialog.getOpenFileNames(
             self,
@@ -292,8 +361,7 @@ class ChatInput(QFrame):
             "",
             "All files (*);;Images (*.png *.jpg *.jpeg *.gif *.webp)",
         )
-        for path in paths:
-            self._attach_path(path)
+        self._attach_paths(paths)
 
     def _attach_path(self, path: str) -> None:
         """Attach one file: images go into the prompt's image payload, any
