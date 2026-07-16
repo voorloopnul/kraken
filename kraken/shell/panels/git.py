@@ -27,7 +27,7 @@ from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 _GIT_LOG_STYLES = {
     "dark": """
 QListWidget { background: transparent; border: none; color: #c8cad0;
-              font-family: monospace; font-size: 11px; }
+              font-family: 'JetBrains Mono', monospace; font-size: 11px; }
 QListWidget::item { padding: 2px 4px; border-radius: 4px; }
 QListWidget::item:hover { background: #2c2e35; }
 QScrollBar:horizontal { background: transparent; border: none; height: 10px; margin: 0; }
@@ -42,7 +42,7 @@ QAbstractScrollArea::corner { background: transparent; border: none; }
 """,
     "light": """
 QListWidget { background: transparent; border: none; color: #4a4d55;
-              font-family: monospace; font-size: 11px; }
+              font-family: 'JetBrains Mono', monospace; font-size: 11px; }
 QListWidget::item { padding: 2px 4px; border-radius: 4px; }
 QListWidget::item:hover { background: #e8e8ec; }
 QScrollBar:horizontal { background: transparent; border: none; height: 10px; margin: 0; }

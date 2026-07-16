@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from kraken.shell.main_window import MainWindow
+from kraken.ui.fonts import apply_ui_font, load_fonts
 
 
 def main() -> int:
@@ -20,6 +21,8 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Kraken")
     app.setApplicationDisplayName("Kraken")
+    load_fonts()
+    apply_ui_font(app)
     window = MainWindow()
     window.show()
     return app.exec()
