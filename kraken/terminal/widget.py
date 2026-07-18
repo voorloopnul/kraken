@@ -11,9 +11,11 @@ from __future__ import annotations
 import ctypes
 import fcntl
 import os
+import shutil
 import signal
 import struct
 import termios
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QSocketNotifier, Qt, QTimer
 from PySide6.QtGui import (
@@ -29,6 +31,9 @@ from PySide6.QtWidgets import QWidget
 from kraken.terminal import ghostty_vt as g
 from kraken.terminal.keymap import QT_KEY_MAP, UNSHIFTED
 from kraken.ui.themes import DEFAULT_THEME, THEMES
+
+if TYPE_CHECKING:
+    from kraken.agent.remote import RemoteTarget
 
 # Cell flag bits for the row model.
 _BOLD = 1
@@ -52,9 +57,11 @@ def _pick_term() -> str:
     return "xterm-256color"
 
 
-def _spawn_session(shell: str, env: dict, slave_path: str) -> int:
-    """Start `shell` in a new session with `slave_path` as its controlling
-    terminal, returning the child pid.
+def _spawn_session(program: str, argv: list[str], env: dict, slave_path: str) -> int:
+    """Start `program` (with `argv`) in a new session with `slave_path` as its
+    controlling terminal, returning the child pid. For a local terminal this is
+    the user's shell; for a remote workspace it is `ssh` opening a login shell
+    on the far host.
 
     The fast path is posix_spawn(setsid=True). Some CPython builds — notably
     the relocatable python-build-standalone interpreter shipped inside the
@@ -64,8 +71,8 @@ def _spawn_session(shell: str, env: dict, slave_path: str) -> int:
     """
     try:
         return os.posix_spawn(
-            shell,
-            [shell],
+            program,
+            argv,
             env,
             file_actions=[
                 (os.POSIX_SPAWN_OPEN, 0, slave_path, os.O_RDWR, 0),
@@ -90,7 +97,7 @@ def _spawn_session(shell: str, env: dict, slave_path: str) -> int:
         os.dup2(fd, 2)
         if fd > 2:
             os.close(fd)
-        os.execve(shell, [shell], env)
+        os.execve(program, argv, env)
     except BaseException:
         os._exit(127)
 
@@ -98,9 +105,17 @@ def _spawn_session(shell: str, env: dict, slave_path: str) -> int:
 class GhosttyTerminalWidget(QWidget):
     """Interactive shell terminal rendered from libghostty-vt render state."""
 
-    def __init__(self, parent: QWidget | None = None, cwd: str | None = None):
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        cwd: str | None = None,
+        remote: "RemoteTarget | None" = None,
+    ):
         super().__init__(parent)
         self._cwd = cwd
+        # When set, the terminal is an ssh login shell on the remote host
+        # instead of a local shell.
+        self._remote = remote
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
         self.setAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled)
@@ -199,20 +214,33 @@ class GhosttyTerminalWidget(QWidget):
         self._master_fd, slave_fd = os.openpty()
         slave_path = os.ttyname(slave_fd)
 
-        shell = os.environ.get("SHELL", "/bin/bash")
         env = dict(os.environ)
-        env["TERM"] = _pick_term()
         env["COLORTERM"] = "truecolor"
+
+        if self._remote is not None:
+            # An ssh client on the local pty, opening an interactive login
+            # shell on the remote host in the workspace path. The remote host
+            # is unlikely to have ghostty's terminfo, so advertise a widely
+            # available terminal; ssh forwards TERM to the remote pty.
+            env["TERM"] = "xterm-256color"
+            argv = self._remote.terminal_argv()
+            program = shutil.which("ssh") or "/usr/bin/ssh"
+            local_cwd = None
+        else:
+            program = os.environ.get("SHELL", "/bin/bash")
+            argv = [program]
+            env["TERM"] = _pick_term()
+            local_cwd = self._cwd
 
         # The child opens the pty slave as fd 0 after setsid(), which makes it
         # the controlling terminal. Neither spawn path has a cwd parameter, so
-        # chdir around it; Qt runs single-threaded here so nothing else
-        # observes the switch.
-        old_cwd = os.getcwd() if self._cwd else None
-        if self._cwd:
-            os.chdir(self._cwd)
+        # chdir around it (local shells only); Qt runs single-threaded here so
+        # nothing else observes the switch.
+        old_cwd = os.getcwd() if local_cwd else None
+        if local_cwd:
+            os.chdir(local_cwd)
         try:
-            self._child_pid = _spawn_session(shell, env, slave_path)
+            self._child_pid = _spawn_session(program, argv, env, slave_path)
         finally:
             if old_cwd is not None:
                 os.chdir(old_cwd)

@@ -11,10 +11,18 @@ from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
-from PySide6.QtWidgets import QButtonGroup, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QButtonGroup,
+    QMenu,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from kraken.ui.themes import DEFAULT_THEME
 
+# Remote workspaces carry a left accent bar so they read differently from
+# local folders in the strip.
 _STYLES = {
     "dark": """
 #workspaceBar { background: #1b1c21; border-right: 1px solid #33353c; }
@@ -24,6 +32,11 @@ QToolButton {
 }
 QToolButton:hover { background: #2c2e35; color: #ffffff; }
 QToolButton:checked { background: #26282e; color: #ffffff; }
+QToolButton[remote="true"] {
+    border-left: 2px solid #4f83e0; border-top-left-radius: 2px;
+    border-bottom-left-radius: 2px;
+}
+QToolButton::menu-indicator { image: none; }
 """,
     "light": """
 #workspaceBar { background: #fafafa; border-right: 1px solid #e0e0e0; }
@@ -33,6 +46,11 @@ QToolButton {
 }
 QToolButton:hover { background: #e8e8ec; color: #1b1d22; }
 QToolButton:checked { background: #e0e0e5; color: #1b1d22; }
+QToolButton[remote="true"] {
+    border-left: 2px solid #4f83e0; border-top-left-radius: 2px;
+    border-bottom-left-radius: 2px;
+}
+QToolButton::menu-indicator { image: none; }
 """,
 }
 
@@ -124,7 +142,11 @@ def abbreviation(folder_name: str) -> str:
 
 
 class WorkspaceBar(QWidget):
-    workspace_selected = Signal(str)  # absolute path of the chosen workspace
+    workspace_selected = Signal(str)  # key (local path or remote anchor) chosen
+    add_local_requested = Signal()
+    add_remote_requested = Signal()
+    workspace_edit_requested = Signal(str)  # remote anchor to edit
+    workspace_remove_requested = Signal(str)  # workspace key to remove
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -133,6 +155,7 @@ class WorkspaceBar(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedWidth(40)
         self._workspaces: dict[str, QToolButton] = {}
+        self._remote_keys: set[str] = set()
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         # Bottom-pinned app actions (theme toggle, quit); MainWindow wires them.
@@ -146,6 +169,16 @@ class WorkspaceBar(QWidget):
         self.add_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.add_button.setFixedSize(28, 28)
         self.add_button.setIconSize(QSize(18, 18))
+        # The "+" opens a menu: a local folder, or a remote SSH host.
+        self.add_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        add_menu = QMenu(self.add_button)
+        add_menu.addAction("Add Local Folder…").triggered.connect(
+            self.add_local_requested
+        )
+        add_menu.addAction("Add Remote Host…").triggered.connect(
+            self.add_remote_requested
+        )
+        self.add_button.setMenu(add_menu)
         layout.addWidget(self.add_button)
         # Workspace buttons fill the gap above this stretch, top to bottom; the
         # action buttons below the stretch stay pinned to the bottom edge.
@@ -166,18 +199,36 @@ class WorkspaceBar(QWidget):
     def workspaces(self) -> list[str]:
         return list(self._workspaces)
 
-    def add_workspace(self, path: str, select: bool = True) -> None:
-        """Add a button for the folder at `path`; re-select it if it exists."""
-        path = str(Path(path).expanduser().resolve())
+    def add_workspace(
+        self,
+        path: str,
+        select: bool = True,
+        remote: bool = False,
+        tooltip: str | None = None,
+        abbrev: str | None = None,
+    ) -> None:
+        """Add a button for the workspace keyed by `path`; re-select it if it
+        already exists. Remote workspaces pass `remote=True` with an explicit
+        `tooltip` (their `user@host:/path`) and `abbrev`, since `path` is only a
+        local anchor folder whose name is meaningless to the user."""
+        if not remote:
+            path = str(Path(path).expanduser().resolve())
         btn = self._workspaces.get(path)
         if btn is None:
             btn = QToolButton()
-            btn.setText(abbreviation(Path(path).name))
-            btn.setToolTip(path)
+            btn.setText(abbrev or abbreviation(Path(path).name))
+            btn.setToolTip(tooltip or path)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setFixedSize(28, 28)
             btn.setCheckable(True)
+            btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            btn.customContextMenuRequested.connect(
+                lambda pos, p=path: self._on_workspace_menu(p, pos)
+            )
             btn.clicked.connect(lambda _=False, p=path: self.workspace_selected.emit(p))
+            if remote:
+                btn.setProperty("remote", "true")
+                self._remote_keys.add(path)
             self._group.addButton(btn)
             # Insert just above the stretch: after the add button and the
             # existing workspace buttons, before the bottom action group.
@@ -186,6 +237,37 @@ class WorkspaceBar(QWidget):
         if select:
             btn.setChecked(True)
             self.workspace_selected.emit(path)
+
+    def select_workspace(self, path: str) -> None:
+        """Programmatically select an existing workspace button."""
+        btn = self._workspaces.get(path)
+        if btn is not None:
+            btn.setChecked(True)
+            self.workspace_selected.emit(path)
+
+    def remove_workspace(self, path: str) -> None:
+        """Drop a workspace's button from the strip."""
+        btn = self._workspaces.pop(path, None)
+        if btn is None:
+            return
+        self._remote_keys.discard(path)
+        self._group.removeButton(btn)
+        self._layout.removeWidget(btn)
+        btn.deleteLater()
+
+    def _on_workspace_menu(self, path: str, pos) -> None:
+        btn = self._workspaces.get(path)
+        if btn is None:
+            return
+        menu = QMenu(self)
+        if path in self._remote_keys:
+            menu.addAction("Edit…").triggered.connect(
+                lambda: self.workspace_edit_requested.emit(path)
+            )
+        menu.addAction("Remove").triggered.connect(
+            lambda: self.workspace_remove_requested.emit(path)
+        )
+        menu.exec(btn.mapToGlobal(pos))
 
     def set_theme(self, name: str) -> None:
         self.setStyleSheet(_STYLES[name])

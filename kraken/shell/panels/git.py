@@ -1,7 +1,10 @@
 """Git history pane: the workspace repo's commit graph."""
 
+from __future__ import annotations
+
 import html
 import subprocess
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QGuiApplication, QTextDocument
@@ -21,6 +24,9 @@ from PySide6.QtWidgets import (
 
 from kraken.shell.panels.base import Card, Panel
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
+
+if TYPE_CHECKING:
+    from kraken.agent.remote import RemoteTarget
 
 # Scrollbars match the conversation panel's external one: a bare rounded
 # handle on a transparent track, no stepper buttons.
@@ -120,9 +126,16 @@ class GitPanel(Panel):
 
     _MAX_COMMITS = 200
 
-    def __init__(self, parent: QWidget | None = None, cwd: str | None = None):
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        cwd: str | None = None,
+        remote: "RemoteTarget | None" = None,
+    ):
         super().__init__(parent)
         self._cwd = cwd
+        # When set, git runs on the remote host over SSH instead of on `cwd`.
+        self._remote = remote
         self._theme_name = DEFAULT_THEME
         self._card = Card()
 
@@ -157,6 +170,17 @@ class GitPanel(Panel):
         super().showEvent(event)
         self.refresh()
 
+    def _run_git(self, git_args: list[str], timeout: float, **kwargs):
+        """Run `git <git_args>` in the workspace, locally or on the remote host.
+        Remote calls carry a network round trip (plus a login-shell spawn), so
+        their timeout is widened."""
+        if self._remote is None:
+            argv = ["git", "-C", self._cwd, *git_args]
+        else:
+            argv = self._remote.git_argv(git_args)
+            timeout = max(timeout, 15)
+        return subprocess.run(argv, timeout=timeout, **kwargs)
+
     def refresh(self) -> None:
         self._list.clear()
         if not self._cwd:
@@ -173,16 +197,16 @@ class GitPanel(Panel):
         # \x1f-separated fields after the graph prefix; continuation lines
         # (pure graph, like "|/") carry no record at all.
         try:
-            result = subprocess.run(
+            result = self._run_git(
                 [
-                    "git", "-C", self._cwd, "log", "--graph", *revs,
+                    "log", "--graph", *revs,
                     "--format=%x1f%h%x1f%H%x1f%d%x1f%s%x1f%an%x1f%ar",
                     f"-{self._MAX_COMMITS}",
                 ],
+                timeout=5,
                 capture_output=True,
                 text=True,
                 errors="replace",
-                timeout=5,
             )
         except (OSError, subprocess.TimeoutExpired):
             result = None
@@ -247,11 +271,10 @@ class GitPanel(Panel):
     def _head_exists(self) -> bool:
         try:
             return (
-                subprocess.run(
-                    ["git", "-C", self._cwd, "rev-parse", "--verify",
-                     "--quiet", "HEAD"],
-                    capture_output=True,
+                self._run_git(
+                    ["rev-parse", "--verify", "--quiet", "HEAD"],
                     timeout=5,
+                    capture_output=True,
                 ).returncode
                 == 0
             )
@@ -263,11 +286,11 @@ class GitPanel(Panel):
         exists to compare against."""
         for ref in ("master", "main"):
             try:
-                result = subprocess.run(
-                    ["git", "-C", self._cwd, "rev-list", ref, "--"],
+                result = self._run_git(
+                    ["rev-list", ref, "--"],
+                    timeout=5,
                     capture_output=True,
                     text=True,
-                    timeout=5,
                 )
             except (OSError, subprocess.TimeoutExpired):
                 return None
@@ -300,12 +323,12 @@ class GitPanel(Panel):
 
     def _checkout(self, commit: str) -> None:
         try:
-            result = subprocess.run(
-                ["git", "-C", self._cwd, "checkout", commit],
+            result = self._run_git(
+                ["checkout", commit],
+                timeout=10,
                 capture_output=True,
                 text=True,
                 errors="replace",
-                timeout=10,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             QMessageBox.warning(self, "Checkout failed", str(exc))

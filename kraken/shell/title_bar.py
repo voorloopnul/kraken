@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
@@ -23,6 +24,9 @@ from PySide6.QtWidgets import (
 )
 
 from kraken.ui.themes import DEFAULT_THEME
+
+if TYPE_CHECKING:
+    from kraken.agent.remote import RemoteTarget
 
 # The bare QToolButton rules style the circular window buttons; the branch
 # switcher opts out via its id selector.
@@ -195,6 +199,9 @@ class TitleBar(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedHeight(36)
         self._workspace_path: str | None = None
+        # Set for a remote workspace: git runs on the host, and the folder
+        # label shows the remote destination rather than the local anchor.
+        self._remote: "RemoteTarget | None" = None
         self._maximized = False
 
         # Shows/hides the History (left) panel; MainWindow keeps it in sync
@@ -266,9 +273,15 @@ class TitleBar(QWidget):
 
     # ---- Content ----------------------------------------------------------
 
-    def set_workspace(self, path: str | None) -> None:
+    def set_workspace(
+        self, path: str | None, remote: "RemoteTarget | None" = None
+    ) -> None:
         self._workspace_path = path or None
-        self.folder_label.setText(path if path else "Kraken")
+        self._remote = remote
+        if remote is not None:
+            self.folder_label.setText(f"{remote.host.destination}:{remote.path}")
+        else:
+            self.folder_label.setText(path if path else "Kraken")
         self._refresh_branch()
 
     def set_conversation(self, title: str) -> None:
@@ -287,10 +300,35 @@ class TitleBar(QWidget):
 
     def _refresh(self) -> None:
         self.memory_label.setText(format_bytes(process_tree_rss()))
-        self._refresh_branch()
+        # A remote branch lookup is a network round trip, too costly for the
+        # 3s poll; it refreshes on workspace switch and checkout instead.
+        if self._remote is None:
+            self._refresh_branch()
+
+    def _git_argv(self, git_args: list[str]) -> list[str]:
+        """argv to run git for the current workspace, local or over SSH."""
+        if self._remote is not None:
+            return self._remote.git_argv(git_args)
+        return ["git", "-C", self._workspace_path, *git_args]
+
+    def _current_branch(self) -> str:
+        if self._remote is not None:
+            try:
+                result = subprocess.run(
+                    self._git_argv(["rev-parse", "--abbrev-ref", "HEAD"]),
+                    capture_output=True,
+                    text=True,
+                    errors="replace",
+                    timeout=15,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                return ""
+            branch = result.stdout.strip() if result.returncode == 0 else ""
+            return "" if branch == "HEAD" else branch
+        return git_branch(self._workspace_path) if self._workspace_path else ""
 
     def _refresh_branch(self) -> None:
-        branch = git_branch(self._workspace_path) if self._workspace_path else ""
+        branch = self._current_branch()
         self.branch_button.setText(branch)
         self.branch_button.setVisible(bool(branch))
 
@@ -299,14 +337,13 @@ class TitleBar(QWidget):
     def _local_branches(self) -> list[str]:
         try:
             result = subprocess.run(
-                [
-                    "git", "-C", self._workspace_path, "for-each-ref",
-                    "--format=%(refname:short)", "refs/heads",
-                ],
+                self._git_argv(
+                    ["for-each-ref", "--format=%(refname:short)", "refs/heads"]
+                ),
                 capture_output=True,
                 text=True,
                 errors="replace",
-                timeout=5,
+                timeout=15 if self._remote is not None else 5,
             )
         except (OSError, subprocess.TimeoutExpired):
             return []
@@ -318,7 +355,7 @@ class TitleBar(QWidget):
         """Rebuild the dropdown as it opens, so it always lists the repo's
         current local branches with the checked-out one ticked."""
         self._branch_menu.clear()
-        current = git_branch(self._workspace_path) if self._workspace_path else ""
+        current = self._current_branch()
         branches = self._local_branches()
         if not branches:
             self._branch_menu.addAction("No branches").setEnabled(False)
@@ -335,11 +372,11 @@ class TitleBar(QWidget):
     def _switch_branch(self, branch: str) -> None:
         try:
             result = subprocess.run(
-                ["git", "-C", self._workspace_path, "checkout", branch],
+                self._git_argv(["checkout", branch]),
                 capture_output=True,
                 text=True,
                 errors="replace",
-                timeout=10,
+                timeout=15 if self._remote is not None else 10,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             QMessageBox.warning(self, "Checkout failed", str(exc))

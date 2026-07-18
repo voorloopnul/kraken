@@ -7,6 +7,8 @@ WorkspaceView per open workspace in a stack and switches between them."""
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QSplitter, QSplitterHandle, QVBoxLayout, QWidget
@@ -14,6 +16,9 @@ from PySide6.QtWidgets import QSplitter, QSplitterHandle, QVBoxLayout, QWidget
 from kraken.shell.panels import BrowserPanel, CenterPanel, GitPanel, LeftPanel, RightPanel
 from kraken.agent.session_controller import SessionController
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
+
+if TYPE_CHECKING:
+    from kraken.agent.remote import RemoteTarget
 
 
 class _GripSplitter(QSplitter):
@@ -66,10 +71,19 @@ class WorkspaceView(QWidget):
     # Focused conversation's title, for the window title bar.
     title_changed = Signal(str)
 
-    def __init__(self, path: str, parent: QWidget | None = None):
+    def __init__(
+        self,
+        path: str,
+        parent: QWidget | None = None,
+        remote: "RemoteTarget | None" = None,
+    ):
         super().__init__(parent)
         self.path = path
         self._theme_name = DEFAULT_THEME
+        # When set, this workspace lives on a remote host: `path` is the local
+        # anchor folder (where pi runs and stores sessions), while the agent,
+        # terminal, and git panel all operate on the remote over SSH.
+        self.remote = remote
 
         self.left_panel = LeftPanel(cwd=path)
         self.left_panel.setMinimumWidth(280)
@@ -78,9 +92,9 @@ class WorkspaceView(QWidget):
         # Per-workspace browser, like the terminals; it's lazily populated
         # on first show, so hidden panels cost no Chromium processes.
         self.browser_panel = BrowserPanel()
-        self.git_panel = GitPanel(cwd=path)
+        self.git_panel = GitPanel(cwd=path, remote=remote)
         self.git_panel.setMinimumWidth(320)
-        self.right_panel = RightPanel(cwd=path)
+        self.right_panel = RightPanel(cwd=path, remote=remote)
         # The terminal panel never shrinks below a usable width; the splitter
         # stops the drag here rather than letting it collapse to a sliver.
         self.right_panel.setMinimumWidth(380)
@@ -136,7 +150,11 @@ class WorkspaceView(QWidget):
 
     def _new_controller(self, session_path: str | None = None) -> SessionController:
         controller = SessionController(
-            self.path, self._theme_name, session_path=session_path, parent=self
+            self.path,
+            self._theme_name,
+            session_path=session_path,
+            parent=self,
+            remote=self.remote,
         )
         controller.streaming_changed.connect(
             lambda streaming, c=controller: self._on_streaming_changed(c, streaming)
