@@ -171,8 +171,13 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Kraken")
         # The TitleBar widget replaces the native decoration.
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
-        self.resize(1200, 720)
+        self.resize(1300, 720)
         self.current_workspace: str | None = None
+        # Set while pushing a workspace's stored panel state into the toggle
+        # buttons on a switch, so the resulting `toggled` signals only update
+        # the button visuals and don't re-apply onto the view (which would
+        # clobber the state we're reading).
+        self._syncing_panels = False
 
         # One WorkspaceView (history/conversation/terminal panes) per open
         # workspace, keyed by absolute path; the stack shows the current one.
@@ -375,14 +380,15 @@ class MainWindow(QMainWindow):
                     else None
                 )
             )
-            # New views follow the current pane-visibility toggles.
-            for side, action in self._panel_actions.items():
-                view.set_panel_visible(side, action.isChecked())
+            # A new workspace keeps WorkspaceView's own defaults (only History
+            # open); the toggle buttons are synced to it just below.
             self.views[path] = view
             self._view_stack.addWidget(view)
         else:
             view.left_panel.refresh()
         self._view_stack.setCurrentWidget(view)
+        # Reflect this workspace's own open panes in the toggle buttons.
+        self._sync_panel_toggles(view)
         self._sync_chrome()
         self.current_workspace = path
         if target is not None:
@@ -466,9 +472,24 @@ class MainWindow(QMainWindow):
             grip.raise_()
 
     def _set_panel_visible(self, side: str, visible: bool) -> None:
-        """Pane visibility toggles are global: they apply to every workspace."""
-        for view in self.views.values():
+        """A pane toggle applies only to the current workspace; each workspace
+        keeps its own set of open panes."""
+        if self._syncing_panels:
+            return
+        view = self.current_view
+        if view is not None:
             view.set_panel_visible(side, visible)
+
+    def _sync_panel_toggles(self, view: WorkspaceView) -> None:
+        """Point the toggle buttons at `view`'s stored panel state. Guarded so
+        the `toggled` signals refresh the button visuals without looping back
+        through _set_panel_visible onto the view."""
+        self._syncing_panels = True
+        try:
+            for side, action in self._panel_actions.items():
+                action.setChecked(view.is_panel_visible(side))
+        finally:
+            self._syncing_panels = False
 
     def _create_actions(self) -> None:
         # Keep keyboard shortcuts available without exposing a menu bar.

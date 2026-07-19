@@ -7,13 +7,17 @@ from typing import TYPE_CHECKING
 from PySide6.QtWidgets import QWidget
 
 from kraken.shell.panels.base import Card, Panel
-from kraken.ui.themes import UI_COLORS
+from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 
 if TYPE_CHECKING:
     from kraken.agent.remote import RemoteTarget
 
 
 class RightPanel(Panel):
+    """Terminal pane. The tabbed terminal (and its shell/SSH child process) is
+    only created the first time the panel becomes visible, so a workspace you
+    never open a terminal in costs no shell and no scrollback buffer."""
+
     def __init__(
         self,
         parent: QWidget | None = None,
@@ -21,19 +25,47 @@ class RightPanel(Panel):
         remote: "RemoteTarget | None" = None,
     ):
         super().__init__(parent)
-        from kraken.terminal.tabs import TerminalTabs
-
         self._card = Card()
-        self.terminals = TerminalTabs(self, cwd=cwd, remote=remote)
-        self._card.add_widget(self.terminals, stretch=1)
+        self._theme_name = DEFAULT_THEME
+        self._cwd = cwd
+        self._remote = remote
+        self.terminals = None
+        self._creating = False
         self.add_widget(self._card, stretch=1)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._ensure_terminals()
+
+    def _ensure_terminals(self) -> None:
+        # Re-entrancy guard mirrors BrowserPanel: terminal construction can
+        # pump the event loop, so a second showEvent must not stack a
+        # duplicate terminal into the card.
+        if self.terminals is not None or self._creating:
+            return
+        self._creating = True
+        try:
+            from kraken.terminal.tabs import TerminalTabs
+
+            terminals = TerminalTabs(self, cwd=self._cwd, remote=self._remote)
+            terminals.set_theme(self._theme_name)
+            self._card.add_widget(terminals, stretch=1)
+            self.terminals = terminals
+        finally:
+            self._creating = False
 
     @property
     def theme_name(self) -> str:
-        return self.terminals.theme_name
+        return self._theme_name
 
     def set_theme(self, name: str) -> None:
         """Theme the card and everything inside it (tab strip, terminals)."""
+        self._theme_name = name
         ui = UI_COLORS[name]
         self._card.set_colors(ui["card"], ui["card_border"])
-        self.terminals.set_theme(name)
+        if self.terminals is not None:
+            self.terminals.set_theme(name)
+
+    def shutdown(self) -> None:
+        if self.terminals is not None:
+            self.terminals.shutdown_all()

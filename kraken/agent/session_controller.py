@@ -27,6 +27,7 @@ from kraken.chat.formatting import (
     error_summary,
 )
 from kraken.agent.pi_rpc import PiAgent
+from kraken.agent.pi_sessions import read_transcript
 
 
 def _files_title(files: list[str]) -> str:
@@ -146,25 +147,31 @@ class SessionController(QObject):
             )
 
     def load(self) -> None:
-        """Render the bound session's existing messages into the transcript."""
+        """Render the bound session's stored messages into the transcript by
+        reading its file directly — no live pi process.
 
-        def on_messages(response: dict) -> None:
-            if response.get("success"):
-                messages = (response.get("data") or {}).get("messages") or []
-                self.conversation.render_messages(messages)
-                # A loaded session's title comes from its stored messages,
-                # the same way History derives it (first user message).
-                if self.first_prompt is None:
-                    for message in messages:
-                        if message.get("role") == "user":
-                            text = _content_text(message.get("content"))
-                            if text:
-                                self.first_prompt = text
-                                self.title_known.emit(self.title)
-                                break
-
-        self.agent.get_messages(on_messages)
-        self._sync_state()
+        Pi writes the same message objects to disk that it returns over RPC, so
+        this renders identically to a live get_messages while costing nothing:
+        the agent still starts lazily on the first prompt (see prompt()), which
+        resumes this same session via --session. Browsing a past session is
+        therefore free until you actually continue it.
+        """
+        if not self.session_path:
+            return
+        messages, model = read_transcript(self.session_path)
+        self.conversation.render_messages(messages)
+        if model:
+            self._set_current_model(model)
+        # A loaded session's title comes from its stored messages, the same way
+        # History derives it (first user message).
+        if self.first_prompt is None:
+            for message in messages:
+                if message.get("role") == "user":
+                    text = _content_text(message.get("content"))
+                    if text:
+                        self.first_prompt = text
+                        self.title_known.emit(self.title)
+                        break
 
     def _sync_state(self) -> None:
         """Learn the session file path and model name from the live agent."""
