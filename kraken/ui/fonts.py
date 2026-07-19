@@ -17,6 +17,9 @@ from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QApplication
 
 MONO_FAMILY = "JetBrains Mono"
+# Proportional face used where a mono grid reads wrong — currently the History
+# pane. Bundled like the mono font so it renders the same on every machine.
+UI_SANS_FAMILY = "Roboto"
 
 # Regular/italic/bold/bold-italic cover everything the UI asks for: body and
 # tool lines (regular, italic), markdown emphasis and headings, and the
@@ -27,6 +30,10 @@ _FONT_FILES = (
     "JetBrainsMono-Italic.ttf",
     "JetBrainsMono-Bold.ttf",
     "JetBrainsMono-BoldItalic.ttf",
+    "Roboto-Regular.ttf",
+    "Roboto-Italic.ttf",
+    "Roboto-Bold.ttf",
+    "Roboto-BoldItalic.ttf",
 )
 
 _loaded = False

@@ -3,7 +3,7 @@
 import html
 
 from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtGui import QIcon, QTextDocument, QTextOption
+from PySide6.QtGui import QFont, QIcon, QTextDocument, QTextOption
 from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from kraken.shell.panels.base import Card, Panel, _dot_icon
+from kraken.ui.fonts import UI_SANS_FAMILY
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 
 # Total item padding from the stylesheet below ("6px 8px"), which the
@@ -31,7 +32,7 @@ _ITEM_PAD_Y = 12
 # Qt resolves that inside drawControl, on its own copy of the style option.
 _HISTORY_STYLES = {
     "dark": """
-QListWidget { background: transparent; border: none; font-size: 13px; }
+QListWidget { background: transparent; border: none; font-family: 'Roboto'; font-size: 13px; }
 QListWidget::item { padding: 6px 8px; border-radius: 6px; }
 QListWidget::item:hover { background: #2c2e35; }
 QListWidget::item:selected { background: #1c2f50; }
@@ -42,7 +43,7 @@ QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 """,
     "light": """
-QListWidget { background: transparent; border: none; font-size: 13px; }
+QListWidget { background: transparent; border: none; font-family: 'Roboto'; font-size: 13px; }
 QListWidget::item { padding: 6px 8px; border-radius: 6px; }
 QListWidget::item:hover { background: #e8e8ec; }
 QListWidget::item:selected { background: #dce8fb; }
@@ -173,11 +174,20 @@ class LeftPanel(Panel):
         super().__init__(parent)
         self._cwd = cwd
         self._card = Card()
+        # The History pane uses the proportional Roboto face rather than the
+        # app-wide mono. The delegate paints rows from the list's own font, so
+        # setting an explicit pixel size here (not just in the stylesheet) is
+        # what fixes the row size the delegate measures and paints with.
+        sans = QFont(UI_SANS_FAMILY)
+        sans.setPixelSize(13)
         title = QLabel("History")
+        title.setFont(sans)
         self._new_button = QPushButton("＋  New Session")
+        self._new_button.setFont(sans)
         self._new_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self._new_button.clicked.connect(self.new_session_requested)
         self._list = _SessionList()
+        self._list.setFont(sans)
         self._list.setWordWrap(True)
         # Rows are HTML (see _SessionDelegate) so the title can be bold while
         # the subtitle line stays regular.
