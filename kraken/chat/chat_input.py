@@ -127,6 +127,11 @@ QToolButton:disabled { color: #55575d; }
 #modelMenu QListWidget { background: transparent; border: none; color: #c8cad0; font-size: 12px; }
 #modelMenu QListWidget::item { padding: 3px 6px; border-radius: 4px; }
 #modelMenu QListWidget::item:selected { background: #26282e; color: #ffffff; }
+#modelMenu QScrollBar:vertical { background: transparent; border: none; width: 10px; margin: 0; }
+#modelMenu QScrollBar::handle:vertical { background: #3a3d45; border-radius: 5px; min-height: 24px; }
+#modelMenu QScrollBar::handle:vertical:hover { background: #4a4e58; }
+#modelMenu QScrollBar::add-line, #modelMenu QScrollBar::sub-line { width: 0; height: 0; }
+#modelMenu QScrollBar::add-page, #modelMenu QScrollBar::sub-page { background: transparent; }
 #sep { color: #3a3c42; }
 #attachChip { background: #26282e; border: 1px solid #33353c; border-radius: 6px; }
 #attachChip QLabel { color: #c8cad0; font-size: 11px; }
@@ -151,6 +156,11 @@ QToolButton:disabled { color: #b0b2b8; }
 #modelMenu QListWidget { background: transparent; border: none; color: #4a4d55; font-size: 12px; }
 #modelMenu QListWidget::item { padding: 3px 6px; border-radius: 4px; }
 #modelMenu QListWidget::item:selected { background: #e8e8ec; color: #1b1d22; }
+#modelMenu QScrollBar:vertical { background: transparent; border: none; width: 10px; margin: 0; }
+#modelMenu QScrollBar::handle:vertical { background: #c9c4b4; border-radius: 5px; min-height: 24px; }
+#modelMenu QScrollBar::handle:vertical:hover { background: #b3ae9e; }
+#modelMenu QScrollBar::add-line, #modelMenu QScrollBar::sub-line { width: 0; height: 0; }
+#modelMenu QScrollBar::add-page, #modelMenu QScrollBar::sub-page { background: transparent; }
 #sep { color: #d0d0d5; }
 #attachChip { background: #f2f2f4; border: 1px solid #d8d8dd; border-radius: 6px; }
 #attachChip QLabel { color: #4a4d55; font-size: 11px; }

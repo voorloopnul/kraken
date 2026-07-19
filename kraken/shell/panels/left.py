@@ -35,12 +35,22 @@ QListWidget { background: transparent; border: none; font-size: 13px; }
 QListWidget::item { padding: 6px 8px; border-radius: 6px; }
 QListWidget::item:hover { background: #2c2e35; }
 QListWidget::item:selected { background: #1c2f50; }
+QScrollBar:vertical { background: transparent; border: none; width: 10px; margin: 0; }
+QScrollBar::handle:vertical { background: #3a3d45; border-radius: 5px; min-height: 24px; }
+QScrollBar::handle:vertical:hover { background: #4a4e58; }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 """,
     "light": """
 QListWidget { background: transparent; border: none; font-size: 13px; }
 QListWidget::item { padding: 6px 8px; border-radius: 6px; }
 QListWidget::item:hover { background: #e8e8ec; }
 QListWidget::item:selected { background: #dce8fb; }
+QScrollBar:vertical { background: transparent; border: none; width: 10px; margin: 0; }
+QScrollBar::handle:vertical { background: #c9c4b4; border-radius: 5px; min-height: 24px; }
+QScrollBar::handle:vertical:hover { background: #b3ae9e; }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 """,
 }
 
