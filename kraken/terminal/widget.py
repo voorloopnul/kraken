@@ -15,6 +15,7 @@ import shutil
 import signal
 import struct
 import termios
+import time
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QSocketNotifier, Qt, QTimer
@@ -291,15 +292,42 @@ class GhosttyTerminalWidget(QWidget):
         except OSError:
             pass
 
+    def _reap_child(self, escalate: bool) -> None:
+        """Collect the shell's exit status so a torn-down terminal never leaves
+        a zombie. A bare waitpid(WNOHANG) races the child's exit — right after
+        the master fd hangs up (or a SIGHUP is delivered) the process is dying
+        but not yet reapable, so WNOHANG returns (0, 0) and the status is never
+        collected. Retry briefly instead; when `escalate` is set (deliberate
+        teardown), promote a stubborn shell to SIGKILL rather than wait forever.
+        Bounded so it can't hang the GUI thread if the child somehow lingers."""
+        deadline = time.monotonic() + 1.0
+        killed = False
+        while True:
+            try:
+                pid, _ = os.waitpid(self._child_pid, os.WNOHANG)
+            except ChildProcessError:
+                return  # already reaped
+            if pid != 0:
+                return  # reaped
+            now = time.monotonic()
+            if now >= deadline:
+                if escalate and not killed:
+                    killed = True
+                    deadline = now + 1.0
+                    try:
+                        os.kill(self._child_pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        return
+                else:
+                    return  # give up rather than block teardown indefinitely
+            time.sleep(0.005)
+
     def _on_child_exit(self) -> None:
         if self._child_exited:
             return
         self._child_exited = True
         self._notifier.setEnabled(False)
-        try:
-            os.waitpid(self._child_pid, os.WNOHANG)
-        except ChildProcessError:
-            pass
+        self._reap_child(escalate=False)
         msg = b"\r\n\x1b[90m[process exited]\x1b[0m\r\n"
         arr = (ctypes.c_uint8 * len(msg)).from_buffer_copy(msg)
         g.lib.ghostty_terminal_vt_write(self._term, arr, len(msg))
@@ -311,9 +339,10 @@ class GhosttyTerminalWidget(QWidget):
             self._notifier.setEnabled(False)
             try:
                 os.kill(self._child_pid, signal.SIGHUP)
-                os.waitpid(self._child_pid, os.WNOHANG)
-            except (ProcessLookupError, ChildProcessError):
+            except ProcessLookupError:
                 pass
+            else:
+                self._reap_child(escalate=True)
             try:
                 os.close(self._master_fd)
             except OSError:
