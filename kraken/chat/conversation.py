@@ -87,16 +87,17 @@ _PALETTE = {
 # not pick up the inline-code chip, so the pass below skips it by this flag.
 _TOOL_DETAIL_PROPERTY = QTextFormat.Property.UserProperty + 1
 
-# The button is borderless and sits transparent on the code card; its :hover
-# firms up the background as a click affordance.
+# The button is borderless; its background matches the code card (_PALETTE
+# code_bg) so it reads as flat against the card yet still hides the first code
+# line it overlaps. Its :hover firms up the background as a click affordance.
 _COPY_STYLES = {
     "dark": """
-QToolButton { background: transparent; border: none; border-radius: 4px;
+QToolButton { background: #17181d; border: none; border-radius: 4px;
               color: #7d818c; font-size: 11px; padding: 2px 8px; }
 QToolButton:hover { background: #2c2e35; color: #ffffff; }
 """,
     "light": """
-QToolButton { background: transparent; border: none; border-radius: 4px;
+QToolButton { background: #f0ebdc; border: none; border-radius: 4px;
               color: #85887f; font-size: 11px; padding: 2px 8px; }
 QToolButton:hover { background: #efeadb; color: #1b1d22; }
 """,
@@ -237,7 +238,8 @@ class ConversationView(QTextBrowser):
         self._user_ranges: list[tuple[int, int]] = []
         self._copy_buttons: list[QToolButton] = []
         self.verticalScrollBar().valueChanged.connect(self._layout_copy_buttons)
-        self._apply_frame_margins()
+        # set_theme() below repaints (clearing and re-applying the frame
+        # margins), so no separate _apply_frame_margins() is needed here.
         self.set_theme(DEFAULT_THEME)
 
     def _apply_frame_margins(self) -> None:
@@ -269,6 +271,9 @@ class ConversationView(QTextBrowser):
         self._assistant_dirty = False
         scroll = self.verticalScrollBar().value()
         self.clear()
+        # clear() resets the root frame to Qt's default margins, dropping the
+        # top/bottom space that keeps the first/last bubble from clipping.
+        self._apply_frame_margins()
         self._last_kind = None
         self._assistant_start = None
         self._user_ranges = []

@@ -170,6 +170,10 @@ class GhosttyTerminalWidget(QWidget):
         self._colors = g.RenderStateColors(size=ctypes.sizeof(g.RenderStateColors))
         self._cursor: tuple[int, int, int] | None = None
         self._child_exited = False
+        # Set once the shell's exit status has actually been collected. Distinct
+        # from `_child_exited` (which only means "stop touching the pty"): a reap
+        # can give up before the child is reapable, and teardown must retry.
+        self._child_reaped = False
 
         # Selection gesture engine (click/drag/word/line semantics live in
         # libghostty; we only feed it grid refs and pixel positions).
@@ -299,24 +303,36 @@ class GhosttyTerminalWidget(QWidget):
         but not yet reapable, so WNOHANG returns (0, 0) and the status is never
         collected. Retry briefly instead; when `escalate` is set (deliberate
         teardown), promote a stubborn shell to SIGKILL rather than wait forever.
-        Bounded so it can't hang the GUI thread if the child somehow lingers."""
-        deadline = time.monotonic() + 1.0
+        Runs on the GUI thread, so the waits are kept short: a SIGHUP-ignoring
+        shell is escalated after a brief grace rather than a full second, and
+        the whole thing is bounded so it can't hang the GUI if the child
+        lingers (e.g. stuck in uninterruptible sleep)."""
+        if self._child_reaped:
+            return
+        # A child that already hit EOF (escalate=False) is dying and reaps in a
+        # poll or two; a live shell being torn down (escalate=True) gets only a
+        # short grace before SIGKILL, since waiting longer won't move a shell
+        # that is ignoring the hangup.
+        deadline = time.monotonic() + (0.2 if escalate else 1.0)
         killed = False
         while True:
             try:
                 pid, _ = os.waitpid(self._child_pid, os.WNOHANG)
             except ChildProcessError:
+                self._child_reaped = True
                 return  # already reaped
             if pid != 0:
+                self._child_reaped = True
                 return  # reaped
             now = time.monotonic()
             if now >= deadline:
                 if escalate and not killed:
                     killed = True
-                    deadline = now + 1.0
+                    deadline = now + 0.2
                     try:
                         os.kill(self._child_pid, signal.SIGKILL)
                     except ProcessLookupError:
+                        self._child_reaped = True
                         return
                 else:
                     return  # give up rather than block teardown indefinitely
@@ -340,7 +356,7 @@ class GhosttyTerminalWidget(QWidget):
             try:
                 os.kill(self._child_pid, signal.SIGHUP)
             except ProcessLookupError:
-                pass
+                self._child_reaped = True  # already gone; nothing to collect
             else:
                 self._reap_child(escalate=True)
             try:
@@ -348,6 +364,11 @@ class GhosttyTerminalWidget(QWidget):
             except OSError:
                 pass
             self._child_exited = True
+        elif not self._child_reaped:
+            # The child exited on its own but an earlier (non-escalating) reap
+            # gave up before it became reapable; finish collecting it now so it
+            # can't linger as a zombie for the life of the process.
+            self._reap_child(escalate=True)
         if self._term:
             for handle in self._gesture_events.values():
                 g.lib.ghostty_selection_gesture_event_free(handle)
