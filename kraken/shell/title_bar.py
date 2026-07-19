@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kraken.shell.async_run import run_async
 from kraken.ui.themes import DEFAULT_THEME
 
 if TYPE_CHECKING:
@@ -202,6 +203,11 @@ class TitleBar(QWidget):
         # Set for a remote workspace: git runs on the host, and the folder
         # label shows the remote destination rather than the local anchor.
         self._remote: "RemoteTarget | None" = None
+        # Cached remote branch state, filled by an async fetch (a remote git
+        # call would block the UI). _branch_gen invalidates it on each switch.
+        self._remote_branch: str = ""
+        self._remote_branch_list: list[str] = []
+        self._branch_gen = 0
         self._maximized = False
 
         # Shows/hides the History (left) panel; MainWindow keeps it in sync
@@ -278,6 +284,10 @@ class TitleBar(QWidget):
     ) -> None:
         self._workspace_path = path or None
         self._remote = remote
+        # New workspace: drop any in-flight/cached remote branch info.
+        self._branch_gen += 1
+        self._remote_branch = ""
+        self._remote_branch_list = []
         if remote is not None:
             self.folder_label.setText(f"{remote.host.destination}:{remote.path}")
         else:
@@ -312,7 +322,8 @@ class TitleBar(QWidget):
         return ["git", "-C", self._workspace_path, *git_args]
 
     def _remote_git(self, git_args: list[str]) -> str:
-        """stdout of a remote git command (stripped), or "" on failure."""
+        """stdout of a remote git command (stripped), or "" on failure. Blocking
+        — call only from a worker thread (see _fetch_branch_info)."""
         try:
             result = subprocess.run(
                 self._git_argv(git_args),
@@ -324,23 +335,6 @@ class TitleBar(QWidget):
         except (OSError, subprocess.TimeoutExpired):
             return ""
         return result.stdout.strip() if result.returncode == 0 else ""
-
-    def _current_branch(self) -> str:
-        if self._remote is None:
-            return git_branch(self._workspace_path) if self._workspace_path else ""
-        branch = self._remote_git(["rev-parse", "--abbrev-ref", "HEAD"])
-        if branch == "HEAD":
-            # Detached HEAD: show the short commit hash, matching git_branch()'s
-            # local behavior instead of a blank label.
-            return self._remote_git(["rev-parse", "--short", "HEAD"])
-        return branch
-
-    def _refresh_branch(self) -> None:
-        branch = self._current_branch()
-        self.branch_button.setText(branch)
-        self.branch_button.setVisible(bool(branch))
-
-    # ---- Branch switching ---------------------------------------------------
 
     def _local_branches(self) -> list[str]:
         try:
@@ -359,12 +353,54 @@ class TitleBar(QWidget):
             return []
         return result.stdout.split()
 
+    def _refresh_branch(self) -> None:
+        # Local: a cheap .git/HEAD read, done inline. Remote: fetch off-thread
+        # so the branch lookup can't freeze a workspace switch.
+        if self._remote is None:
+            branch = git_branch(self._workspace_path) if self._workspace_path else ""
+            self.branch_button.setText(branch)
+            self.branch_button.setVisible(bool(branch))
+            return
+        gen = self._branch_gen
+        run_async(
+            self._fetch_branch_info,
+            lambda info, g=gen: self._on_branch_info(g, info),
+            self,
+        )
+
+    def _fetch_branch_info(self) -> tuple[str, list[str]]:
+        """(current branch, local branch list) from the remote. Worker-thread
+        safe: subprocess + parsing only, no Qt."""
+        current = self._remote_git(["rev-parse", "--abbrev-ref", "HEAD"])
+        if current == "HEAD":  # detached: show the short hash, like git_branch()
+            current = self._remote_git(["rev-parse", "--short", "HEAD"])
+        return current, self._local_branches()
+
+    def _on_branch_info(self, gen: int, info) -> None:
+        if gen != self._branch_gen or info is None:
+            return  # superseded by a workspace switch, or the fetch failed
+        current, branches = info
+        self._remote_branch = current
+        self._remote_branch_list = branches
+        self.branch_button.setText(current)
+        self.branch_button.setVisible(bool(current))
+
+    # ---- Branch switching ---------------------------------------------------
+
     def _populate_branch_menu(self) -> None:
-        """Rebuild the dropdown as it opens, so it always lists the repo's
-        current local branches with the checked-out one ticked."""
+        """Rebuild the dropdown as it opens. Local git is read inline; the
+        remote path uses the branch list cached by the last async fetch, so the
+        menu opens instantly instead of blocking on an SSH round trip."""
         self._branch_menu.clear()
-        current = self._current_branch()
-        branches = self._local_branches()
+        if self._remote is not None:
+            current, branches = self._remote_branch, self._remote_branch_list
+            if not branches and not current:
+                self._branch_menu.addAction("Loading…").setEnabled(False)
+                self._refresh_branch()  # fill the cache for the next open
+                return
+        else:
+            current = git_branch(self._workspace_path) if self._workspace_path else ""
+            branches = self._local_branches()
         if not branches:
             self._branch_menu.addAction("No branches").setEnabled(False)
             return
@@ -378,8 +414,17 @@ class TitleBar(QWidget):
                 )
 
     def _switch_branch(self, branch: str) -> None:
+        # Remote checkout is a blocking round trip; run it off-thread.
+        if self._remote is None:
+            self._after_switch(self._run_checkout(branch))
+        else:
+            run_async(lambda: self._run_checkout(branch), self._after_switch, self)
+
+    def _run_checkout(self, branch: str):
+        """Run the checkout; return the CompletedProcess or the exception if it
+        couldn't run. Worker-thread safe (no Qt)."""
         try:
-            result = subprocess.run(
+            return subprocess.run(
                 self._git_argv(["checkout", branch]),
                 capture_output=True,
                 text=True,
@@ -387,13 +432,17 @@ class TitleBar(QWidget):
                 timeout=15 if self._remote is not None else 10,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
-            QMessageBox.warning(self, "Checkout failed", str(exc))
+            return exc
+
+    def _after_switch(self, result) -> None:
+        if isinstance(result, (OSError, subprocess.TimeoutExpired)):
+            QMessageBox.warning(self, "Checkout failed", str(result))
             return
-        if result.returncode != 0:
+        if result is None or result.returncode != 0:
             QMessageBox.warning(
                 self,
                 "Checkout failed",
-                result.stderr.strip() or "git checkout failed",
+                (result.stderr.strip() if result else "") or "git checkout failed",
             )
             return
         self._refresh_branch()

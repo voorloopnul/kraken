@@ -9,8 +9,6 @@ form.
 
 from __future__ import annotations
 
-import subprocess
-
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
@@ -29,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from kraken.agent import remote
+from kraken.shell.async_run import run_command_async
 
 
 class RemoteWorkspaceDialog(QDialog):
@@ -76,8 +75,8 @@ class RemoteWorkspaceDialog(QDialog):
         self._status = QLabel("")
         self._status.setWordWrap(True)
 
-        test_button = QPushButton("Test Connection")
-        test_button.clicked.connect(self._test_connection)
+        self._test_button = QPushButton("Test Connection")
+        self._test_button.clicked.connect(self._test_connection)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -86,7 +85,7 @@ class RemoteWorkspaceDialog(QDialog):
         buttons.rejected.connect(self.reject)
 
         bottom = QHBoxLayout()
-        bottom.addWidget(test_button)
+        bottom.addWidget(self._test_button)
         bottom.addStretch(1)
         bottom.addWidget(buttons)
 
@@ -179,20 +178,27 @@ class RemoteWorkspaceDialog(QDialog):
         if host is None:
             return
         self._status.setText("Testing…")
-        self._status.repaint()
+        # Run the ssh probe off the GUI thread so the dialog stays responsive;
+        # disable the button meanwhile so tests can't stack up.
+        self._test_button.setEnabled(False)
         argv = ["ssh", *host.ssh_base_args(), host.destination, "true"]
-        try:
-            result = subprocess.run(
-                argv, capture_output=True, text=True, errors="replace", timeout=20
-            )
-        except subprocess.TimeoutExpired:
-            self._status.setText("✗ Connection timed out.")
-            return
-        except OSError as exc:
-            self._status.setText(f"✗ Could not run ssh: {exc}")
-            return
-        if result.returncode == 0:
-            self._status.setText(f"✓ Connected to {host.destination}.")
+        destination = host.destination
+        run_command_async(
+            argv,
+            lambda result: self._on_test_result(result, destination),
+            self,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=20,
+        )
+
+    def _on_test_result(self, result, destination: str) -> None:
+        self._test_button.setEnabled(True)
+        if result is None:
+            self._status.setText("✗ Connection failed (timed out or ssh unavailable).")
+        elif result.returncode == 0:
+            self._status.setText(f"✓ Connected to {destination}.")
         else:
             self._status.setText(
                 f"✗ Failed: {result.stderr.strip() or 'ssh exited ' + str(result.returncode)}"
