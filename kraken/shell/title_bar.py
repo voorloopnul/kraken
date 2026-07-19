@@ -311,21 +311,29 @@ class TitleBar(QWidget):
             return self._remote.git_argv(git_args)
         return ["git", "-C", self._workspace_path, *git_args]
 
+    def _remote_git(self, git_args: list[str]) -> str:
+        """stdout of a remote git command (stripped), or "" on failure."""
+        try:
+            result = subprocess.run(
+                self._git_argv(git_args),
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=15,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+        return result.stdout.strip() if result.returncode == 0 else ""
+
     def _current_branch(self) -> str:
-        if self._remote is not None:
-            try:
-                result = subprocess.run(
-                    self._git_argv(["rev-parse", "--abbrev-ref", "HEAD"]),
-                    capture_output=True,
-                    text=True,
-                    errors="replace",
-                    timeout=15,
-                )
-            except (OSError, subprocess.TimeoutExpired):
-                return ""
-            branch = result.stdout.strip() if result.returncode == 0 else ""
-            return "" if branch == "HEAD" else branch
-        return git_branch(self._workspace_path) if self._workspace_path else ""
+        if self._remote is None:
+            return git_branch(self._workspace_path) if self._workspace_path else ""
+        branch = self._remote_git(["rev-parse", "--abbrev-ref", "HEAD"])
+        if branch == "HEAD":
+            # Detached HEAD: show the short commit hash, matching git_branch()'s
+            # local behavior instead of a blank label.
+            return self._remote_git(["rev-parse", "--short", "HEAD"])
+        return branch
 
     def _refresh_branch(self) -> None:
         branch = self._current_branch()

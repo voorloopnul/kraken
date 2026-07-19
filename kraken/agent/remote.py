@@ -51,6 +51,13 @@ def ssh_extension_path() -> str:
     _EXT_DIR.mkdir(parents=True, exist_ok=True)
     dest = _EXT_DIR / "ssh_remote.ts"
     data = files("kraken.agent.assets").joinpath("ssh_remote.ts").read_bytes()
+    # Rewrite only when the bundled version changed, so the common case (agent
+    # starts on every session) is a cheap read rather than a disk write.
+    try:
+        if dest.read_bytes() == data:
+            return str(dest)
+    except OSError:
+        pass
     dest.write_bytes(data)
     return str(dest)
 
@@ -100,7 +107,11 @@ class SshHost:
         args = [
             "-p", str(self.port),
             "-o", "ControlMaster=auto",
-            "-o", f"ControlPath={_CONTROL_DIR}/cm-%r@%h:%p",
+            # %C is a short fixed-length hash of the connection tuple, so the
+            # socket path stays well under the ~104-char AF_UNIX limit even for
+            # long home dirs, usernames, or hostnames (a literal %r@%h:%p can
+            # overflow it and make ssh disable multiplexing).
+            "-o", f"ControlPath={_CONTROL_DIR}/cm-%C",
             "-o", "ControlPersist=120",
             # Key-based auth only: never block the UI on an interactive prompt.
             "-o", "BatchMode=yes",
@@ -209,10 +220,14 @@ def add_remote_workspace(host_id: str, path: str) -> str:
             Path(anchor).mkdir(parents=True, exist_ok=True)
             return anchor
 
+    # The slug is derived from host+path, so a leftover anchor dir with this
+    # name is from this same workspace (removed earlier, its folder kept); reuse
+    # it so a re-add resurfaces the stored sessions. Only bump the name when the
+    # slug is an *active* key for a different workspace.
     base = f"{_slugify(host_id)}-{_slugify(path)}"
     anchor = REMOTES_DIR / base
     n = 2
-    while str(anchor) in remotes or anchor.exists():
+    while str(anchor) in remotes:
         anchor = REMOTES_DIR / f"{base}-{n}"
         n += 1
     anchor.mkdir(parents=True, exist_ok=True)

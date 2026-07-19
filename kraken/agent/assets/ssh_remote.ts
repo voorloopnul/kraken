@@ -64,10 +64,10 @@ function shq(s: string): string {
 	return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
-function sshExec(cfg: SshConfig, command: string): Promise<Buffer> {
+function sshExec(cfg: SshConfig, command: string, input?: Buffer): Promise<Buffer> {
 	return new Promise((resolve, reject) => {
 		const child = spawn("ssh", [...cfg.baseArgs, cfg.destination, command], {
-			stdio: ["ignore", "pipe", "pipe"],
+			stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
 		});
 		const out: Buffer[] = [];
 		const err: Buffer[] = [];
@@ -81,6 +81,10 @@ function sshExec(cfg: SshConfig, command: string): Promise<Buffer> {
 				resolve(Buffer.concat(out));
 			}
 		});
+		if (input !== undefined) {
+			child.stdin.on("error", reject); // e.g. remote closed the pipe early
+			child.stdin.end(input);
+		}
 	});
 }
 
@@ -125,9 +129,11 @@ function remoteReadOps(cfg: SshConfig, toRemote: (p: string) => string): ReadOpe
 function remoteWriteOps(cfg: SshConfig, toRemote: (p: string) => string): WriteOperations {
 	return {
 		writeFile: async (p, content) => {
+			// Stream the base64 over ssh stdin (not as an argv word): a large
+			// file would blow past ARG_MAX if embedded in the command. base64
+			// keeps arbitrary bytes intact through the shell.
 			const b64 = Buffer.from(content).toString("base64");
-			// base64 round-trip keeps arbitrary bytes intact through the shell.
-			await sshExec(cfg, `printf %s ${shq(b64)} | base64 -d > ${shq(toRemote(p))}`);
+			await sshExec(cfg, `base64 -d > ${shq(toRemote(p))}`, Buffer.from(b64));
 		},
 		mkdir: (dir) => sshExec(cfg, `mkdir -p ${shq(toRemote(dir))}`).then(() => {}),
 	};
@@ -143,9 +149,16 @@ function remoteBashOps(cfg: SshConfig, toRemote: (p: string) => string): BashOpe
 	return {
 		exec: (command, cwd, { onData, signal, timeout }) =>
 			new Promise((resolve, reject) => {
-				// Run inside the remote cwd, through a login shell so PATH is set.
+				// Run inside the remote cwd, through the remote user's own login
+				// shell so PATH (nvm, ~/.local/bin, …) is populated the way an
+				// interactive session would have it. `${SHELL}` is left for the
+				// remote shell to expand (escaped here so JS doesn't), so this
+				// works whether the host uses bash, zsh, or busybox ash rather
+				// than assuming bash is installed.
 				const inner = `cd ${shq(toRemote(cwd))} && ${command}`;
-				const remote = `bash -lc ${shq(inner)}`;
+				// Fallback shell only applies when $SHELL is unset; bash is used
+				// (not /bin/sh) because dash rejects the -l login flag.
+				const remote = `\${SHELL:-/bin/bash} -lc ${shq(inner)}`;
 				const child = spawn("ssh", [...cfg.baseArgs, cfg.destination, remote], {
 					stdio: ["ignore", "pipe", "pipe"],
 				});
