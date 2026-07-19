@@ -158,6 +158,11 @@ class PiAgent(QObject):
             callback,
         )
 
+    def set_thinking_level(
+        self, level: str, callback: Callable[[dict], None] | None = None
+    ) -> None:
+        self.send({"type": "set_thinking_level", "level": level}, callback)
+
     def get_messages(self, callback: Callable[[dict], None]) -> None:
         self.send({"type": "get_messages"}, callback)
 

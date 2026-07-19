@@ -40,10 +40,35 @@ def _files_title(files: list[str]) -> str:
     return first
 
 
+# Pi's thinking levels, low to high. The extended two (xhigh, max) only appear
+# when a model's thinkingLevelMap opts into them.
+_THINKING_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+_THINKING_STANDARD = {"off", "minimal", "low", "medium", "high"}
+
+
+def _available_levels(model: dict) -> list[str]:
+    """The thinking levels a model exposes, per its `thinkingLevelMap` (see
+    Pi's models.md): a mapped string means supported, `null` means hidden, and
+    an omitted key means the standard levels through `high` are supported while
+    `xhigh`/`max` are not. `[]` when the model has no reasoning at all."""
+    if not model.get("reasoning"):
+        return []
+    level_map = model.get("thinkingLevelMap") or {}
+    levels = []
+    for level in _THINKING_ORDER:
+        if level in level_map:
+            if level_map[level] is not None:
+                levels.append(level)
+        elif level in _THINKING_STANDARD:
+            levels.append(level)
+    return levels
+
+
 class SessionController(QObject):
     streaming_changed = Signal(bool)  # agent started (True) / finished (False)
     path_known = Signal(str)  # the session's on-disk file path, once discovered
     model_known = Signal(str)  # the footer label, whenever the model resolves
+    thinking_known = Signal(str)  # the thinking level, whenever it resolves ("" if none)
     title_known = Signal(str)  # the title, once a loaded session's messages arrive
 
     def __init__(
@@ -60,6 +85,11 @@ class SessionController(QObject):
         self.model_provider: str | None = None
         self.model_id: str | None = None
         self._last_model_label: str | None = None  # last label emitted
+        # Reasoning/thinking effort. `thinking_levels` is None until the agent
+        # reports the model's supported levels; [] means the model has none.
+        self.thinking_level: str | None = None
+        self.thinking_levels: list[str] | None = None
+        self._last_thinking_label: str | None = None
         self.first_prompt: str | None = None  # first user message; the title
         self.conversation = ConversationView()
         self.conversation.set_theme(theme_name)
@@ -158,10 +188,16 @@ class SessionController(QObject):
         """
         if not self.session_path:
             return
-        messages, model = read_transcript(self.session_path)
+        messages, model, thinking = read_transcript(self.session_path)
         self.conversation.render_messages(messages)
         if model:
             self._set_current_model(model)
+        if thinking:
+            # Supported levels aren't on disk (no model object); leave
+            # thinking_levels unknown so the footer still shows this level, and
+            # the agent fills in the full list on the first state fetch.
+            self.thinking_level = thinking
+            self._emit_thinking()
         # A loaded session's title comes from its stored messages, the same way
         # History derives it (first user message).
         if self.first_prompt is None:
@@ -174,17 +210,25 @@ class SessionController(QObject):
                         break
 
     def _sync_state(self) -> None:
-        """Learn the session file path and model name from the live agent."""
+        """Learn the session file path, model, and thinking level from the live
+        agent."""
+        self.agent.get_state(
+            lambda response: self._absorb_state(response.get("data") or {})
+        )
 
-        def on_state(response: dict) -> None:
-            data = response.get("data") or {}
-            session_file = data.get("sessionFile")
-            if session_file and session_file != self.session_path:
-                self.session_path = session_file
-                self.path_known.emit(session_file)
-            self._set_current_model(data.get("model") or {})
-
-        self.agent.get_state(on_state)
+    def _absorb_state(self, data: dict) -> None:
+        """Fold one get_state payload into our cached model/path/thinking."""
+        session_file = data.get("sessionFile")
+        if session_file and session_file != self.session_path:
+            self.session_path = session_file
+            self.path_known.emit(session_file)
+        model = data.get("model") or {}
+        self.thinking_levels = _available_levels(model)
+        level = data.get("thinkingLevel")
+        if level:
+            self.thinking_level = level
+        self._set_current_model(model)
+        self._emit_thinking()
 
     @property
     def model_label(self) -> str | None:
@@ -204,6 +248,46 @@ class SessionController(QObject):
         if label and label != self._last_model_label:
             self._last_model_label = label
             self.model_known.emit(label)
+
+    # ---- Thinking / effort ------------------------------------------------
+
+    @property
+    def thinking_label(self) -> str | None:
+        """Footer text for the current effort, or None when the model has no
+        thinking levels (a confirmed-empty list) so the selector can hide."""
+        if self.thinking_levels == []:
+            return None
+        return self.thinking_level
+
+    def _emit_thinking(self) -> None:
+        label = self.thinking_label or ""
+        if label != self._last_thinking_label:
+            self._last_thinking_label = label
+            self.thinking_known.emit(label)
+
+    def request_thinking(self, callback) -> None:
+        """Fetch the current model's supported thinking levels and selection;
+        `callback(levels, current_level)`. Starts the agent if needed, like the
+        model picker does."""
+
+        def on_state(response: dict) -> None:
+            self._absorb_state(response.get("data") or {})
+            callback(self.thinking_levels or [], self.thinking_level)
+
+        self.agent.get_state(on_state)
+
+    def set_thinking_level(self, level: str) -> None:
+        def on_response(response: dict) -> None:
+            if not response.get("success"):
+                self.conversation.add_info(
+                    f"Effort switch failed: {response.get('error', 'unknown error')}",
+                    error=True,
+                )
+                return
+            self.thinking_level = level
+            self._emit_thinking()
+
+        self.agent.set_thinking_level(level, on_response)
 
     # ---- Model selection --------------------------------------------------
 

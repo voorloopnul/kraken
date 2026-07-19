@@ -252,6 +252,52 @@ class _ModelPopup(QFrame):
         return super().eventFilter(obj, event)
 
 
+class _EffortPopup(QFrame):
+    """Small reasoning-effort picker for the chat footer: the current model's
+    supported thinking levels, current marked. Closes on outside click, Esc,
+    or pick. Reuses the model menu's styling via the shared object name."""
+
+    selected = Signal(str)  # thinking level
+
+    def __init__(self, levels: list[str], current: str | None, parent: QWidget):
+        super().__init__(parent, Qt.WindowType.Popup)
+        self.setObjectName("modelMenu")
+        self._list = QListWidget()
+        self._list.itemClicked.connect(self._choose)
+        self._list.itemActivated.connect(self._choose)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(4)
+        layout.addWidget(self._list)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+
+        current_row = None
+        for level in levels:
+            mark = "✓ " if level == current else "   "
+            item = QListWidgetItem(f"{mark}{level.title()}")
+            item.setData(Qt.ItemDataRole.UserRole, level)
+            self._list.addItem(item)
+            if level == current:
+                current_row = self._list.count() - 1
+        if self._list.count():
+            self._list.setCurrentRow(current_row if current_row is not None else 0)
+        self.setFixedWidth(180)
+        self.setFixedHeight(min(max(self._list.count(), 1), 7) * 26 + 12)
+        self._list.setFocus()
+
+    def _choose(self, item: QListWidgetItem) -> None:
+        level = item.data(Qt.ItemDataRole.UserRole)
+        self.close()
+        self.selected.emit(level)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape:
+            self.close()
+            return
+        super().keyPressEvent(event)
+
+
 class ChatInput(QFrame):
     """The prompt box; Send (or Ctrl+Enter) emits `submitted` and clears."""
 
@@ -265,6 +311,11 @@ class ChatInput(QFrame):
     model_menu_requested = Signal()
     # (provider, model_id) — the user picked a model from the menu.
     model_selected = Signal(str, str)
+    # The effort button was clicked; the owner fetches the model's thinking
+    # levels and calls show_effort_menu with them.
+    effort_menu_requested = Signal()
+    # The user picked a reasoning effort level from the menu.
+    effort_selected = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -303,6 +354,10 @@ class ChatInput(QFrame):
         self._model = tool_button("Model  ⌄")
         self._model.setToolTip("Switch model")
         self._model.clicked.connect(self.model_menu_requested)
+        self._effort = tool_button("Effort  ⌄")
+        self._effort.setToolTip("Reasoning effort")
+        self._effort.clicked.connect(self.effort_menu_requested)
+        self._effort_sep = separator()
         self._mode = tool_button("Ask  ⌄")
         self._send = tool_button("Send")
         self._send.setEnabled(False)
@@ -314,6 +369,8 @@ class ChatInput(QFrame):
         footer.addWidget(self._attach)
         footer.addWidget(separator())
         footer.addWidget(self._model)
+        footer.addWidget(self._effort_sep)
+        footer.addWidget(self._effort)
         footer.addStretch(1)
         footer.addWidget(self._mode)
         footer.addWidget(separator())
@@ -472,6 +529,33 @@ class ChatInput(QFrame):
         y = corner.y() - popup.height() - 4
         if y < screen.top():
             y = corner.y() + self._model.height() + 4
+        popup.move(x, y)
+        popup.show()
+
+    def set_effort_label(self, level: str | None, supported: bool = True) -> None:
+        """Show the current effort on the button. `supported=False` hides the
+        selector entirely (the model has no thinking levels); otherwise a None
+        level shows the placeholder until the level is known."""
+        self._effort.setVisible(supported)
+        self._effort_sep.setVisible(supported)
+        self._effort.setText(f"{level.title()}  ⌄" if level else "Effort  ⌄")
+
+    def notify_effort(self, text: str) -> None:
+        """Transient tooltip at the effort button — feedback for when the menu
+        can't open (e.g. the model has no thinking levels)."""
+        pos = self._effort.mapToGlobal(self._effort.rect().center())
+        QToolTip.showText(pos, text, self._effort)
+
+    def show_effort_menu(self, levels: list[str], current: str | None) -> None:
+        """Pop the reasoning-effort list at the effort button."""
+        popup = _EffortPopup(levels, current, self)
+        popup.selected.connect(self.effort_selected)
+        corner = self._effort.mapToGlobal(QPoint(0, 0))
+        screen = self._effort.screen().availableGeometry()
+        x = min(corner.x(), screen.right() - popup.width())
+        y = corner.y() - popup.height() - 4
+        if y < screen.top():
+            y = corner.y() + self._effort.height() + 4
         popup.move(x, y)
         popup.show()
 

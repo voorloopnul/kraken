@@ -152,6 +152,8 @@ class WorkspaceView(QWidget):
         self.center_panel.chat.submitted.connect(self._on_prompt)
         self.center_panel.chat.model_menu_requested.connect(self._on_model_menu)
         self.center_panel.chat.model_selected.connect(self._on_model_selected)
+        self.center_panel.chat.effort_menu_requested.connect(self._on_effort_menu)
+        self.center_panel.chat.effort_selected.connect(self._on_effort_selected)
         self.center_panel.stop_button.clicked.connect(self._on_stop)
         self.left_panel.session_selected.connect(self._load_session)
         self.left_panel.new_session_requested.connect(self._new_session)
@@ -178,6 +180,9 @@ class WorkspaceView(QWidget):
         )
         controller.model_known.connect(
             lambda name, c=controller: self._on_model_known(c, name)
+        )
+        controller.thinking_known.connect(
+            lambda _level, c=controller: self._on_thinking_known(c)
         )
         # A loaded session learns its title asynchronously; resyncing
         # refreshes the History row and the window title bar.
@@ -208,6 +213,7 @@ class WorkspaceView(QWidget):
         self.center_panel.set_focused_conversation(controller.conversation)
         self.center_panel.set_busy(controller.is_streaming)
         self.center_panel.chat.set_model_label(controller.model_label)
+        self._apply_effort(controller)
         # Retire the session we're leaving unless it's still streaming (then it
         # stays live in the background so you can flip back and watch it).
         if previous is not None and previous is not controller and not previous.is_streaming:
@@ -276,6 +282,38 @@ class WorkspaceView(QWidget):
     def _on_model_selected(self, provider: str, model_id: str) -> None:
         if self.focused is not None:
             self.focused.set_model(provider, model_id)
+
+    def _on_effort_menu(self) -> None:
+        if self.focused is None:
+            return
+        controller = self.focused
+
+        def show(levels: list, current: str | None) -> None:
+            # The fetch is async; only act if this session is still on screen.
+            if controller is not self.focused:
+                return
+            if levels:
+                self.center_panel.chat.show_effort_menu(levels, current)
+            else:
+                self.center_panel.chat.notify_effort(
+                    "This model has no reasoning levels"
+                )
+
+        controller.request_thinking(show)
+
+    def _on_effort_selected(self, level: str) -> None:
+        if self.focused is not None:
+            self.focused.set_thinking_level(level)
+
+    def _apply_effort(self, controller: SessionController) -> None:
+        # Hide the selector only once we've confirmed the model has no levels
+        # (empty list); an unknown (None) state still shows the placeholder.
+        supported = controller.thinking_levels != []
+        self.center_panel.chat.set_effort_label(controller.thinking_level, supported)
+
+    def _on_thinking_known(self, controller: SessionController) -> None:
+        if controller is self.focused:
+            self._apply_effort(controller)
 
     def _new_session(self) -> None:
         # Reuse the current session if it's already a fresh, unused one.

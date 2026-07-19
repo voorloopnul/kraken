@@ -122,18 +122,21 @@ def sessions_for(cwd: str, root: Path | None = None) -> list[PiSession]:
     return sessions
 
 
-def read_transcript(path: Path | str) -> tuple[list[dict], dict | None]:
-    """A session's stored messages plus its last selected model, read straight
-    off disk so viewing a past session needs no live pi process.
+def read_transcript(path: Path | str) -> tuple[list[dict], dict | None, str | None]:
+    """A session's stored messages, its last selected model, and its last
+    thinking level — read straight off disk so viewing a past session needs no
+    live pi process.
 
     The message dicts are already in the shape ConversationView.render_messages
     consumes (pi writes the same objects to the session file that it returns
     over RPC), so they're returned verbatim. The model is `{provider, id}` from
     the most recent model_change/assistant message, or None; there's no friendly
     name on disk, so the footer shows the id until the agent later resolves it.
+    The thinking level is the last thinking_level_change, or None.
     """
     messages: list[dict] = []
     model: dict | None = None
+    thinking: str | None = None
     try:
         with open(path, encoding="utf-8") as f:
             for line in f:
@@ -150,6 +153,8 @@ def read_transcript(path: Path | str) -> tuple[list[dict], dict | None]:
                             model = {"provider": message["provider"], "id": message.get("model")}
                 elif etype == "model_change" and event.get("provider"):
                     model = {"provider": event["provider"], "id": event.get("modelId")}
+                elif etype == "thinking_level_change" and event.get("thinkingLevel"):
+                    thinking = event["thinkingLevel"]
     except OSError:
         pass
-    return messages, model
+    return messages, model, thinking
