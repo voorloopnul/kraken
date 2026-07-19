@@ -44,6 +44,12 @@ _INVERSE = 16
 _FAINT = 32
 _INVISIBLE = 64
 
+# Lines of off-screen history each terminal keeps. libghostty holds this in
+# C-side memory per terminal (cols × cells per line), so it's a direct
+# per-terminal memory cost; 5k lines is plenty of scrollback while roughly
+# halving that buffer versus the old 10k.
+_MAX_SCROLLBACK = 5_000
+
 
 def _check(result: int, what: str) -> None:
     if result != g.SUCCESS:
@@ -132,7 +138,7 @@ class GhosttyTerminalWidget(QWidget):
         # libghostty handles
         self._term = ctypes.c_void_p()
         opts = g.TerminalOptions(
-            cols=self._cols, rows=self._rows_count, max_scrollback=10_000
+            cols=self._cols, rows=self._rows_count, max_scrollback=_MAX_SCROLLBACK
         )
         _check(g.lib.ghostty_terminal_new(None, ctypes.byref(self._term), opts), "terminal_new")
 

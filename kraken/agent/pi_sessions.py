@@ -120,3 +120,36 @@ def sessions_for(cwd: str, root: Path | None = None) -> list[PiSession]:
             sessions.append(_load_session(path, header))
     sessions.sort(key=lambda s: s.started, reverse=True)
     return sessions
+
+
+def read_transcript(path: Path | str) -> tuple[list[dict], dict | None]:
+    """A session's stored messages plus its last selected model, read straight
+    off disk so viewing a past session needs no live pi process.
+
+    The message dicts are already in the shape ConversationView.render_messages
+    consumes (pi writes the same objects to the session file that it returns
+    over RPC), so they're returned verbatim. The model is `{provider, id}` from
+    the most recent model_change/assistant message, or None; there's no friendly
+    name on disk, so the footer shows the id until the agent later resolves it.
+    """
+    messages: list[dict] = []
+    model: dict | None = None
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                etype = event.get("type")
+                if etype == "message":
+                    message = event.get("message")
+                    if isinstance(message, dict):
+                        messages.append(message)
+                        if message.get("role") == "assistant" and message.get("provider"):
+                            model = {"provider": message["provider"], "id": message.get("model")}
+                elif etype == "model_change" and event.get("provider"):
+                    model = {"provider": event["provider"], "id": event.get("modelId")}
+    except OSError:
+        pass
+    return messages, model

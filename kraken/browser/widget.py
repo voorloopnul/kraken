@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QUrl
+from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QToolButton, QVBoxLayout, QWidget
 
@@ -119,6 +120,31 @@ class BrowserWidget(QWidget):
     def _update_url(self, url: QUrl) -> None:
         text = url.toString()
         self._url_bar.setText("" if text == "about:blank" else text)
+
+    # ---- Lifecycle -----------------------------------------------------
+
+    # A tab is only ever the visible one when its panel is open and it's the
+    # current tab in the stack; every other tab (background tab, or any tab
+    # while the panel is hidden) is not visible, so freeze it. Qt forces a
+    # visible page to Active and lets a hidden one be Frozen, which suspends
+    # its timers/JS and lets Chromium reclaim work — so we just follow the
+    # widget's own show/hide events.
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._set_lifecycle(QWebEnginePage.LifecycleState.Active)
+
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        self._set_lifecycle(QWebEnginePage.LifecycleState.Frozen)
+
+    def _set_lifecycle(self, state: QWebEnginePage.LifecycleState) -> None:
+        # Guard the teardown path: a hide can arrive as the C++ page is being
+        # destroyed, where touching it raises RuntimeError.
+        try:
+            self.web.page().setLifecycleState(state)
+        except RuntimeError:
+            pass
 
     # ---- Theme ---------------------------------------------------------
 

@@ -127,6 +127,20 @@ class WorkspaceView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(splitter)
 
+        # Panel visibility is per-workspace, not global: a new workspace opens
+        # with only History showing, and the terminal, browser, and git panes
+        # stay closed until opened here — independently of what's open in other
+        # workspaces. Applying the defaults now also keeps the lazy panes
+        # (terminal shell, browser Chromium) from spinning up unopened.
+        self._panel_visible = {
+            "left": True,
+            "browser": False,
+            "git": False,
+            "right": False,
+        }
+        for side, visible in self._panel_visible.items():
+            self.set_panel_visible(side, visible)
+
         # Live sessions (one agent + transcript each). Agents start lazily on
         # the first prompt, so opening a workspace stays instant. `unseen`
         # holds sessions that finished in the background and haven't been
@@ -329,7 +343,11 @@ class WorkspaceView(QWidget):
 
     # ---- Panels ------------------------------------------------------------
 
+    def is_panel_visible(self, side: str) -> bool:
+        return self._panel_visible[side]
+
     def set_panel_visible(self, side: str, visible: bool) -> None:
+        self._panel_visible[side] = visible
         panel = {
             "left": self.left_panel,
             "browser": self.browser_panel,
@@ -370,4 +388,4 @@ class WorkspaceView(QWidget):
     def shutdown(self) -> None:
         for controller in self.controllers:
             controller.stop()
-        self.right_panel.terminals.shutdown_all()
+        self.right_panel.shutdown()
