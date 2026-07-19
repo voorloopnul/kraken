@@ -10,6 +10,7 @@ form.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from kraken.agent import remote
 from kraken.shell.async_run import run_command_async
+from kraken.ui.fonts import MONO_FAMILY, UI_SANS_FAMILY
 
 
 class RemoteWorkspaceDialog(QDialog):
@@ -41,6 +43,14 @@ class RemoteWorkspaceDialog(QDialog):
         self.anchor: str | None = None
         self.setWindowTitle("Edit Remote Workspace" if anchor else "Add Remote Workspace")
         self.setMinimumWidth(440)
+        # Labels, buttons, and status read as prose, so the dialog defaults to
+        # the proportional UI font; the value-entry fields below are switched
+        # back to mono since they hold technical strings (hosts, paths, keys).
+        sans = QFont(self.font())
+        sans.setFamily(UI_SANS_FAMILY)
+        self.setFont(sans)
+        mono = QFont(self.font())
+        mono.setFamily(MONO_FAMILY)
 
         self._host_picker = QComboBox()
         self._name = QLineEdit()
@@ -62,6 +72,18 @@ class RemoteWorkspaceDialog(QDialog):
         identity_layout.addWidget(browse)
         self._path = QLineEdit()
         self._path.setPlaceholderText("/absolute/path/to/project on the remote")
+
+        # The technical fields (things the user copies verbatim from a shell or
+        # ssh_config) stay monospace; labels and buttons keep the UI font.
+        for field in (
+            self._host_picker,
+            self._name,
+            self._hostname,
+            self._user,
+            self._identity,
+            self._path,
+        ):
+            field.setFont(mono)
 
         form = QFormLayout()
         form.addRow("Host", self._host_picker)

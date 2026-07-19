@@ -10,7 +10,7 @@ from math import cos, radians, sin
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
     QMenu,
@@ -19,7 +19,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kraken.ui.fonts import UI_SANS_FAMILY
 from kraken.ui.themes import DEFAULT_THEME
+
+
+def _sans_font(widget: QWidget) -> QFont:
+    """The proportional (Roboto) UI font at the widget's inherited size — used
+    for menu text, which reads as prose rather than code."""
+    font = QFont(widget.font())
+    font.setFamily(UI_SANS_FAMILY)
+    return font
 
 # Remote workspaces carry a left accent bar so they read differently from
 # local folders in the strip.
@@ -172,6 +181,7 @@ class WorkspaceBar(QWidget):
         # The "+" opens a menu: a local folder, or a remote SSH host.
         self.add_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         add_menu = QMenu(self.add_button)
+        add_menu.setFont(_sans_font(self))
         add_menu.addAction("Add Local Folder…").triggered.connect(
             self.add_local_requested
         )
@@ -260,6 +270,7 @@ class WorkspaceBar(QWidget):
         if btn is None:
             return
         menu = QMenu(self)
+        menu.setFont(_sans_font(self))
         if path in self._remote_keys:
             menu.addAction("Edit…").triggered.connect(
                 lambda: self.workspace_edit_requested.emit(path)
