@@ -1,7 +1,7 @@
 """Chat input box: a bordered container with an attachment chip row, a
-multiline prompt field, and a footer row (attach, model selector on the
-left; Ask mode and Send on the right). Emits `submitted` with the text and
-any attached images."""
+multiline prompt field, and a footer row (attach and model selector on the
+left; effort selector and Send on the right). Emits `submitted` with the text
+and any attached images."""
 
 from __future__ import annotations
 
@@ -358,7 +358,6 @@ class ChatInput(QFrame):
         self._effort.setToolTip("Reasoning effort")
         self._effort.clicked.connect(self.effort_menu_requested)
         self._effort_sep = separator()
-        self._mode = tool_button("Ask  ⌄")
         self._send = tool_button("Send")
         self._send.setEnabled(False)
         self._send.clicked.connect(self._submit)
@@ -369,11 +368,9 @@ class ChatInput(QFrame):
         footer.addWidget(self._attach)
         footer.addWidget(separator())
         footer.addWidget(self._model)
-        footer.addWidget(self._effort_sep)
-        footer.addWidget(self._effort)
         footer.addStretch(1)
-        footer.addWidget(self._mode)
-        footer.addWidget(separator())
+        footer.addWidget(self._effort)
+        footer.addWidget(self._effort_sep)
         footer.addWidget(self._send)
 
         # Attachment chips (thumbnail + name + remove) above the text field;
