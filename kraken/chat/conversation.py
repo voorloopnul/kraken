@@ -87,15 +87,17 @@ _PALETTE = {
 # not pick up the inline-code chip, so the pass below skips it by this flag.
 _TOOL_DETAIL_PROPERTY = QTextFormat.Property.UserProperty + 1
 
+# The button is borderless and sits transparent on the code card; its :hover
+# firms up the background as a click affordance.
 _COPY_STYLES = {
     "dark": """
-QToolButton { background: #26282e; border: 1px solid #33353c; border-radius: 4px;
-              color: #9a9da5; font-size: 11px; padding: 2px 8px; }
+QToolButton { background: transparent; border: none; border-radius: 4px;
+              color: #7d818c; font-size: 11px; padding: 2px 8px; }
 QToolButton:hover { background: #2c2e35; color: #ffffff; }
 """,
     "light": """
-QToolButton { background: #faf6ec; border: 1px solid #d8d3c4; border-radius: 4px;
-              color: #5f6269; font-size: 11px; padding: 2px 8px; }
+QToolButton { background: transparent; border: none; border-radius: 4px;
+              color: #85887f; font-size: 11px; padding: 2px 8px; }
 QToolButton:hover { background: #efeadb; color: #1b1d22; }
 """,
 }
@@ -168,6 +170,13 @@ _BUBBLE_PAD_X = 14.0
 _BUBBLE_MIN_LEFT = 48.0       # keeps a bubble from spanning the full width
 _BUBBLE_MARGIN = _BUBBLE_GAP + _BUBBLE_PAD_Y
 
+# Bubbles and code cards paint their interior padding *above* the first block
+# and *below* the last. The first/last block's own top/bottom margin collapses
+# out through the root frame, so it reserves no space and the top bubble/card
+# gets clipped against the viewport top. A fixed top/bottom margin on the root
+# frame guarantees room; it must clear the largest interior pad plus a gap.
+_DOC_MARGIN_Y = _BUBBLE_GAP + max(_BUBBLE_PAD_Y, _CODE_CARD_PAD_Y)
+
 # Lexer lookup is not free; cache per fence language (None = no lexer).
 _LEXERS: dict[str, object] = {}
 
@@ -228,7 +237,17 @@ class ConversationView(QTextBrowser):
         self._user_ranges: list[tuple[int, int]] = []
         self._copy_buttons: list[QToolButton] = []
         self.verticalScrollBar().valueChanged.connect(self._layout_copy_buttons)
+        self._apply_frame_margins()
         self.set_theme(DEFAULT_THEME)
+
+    def _apply_frame_margins(self) -> None:
+        """Reserve fixed vertical space inside the root frame so the first
+        bubble/card isn't clipped at the top (nor the last at the bottom)."""
+        frame = self.document().rootFrame()
+        fmt = frame.frameFormat()
+        fmt.setTopMargin(_DOC_MARGIN_Y)
+        fmt.setBottomMargin(_DOC_MARGIN_Y)
+        frame.setFrameFormat(fmt)
 
     # ---- Theme -----------------------------------------------------------
 
@@ -463,6 +482,7 @@ class ConversationView(QTextBrowser):
         self._flush_timer.stop()
         self._assistant_dirty = False
         self.clear()
+        self._apply_frame_margins()
         self._blocks = []
         self._last_kind = None
         self._assistant_start = None
@@ -744,6 +764,11 @@ class ConversationView(QTextBrowser):
         layout = document.documentLayout()
         scroll = self.verticalScrollBar().value()
         viewport = self.viewport()
+        # Tuck the button into the card's top-right corner, inset equally from
+        # the card's border on both axes so it reads as part of the card. The
+        # card edges are derived exactly as _paint_code_cards draws them.
+        margin = document.documentMargin()
+        inset = 6
         for index, button in enumerate(self._copy_buttons):
             if index >= len(self._code_ranges):
                 button.hide()
@@ -754,8 +779,10 @@ class ConversationView(QTextBrowser):
                 continue
             rect = layout.blockBoundingRect(block)
             button.adjustSize()
-            x = viewport.width() - button.width() - 10
-            y = int(rect.top()) - scroll + 2
+            card_right = viewport.width() - margin
+            card_top = rect.top() - scroll - _CODE_CARD_PAD_Y
+            x = int(card_right - button.width() - inset)
+            y = int(card_top + inset)
             visible = y + button.height() > 0 and y < viewport.height()
             button.move(x, y)
             button.setVisible(visible)
