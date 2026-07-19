@@ -12,6 +12,10 @@ wheels/
 # Build output of packaging/build_pyz.sh
 kraken.pyz
 
+# Build output of packaging/appimage/build_appimage.sh
+Kraken-*.AppImage
+packaging/appimage/tools/
+
 # Vendored ghostty source (see README for build steps)
 vendor/ghostty/
 vendor/toolchain/

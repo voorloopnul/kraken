@@ -1,7 +1,10 @@
 """Git history pane: the workspace repo's commit graph."""
 
+from __future__ import annotations
+
 import html
 import subprocess
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QGuiApplication, QTextDocument
@@ -19,15 +22,19 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kraken.shell.async_run import run_async
 from kraken.shell.panels.base import Card, Panel
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
+
+if TYPE_CHECKING:
+    from kraken.agent.remote import RemoteTarget
 
 # Scrollbars match the conversation panel's external one: a bare rounded
 # handle on a transparent track, no stepper buttons.
 _GIT_LOG_STYLES = {
     "dark": """
 QListWidget { background: transparent; border: none; color: #c8cad0;
-              font-family: monospace; font-size: 11px; }
+              font-family: 'JetBrains Mono', monospace; font-size: 11px; }
 QListWidget::item { padding: 2px 4px; border-radius: 4px; }
 QListWidget::item:hover { background: #2c2e35; }
 QScrollBar:horizontal { background: transparent; border: none; height: 10px; margin: 0; }
@@ -42,7 +49,7 @@ QAbstractScrollArea::corner { background: transparent; border: none; }
 """,
     "light": """
 QListWidget { background: transparent; border: none; color: #4a4d55;
-              font-family: monospace; font-size: 11px; }
+              font-family: 'JetBrains Mono', monospace; font-size: 11px; }
 QListWidget::item { padding: 2px 4px; border-radius: 4px; }
 QListWidget::item:hover { background: #e8e8ec; }
 QScrollBar:horizontal { background: transparent; border: none; height: 10px; margin: 0; }
@@ -120,9 +127,19 @@ class GitPanel(Panel):
 
     _MAX_COMMITS = 200
 
-    def __init__(self, parent: QWidget | None = None, cwd: str | None = None):
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        cwd: str | None = None,
+        remote: "RemoteTarget | None" = None,
+    ):
         super().__init__(parent)
         self._cwd = cwd
+        # When set, git runs on the remote host over SSH instead of on `cwd`.
+        self._remote = remote
+        # Bumped on every refresh; a stale async result (an earlier refresh that
+        # finished after a newer one started) is discarded rather than rendered.
+        self._refresh_gen = 0
         self._theme_name = DEFAULT_THEME
         self._card = Card()
 
@@ -157,10 +174,51 @@ class GitPanel(Panel):
         super().showEvent(event)
         self.refresh()
 
+    def _run_git(self, git_args: list[str], timeout: float, **kwargs):
+        """Run `git <git_args>` in the workspace, locally or on the remote host.
+        Remote calls carry a network round trip (plus a login-shell spawn), so
+        their timeout is widened."""
+        if self._remote is None:
+            argv = ["git", "-C", self._cwd, *git_args]
+        else:
+            argv = self._remote.git_argv(git_args)
+            timeout = max(timeout, 15)
+        return subprocess.run(argv, timeout=timeout, **kwargs)
+
     def refresh(self) -> None:
-        self._list.clear()
         if not self._cwd:
+            self._list.clear()
             return
+        # A remote gather is a blocking SSH round trip; run it off the GUI
+        # thread and render when it returns, so the window never freezes. The
+        # local case stays synchronous — it's fast and instant feedback is nice.
+        self._refresh_gen += 1
+        if self._remote is None:
+            self._render_rows(self._gather_data())
+            return
+        gen = self._refresh_gen
+        self._show_message("Loading…")
+        run_async(
+            self._gather_data,
+            lambda data, g=gen: self._on_gathered(g, data),
+            self,
+        )
+
+    def _show_message(self, message: str) -> None:
+        self._list.clear()
+        item = QListWidgetItem(_mono(message, _GIT_TEXT_COLORS[self._theme_name]))
+        item.setFlags(Qt.ItemFlag.NoItemFlags)
+        self._list.addItem(item)
+
+    def _on_gathered(self, gen: int, data) -> None:
+        # Ignore a result that a newer refresh (or a workspace switch) obsoleted.
+        if gen != self._refresh_gen:
+            return
+        self._render_rows(data)
+
+    def _gather_data(self) -> dict:
+        """Run the git commands and return plain data for _render_rows. No Qt
+        here — this runs on a worker thread for remote workspaces."""
         # Branches, tags, remotes, and HEAD — not --all, which also walks
         # tool-owned refs (editor local-history, agent checkpoints) and shows
         # "history" in repos whose branches have no commits at all. HEAD is
@@ -173,20 +231,19 @@ class GitPanel(Panel):
         # \x1f-separated fields after the graph prefix; continuation lines
         # (pure graph, like "|/") carry no record at all.
         try:
-            result = subprocess.run(
+            result = self._run_git(
                 [
-                    "git", "-C", self._cwd, "log", "--graph", *revs,
+                    "log", "--graph", *revs,
                     "--format=%x1f%h%x1f%H%x1f%d%x1f%s%x1f%an%x1f%ar",
                     f"-{self._MAX_COMMITS}",
                 ],
+                timeout=5,
                 capture_output=True,
                 text=True,
                 errors="replace",
-                timeout=5,
             )
         except (OSError, subprocess.TimeoutExpired):
             result = None
-        text_color = _GIT_TEXT_COLORS[self._theme_name]
         if result is None or result.returncode != 0:
             stderr = result.stderr.lower() if result is not None else ""
             message = (
@@ -194,12 +251,21 @@ class GitPanel(Panel):
                 if "not a git repository" in stderr
                 else "No commits"
             )
-            item = QListWidgetItem(_mono(message, text_color))
+            return {"message": message}
+        return {"stdout": result.stdout, "main_line": self._main_line_hashes()}
+
+    def _render_rows(self, data: dict) -> None:
+        self._list.clear()
+        text_color = _GIT_TEXT_COLORS[self._theme_name]
+        if not data or "stdout" not in data:
+            item = QListWidgetItem(
+                _mono(data.get("message", "No commits") if data else "No commits", text_color)
+            )
             item.setFlags(Qt.ItemFlag.NoItemFlags)
             self._list.addItem(item)
             return
-        main_line = self._main_line_hashes()
-        for line in result.stdout.splitlines():
+        main_line = data["main_line"]
+        for line in data["stdout"].splitlines():
             graph, sep, record = line.partition("\x1f")
             if sep:
                 short_hash, full_hash, refs, subject, author, when = record.split(
@@ -247,11 +313,10 @@ class GitPanel(Panel):
     def _head_exists(self) -> bool:
         try:
             return (
-                subprocess.run(
-                    ["git", "-C", self._cwd, "rev-parse", "--verify",
-                     "--quiet", "HEAD"],
-                    capture_output=True,
+                self._run_git(
+                    ["rev-parse", "--verify", "--quiet", "HEAD"],
                     timeout=5,
+                    capture_output=True,
                 ).returncode
                 == 0
             )
@@ -263,11 +328,11 @@ class GitPanel(Panel):
         exists to compare against."""
         for ref in ("master", "main"):
             try:
-                result = subprocess.run(
-                    ["git", "-C", self._cwd, "rev-list", ref, "--"],
+                result = self._run_git(
+                    ["rev-list", ref, "--"],
+                    timeout=5,
                     capture_output=True,
                     text=True,
-                    timeout=5,
                 )
             except (OSError, subprocess.TimeoutExpired):
                 return None
@@ -299,22 +364,35 @@ class GitPanel(Panel):
             self._checkout(targets[chosen])
 
     def _checkout(self, commit: str) -> None:
+        # Remote checkout is a blocking SSH round trip; run it off-thread.
+        if self._remote is None:
+            self._after_checkout(self._run_checkout(commit))
+        else:
+            run_async(lambda: self._run_checkout(commit), self._after_checkout, self)
+
+    def _run_checkout(self, commit: str):
+        """Run the checkout; return the CompletedProcess, or the exception if it
+        couldn't run. Safe on a worker thread (no Qt)."""
         try:
-            result = subprocess.run(
-                ["git", "-C", self._cwd, "checkout", commit],
+            return self._run_git(
+                ["checkout", commit],
+                timeout=10,
                 capture_output=True,
                 text=True,
                 errors="replace",
-                timeout=10,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
-            QMessageBox.warning(self, "Checkout failed", str(exc))
+            return exc
+
+    def _after_checkout(self, result) -> None:
+        if isinstance(result, (OSError, subprocess.TimeoutExpired)):
+            QMessageBox.warning(self, "Checkout failed", str(result))
             return
-        if result.returncode != 0:
+        if result is None or result.returncode != 0:
             QMessageBox.warning(
                 self,
                 "Checkout failed",
-                result.stderr.strip() or "git checkout failed",
+                (result.stderr.strip() if result else "") or "git checkout failed",
             )
             return
         # HEAD moved: redraw so the (HEAD -> …) decoration follows.

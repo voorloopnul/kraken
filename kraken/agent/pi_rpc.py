@@ -14,13 +14,22 @@ deadlock the chat.
 from __future__ import annotations
 
 import json
-from typing import Callable
+from typing import Callable, TYPE_CHECKING
 
-from PySide6.QtCore import QObject, QProcess, Signal
+from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, Signal
+
+if TYPE_CHECKING:
+    from kraken.agent.remote import RemoteTarget
 
 
 class PiAgent(QObject):
-    """One `pi --mode rpc` process bound to a workspace folder."""
+    """One `pi --mode rpc` process bound to a workspace folder.
+
+    For a remote workspace the process still runs locally, but is launched with
+    the bundled ssh routing extension (see remote.ssh_extension_path) and a
+    KRAKEN_SSH environment descriptor, so its read/write/edit/bash tools operate
+    on the remote host over SSH. The workspace cwd is the local anchor folder,
+    which is where pi runs and stores its session files."""
 
     started = Signal()
     event = Signal(dict)  # every agent event (agent_start, message_update, ...)
@@ -33,12 +42,16 @@ class PiAgent(QObject):
         cwd: str,
         parent: QObject | None = None,
         session_path: str | None = None,
+        remote: "RemoteTarget | None" = None,
     ):
         super().__init__(parent)
         self._cwd = cwd
         # When set, the process is launched already bound to this session file
         # (`--session <path>`), so its history loads without a switch round-trip.
         self._session_path = session_path
+        # When set, tool execution is routed to this remote host over SSH; pi
+        # itself still runs locally in `cwd` (the workspace's local anchor).
+        self._remote = remote
         self._proc: QProcess | None = None
         self._buffer = b""
         self._next_id = 0
@@ -66,6 +79,16 @@ class PiAgent(QObject):
         proc.finished.connect(self._on_finished)
         self._proc = proc
         args = ["--mode", "rpc"]
+        if self._remote is not None:
+            # Load the ssh routing extension and describe the connection to it
+            # via the environment; pi runs locally in the anchor cwd but its
+            # tools act on the remote.
+            from kraken.agent.remote import ssh_extension_path
+
+            args += ["-e", ssh_extension_path()]
+            env = QProcessEnvironment.systemEnvironment()
+            env.insert("KRAKEN_SSH", self._remote.env_value())
+            proc.setProcessEnvironment(env)
         if self._session_path:
             args += ["--session", self._session_path]
         proc.start("pi", args)

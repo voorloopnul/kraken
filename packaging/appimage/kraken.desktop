@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Kraken
+GenericName=Coding Agent
+Comment=Native desktop front-end for the Pi coding agent
+Exec=kraken
+Icon=kraken
+Categories=Development;IDE;
+Terminal=false
+StartupWMClass=Kraken

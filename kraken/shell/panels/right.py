@@ -1,18 +1,30 @@
 """Terminal pane, the sibling of the browser pane."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from PySide6.QtWidgets import QWidget
 
 from kraken.shell.panels.base import Card, Panel
 from kraken.ui.themes import UI_COLORS
 
+if TYPE_CHECKING:
+    from kraken.agent.remote import RemoteTarget
+
 
 class RightPanel(Panel):
-    def __init__(self, parent: QWidget | None = None, cwd: str | None = None):
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        cwd: str | None = None,
+        remote: "RemoteTarget | None" = None,
+    ):
         super().__init__(parent)
         from kraken.terminal.tabs import TerminalTabs
 
         self._card = Card()
-        self.terminals = TerminalTabs(self, cwd=cwd)
+        self.terminals = TerminalTabs(self, cwd=cwd, remote=remote)
         self._card.add_widget(self.terminals, stretch=1)
         self.add_widget(self._card, stretch=1)
 

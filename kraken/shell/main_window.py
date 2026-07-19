@@ -17,11 +17,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kraken.agent import remote as remote_mod
 from kraken.agent.config import load_state, save_state
+from kraken.shell.remote_dialog import RemoteWorkspaceDialog
 from kraken.shell.side_bar import SideBar
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 from kraken.shell.title_bar import TitleBar
-from kraken.shell.workspace_bar import WorkspaceBar
+from kraken.shell.workspace_bar import WorkspaceBar, abbreviation
 from kraken.shell.workspace_view import WorkspaceView
 
 # Grabbing within this many pixels of a window edge starts a resize; the
@@ -182,8 +184,11 @@ class MainWindow(QMainWindow):
 
         self.side_bar = SideBar()
         self.workspace_bar = WorkspaceBar()
-        self.workspace_bar.add_button.clicked.connect(self._add_workspace)
+        self.workspace_bar.add_local_requested.connect(self._add_workspace)
+        self.workspace_bar.add_remote_requested.connect(self._add_remote_workspace)
         self.workspace_bar.workspace_selected.connect(self._on_workspace_selected)
+        self.workspace_bar.workspace_edit_requested.connect(self._edit_remote_workspace)
+        self.workspace_bar.workspace_remove_requested.connect(self._remove_workspace)
         self.title_bar = TitleBar()
         self.title_bar.buttons["Minimize"].clicked.connect(self.showMinimized)
         self.title_bar.buttons["Maximize"].clicked.connect(self._toggle_maximized)
@@ -241,7 +246,11 @@ class MainWindow(QMainWindow):
         if not workspaces:
             workspaces = [str(Path.cwd())]
         for path in workspaces:
-            self.workspace_bar.add_workspace(path, select=False)
+            target = remote_mod.resolve(path)
+            if target is not None:
+                self._add_remote_button(path, target, select=False)
+            else:
+                self.workspace_bar.add_workspace(path, select=False)
         self._sync_chrome()
 
     @property
@@ -281,11 +290,76 @@ class MainWindow(QMainWindow):
         if path:
             self.workspace_bar.add_workspace(path)
 
+    def _add_remote_button(self, anchor: str, target, select: bool) -> None:
+        """Add a workspace-bar button for a remote workspace. `anchor` is the
+        local key; the visible label/tooltip come from the remote target."""
+        self.workspace_bar.add_workspace(
+            anchor,
+            select=select,
+            remote=True,
+            tooltip=f"{target.host.destination}:{target.path}",
+            abbrev=abbreviation(target.host.host_id),
+        )
+
+    def _add_remote_workspace(self) -> None:
+        dialog = RemoteWorkspaceDialog(self)
+        if dialog.exec() and dialog.anchor:
+            target = remote_mod.resolve(dialog.anchor)
+            if target is not None:
+                self._add_remote_button(dialog.anchor, target, select=True)
+
+    def _edit_remote_workspace(self, anchor: str) -> None:
+        dialog = RemoteWorkspaceDialog(self, anchor=anchor)
+        if not dialog.exec():
+            return
+        # Connection details changed: drop the open view and rebuild its button
+        # so a fresh selection binds the agent/terminal/git to the new target.
+        self._discard_view(anchor)
+        self.workspace_bar.remove_workspace(anchor)
+        target = remote_mod.resolve(anchor)
+        if target is not None:
+            self._add_remote_button(anchor, target, select=True)
+
+    def _remove_workspace(self, key: str) -> None:
+        """Remove a workspace from the strip. Remote workspaces are also dropped
+        from persisted state (their local anchor folder is left in place, so a
+        re-add reuses any stored sessions)."""
+        self._discard_view(key)
+        self.workspace_bar.remove_workspace(key)
+        if remote_mod.resolve(key) is not None:
+            remote_mod.remove_remote_workspace(key)
+        remaining = self.workspace_bar.workspaces
+        save_state(
+            workspaces=remaining,
+            current_workspace=remaining[0] if remaining else None,
+        )
+        if remaining:
+            self.workspace_bar.select_workspace(remaining[0])
+        else:
+            self._view_stack.setCurrentWidget(self._home_screen)
+            self.current_workspace = None
+            self.setWindowTitle("Kraken")
+            self.title_bar.set_workspace(None)
+            self.title_bar.set_conversation("")
+            self._sync_chrome()
+
+    def _discard_view(self, key: str) -> None:
+        """Shut down and drop a cached workspace view, if one exists."""
+        view = self.views.pop(key, None)
+        if view is None:
+            return
+        view.shutdown()
+        self._view_stack.removeWidget(view)
+        view.deleteLater()
+        if self.current_workspace == key:
+            self.current_workspace = None
+
     def _on_workspace_selected(self, path: str) -> None:
         """Show the workspace's panes, creating them on first selection."""
+        target = remote_mod.resolve(path)
         view = self.views.get(path)
         if view is None:
-            view = WorkspaceView(path)
+            view = WorkspaceView(path, remote=target)
             view.set_theme(self._theme_name)
             # A clicked transcript link opens the browser panel through the
             # same action used by its side-bar toggle.
@@ -311,8 +385,12 @@ class MainWindow(QMainWindow):
         self._view_stack.setCurrentWidget(view)
         self._sync_chrome()
         self.current_workspace = path
-        self.setWindowTitle(f"Kraken — {Path(path).name}")
-        self.title_bar.set_workspace(path)
+        if target is not None:
+            name = Path(target.path).name or target.host.host_id
+            self.setWindowTitle(f"Kraken — {name} ({target.host.destination})")
+        else:
+            self.setWindowTitle(f"Kraken — {Path(path).name}")
+        self.title_bar.set_workspace(path, remote=target)
         self.title_bar.set_conversation(
             view.focused.title if view.focused is not None else ""
         )

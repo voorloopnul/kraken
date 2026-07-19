@@ -36,6 +36,7 @@ from kraken.chat.formatting import (
     args_summary,
     error_summary,
 )
+from kraken.ui.fonts import MONO_FAMILY
 from kraken.ui.themes import DEFAULT_THEME
 
 # The horizontal scrollbar (wide code blocks) matches the panel-edge
@@ -43,7 +44,7 @@ from kraken.ui.themes import DEFAULT_THEME
 _STYLES = {
     "dark": """
 QTextBrowser { background: transparent; border: none; color: #d6d8dd;
-               font-size: 15px; padding: 4px; }
+               font-family: 'JetBrains Mono'; font-size: 13px; padding: 4px; }
 QScrollBar:horizontal { background: transparent; border: none; height: 10px; margin: 0; }
 QScrollBar::handle:horizontal { background: #3a3d45; border-radius: 5px; min-width: 24px; }
 QScrollBar::handle:horizontal:hover { background: #4a4e58; }
@@ -52,7 +53,7 @@ QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: t
 """,
     "light": """
 QTextBrowser { background: transparent; border: none; color: #1a1c21;
-               font-size: 15px; padding: 4px; }
+               font-family: 'JetBrains Mono'; font-size: 13px; padding: 4px; }
 QScrollBar:horizontal { background: transparent; border: none; height: 10px; margin: 0; }
 QScrollBar::handle:horizontal { background: #c9c4b4; border-radius: 5px; min-width: 24px; }
 QScrollBar::handle:horizontal:hover { background: #b3ae9e; }
@@ -70,14 +71,21 @@ _PALETTE = {
         "code_bg": "#17181d", "code_border": "#2c2e35",
         "user_bg": "#26282e", "user_border": "#33353c",
         "link": "#61afef",
+        "inline_bg": "#3a3f4a", "inline_text": "#d19a66",
     },
     "light": {
         "text": "#1a1c21", "dim": "#5f6269", "error": "#a8232e",
         "code_bg": "#f0ebdc", "code_border": "#d8d3c4",
         "user_bg": "#dfe0e4", "user_border": "#c9cbd2",
         "link": "#02669c",
+        "inline_bg": "#f0ebdc", "inline_text": "#8a5c00",
     },
 }
+
+# Marks the tool blocks' monospace detail text. It is fixed-pitch like a
+# markdown code span, but it is not code in the transcript's sense and must
+# not pick up the inline-code chip, so the pass below skips it by this flag.
+_TOOL_DETAIL_PROPERTY = QTextFormat.Property.UserProperty + 1
 
 _COPY_STYLES = {
     "dark": """
@@ -131,7 +139,7 @@ _HIGHLIGHT = {
 # margins; these are merged into the block formats after each render.
 _HEADING_TOP_MARGIN = 14.0
 # Qt sizes markdown headings with a relative FontSizeAdjustment step over
-# the 15px body font (its defaults: h1=+3≈30px, h2=+2≈22px, h3=+1≈18px).
+# the 13px body font (its defaults: h1=+3≈26px, h2=+2≈19px, h3=+1≈16px).
 # An absolute FontPixelSize is ignored by the layout — the default font's
 # pixel size wins the resolve — so headings are toned down by lowering the
 # adjustment itself, one step gentler than Qt's default. Levels past 3 sit
@@ -329,9 +337,10 @@ class ConversationView(QTextBrowser):
         cursor.insertText(f"{arrow} {payload['line']}", header)
         if payload["expanded"] and payload["detail"]:
             detail = self._format("dim", False, False)
-            detail.setFontFamilies(["monospace"])
+            detail.setFontFamilies([MONO_FAMILY, "monospace"])
             detail.setFontFixedPitch(True)
             detail.setFontPointSize(9.0)
+            detail.setProperty(_TOOL_DETAIL_PROPERTY, True)
             cursor.insertText("\n" + payload["detail"], detail)
 
     def _paint_user(self, cursor: QTextCursor, payload: list) -> None:
@@ -506,6 +515,8 @@ class ConversationView(QTextBrowser):
             is_code = (
                 fmt.property(QTextFormat.Property.BlockCodeLanguage) is not None
             )
+            if not is_code:
+                self._restyle_inline_code(block)
             if is_code and start is None:
                 start = block.blockNumber()
             elif not is_code and start is not None:
@@ -544,11 +555,89 @@ class ConversationView(QTextBrowser):
                 if edges.propertyCount():
                     QTextCursor(block).mergeBlockFormat(edges)
                 block = block.next()
+            self._restyle_code_font(first, last)
             self._highlight_range(first, last)
 
         while len(self._copy_buttons) < len(self._code_ranges):
             self._copy_buttons.append(self._make_copy_button())
         self._layout_copy_buttons()
+
+    def _restyle_code_font(self, first: int, last: int) -> None:
+        """Give a fenced block the body font at the body size.
+
+        Same story as _restyle_inline_code: insertMarkdown pins code to a
+        generic "monospace" at a fixed 9 point, so the cards would render in
+        the system's mono font at a size of their own while the rest of the
+        transcript is the bundled one. Only the font is touched — the tint and
+        border are the card painted in paintEvent.
+
+        Runs before _highlight_range: the token colors are merged on top of
+        these formats, and replacing a format afterwards would drop them.
+        """
+        document = self.document()
+        block = document.findBlockByNumber(first)
+        while block.isValid() and block.blockNumber() <= last:
+            spans: list[tuple[int, int, QTextCharFormat]] = []
+            it = block.begin()
+            while not it.atEnd():
+                fragment = it.fragment()
+                fmt = fragment.charFormat()
+                # fontPointSize() reads 0 once the property is cleared, which
+                # is what keeps this pass idempotent across repaints.
+                if fmt.fontPointSize():
+                    styled = QTextCharFormat(fmt)
+                    styled.clearProperty(QTextFormat.Property.FontPointSize)
+                    styled.setFontFamilies([MONO_FAMILY, "monospace"])
+                    spans.append((fragment.position(), fragment.length(), styled))
+                it += 1
+            for position, length, styled in spans:
+                cursor = QTextCursor(document)
+                cursor.setPosition(position)
+                cursor.setPosition(position + length, QTextCursor.MoveMode.KeepAnchor)
+                cursor.setCharFormat(styled)
+            block = block.next()
+
+    def _restyle_inline_code(self, block) -> None:
+        """Give markdown code spans the body font at the body size, on a
+        tinted chip.
+
+        insertMarkdown styles a code span as generic "monospace" at a fixed 9
+        point — a different family and size from the body text, both resolved
+        from whatever the system offers, so the span lands visibly off-size
+        and off-baseline against its own sentence. Clearing the point size
+        lets it inherit the document's, which is what keeps it matched to the
+        surrounding words.
+
+        Fenced code blocks are excluded by the caller (they are carded and
+        syntax-highlighted instead), and the tool blocks' detail text opts out
+        with _TOOL_DETAIL_PROPERTY. Already-styled spans are skipped, keeping
+        the pass idempotent across repaints.
+        """
+        chip = QColor(self._colors["inline_bg"])
+        spans: list[tuple[int, int, QTextCharFormat]] = []
+        it = block.begin()
+        while not it.atEnd():
+            fragment = it.fragment()
+            fmt = fragment.charFormat()
+            if (
+                fmt.fontFixedPitch()
+                and not fmt.property(_TOOL_DETAIL_PROPERTY)
+                and fmt.background().color() != chip
+            ):
+                styled = QTextCharFormat(fmt)
+                # Not merged: the point size has to be cleared, and a merge
+                # can only add properties.
+                styled.clearProperty(QTextFormat.Property.FontPointSize)
+                styled.setFontFamilies([MONO_FAMILY, "monospace"])
+                styled.setBackground(chip)
+                styled.setForeground(QColor(self._colors["inline_text"]))
+                spans.append((fragment.position(), fragment.length(), styled))
+            it += 1
+        for position, length, styled in spans:
+            cursor = QTextCursor(self.document())
+            cursor.setPosition(position)
+            cursor.setPosition(position + length, QTextCursor.MoveMode.KeepAnchor)
+            cursor.setCharFormat(styled)
 
     def _retint_links(self, block) -> None:
         """Recolor markdown anchors to the theme's link color. insertMarkdown

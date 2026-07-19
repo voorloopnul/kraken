@@ -12,8 +12,12 @@ and when the session's file path and model become known.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Signal
+
+if TYPE_CHECKING:
+    from kraken.agent.remote import RemoteTarget
 
 from kraken.chat.conversation import ConversationView
 from kraken.chat.formatting import (
@@ -47,6 +51,7 @@ class SessionController(QObject):
         theme_name: str,
         session_path: str | None = None,
         parent: QObject | None = None,
+        remote: "RemoteTarget | None" = None,
     ):
         super().__init__(parent)
         self.session_path = session_path
@@ -57,7 +62,7 @@ class SessionController(QObject):
         self.first_prompt: str | None = None  # first user message; the title
         self.conversation = ConversationView()
         self.conversation.set_theme(theme_name)
-        self.agent = PiAgent(cwd, self, session_path=session_path)
+        self.agent = PiAgent(cwd, self, session_path=session_path, remote=remote)
         self._tool_blocks: dict[str, int] = {}  # toolCallId -> transcript block
         # An error was already surfaced during the current turn (reset each
         # agent_start); keeps agent_end from reprinting the same failure that
