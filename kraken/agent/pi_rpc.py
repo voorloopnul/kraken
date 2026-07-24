@@ -138,7 +138,14 @@ class PiAgent(QObject):
         self.send(command, callback)
 
     def abort(self) -> None:
+        """Stop the current turn. A running bash tool is cancelled through pi's
+        own `_bashAbortController`, which plain `abort` never touches: `abort`
+        calls `agent.abort()` then awaits idle, but a blocked command keeps the
+        session busy forever, so `abort` alone can't interrupt a hung command.
+        Send `abort_bash` first to kill any in-flight command (a no-op when none
+        is running), then `abort` to end the turn."""
         if self.running:
+            self.send({"type": "abort_bash"})
             self.send({"type": "abort"})
 
     def get_state(self, callback: Callable[[dict], None]) -> None:
