@@ -35,7 +35,7 @@ class PiAgent(QObject):
     event = Signal(dict)  # every agent event (agent_start, message_update, ...)
     notify = Signal(str, str)  # extension notify: (message, "info"|"warning"|"error")
     failed = Signal(str)  # process could not start / crashed
-    finished = Signal()
+    finished = Signal(bool)  # process exited; True if it died mid-turn
 
     def __init__(
         self,
@@ -175,6 +175,8 @@ class PiAgent(QObject):
     # ---- Stream handling -------------------------------------------------
 
     def _on_stdout(self) -> None:
+        if self._proc is None:  # a late readyRead after the process was reaped
+            return
         self._buffer += bytes(self._proc.readAllStandardOutput())
         while True:
             newline = self._buffer.find(b"\n")
@@ -220,6 +222,8 @@ class PiAgent(QObject):
         # setStatus / setWidget / setTitle / set_editor_text: fire-and-forget.
 
     def _on_stderr(self) -> None:
+        if self._proc is None:  # a late readyRead after the process was reaped
+            return
         data = bytes(self._proc.readAllStandardError()).decode(errors="replace")
         if data.strip():
             print(f"[pi rpc stderr] {data.rstrip()}", flush=True)
@@ -229,5 +233,19 @@ class PiAgent(QObject):
         self.failed.emit(self._proc.errorString() if self._proc else str(error))
 
     def _on_finished(self, *_args) -> None:
+        # A clean exit (nonzero code, provider drop, SSH extension death on a
+        # remote) fires only `finished`, never `errorOccurred`, so this is the
+        # sole place a mid-turn death can be noticed. Report whether streaming
+        # was still in flight so the controller can clear the busy row and say
+        # the turn was cut short. A crash fires `errorOccurred` first, which
+        # already reset is_streaming, so `died_mid_turn` is False and we don't
+        # double-announce.
+        died_mid_turn = self.is_streaming
         self.is_streaming = False
-        self.finished.emit()
+        # Drop the dead process and its orphaned callbacks so the next prompt
+        # respawns via ensure_started (resuming the session with --session when
+        # the path is known) instead of writing into a corpse.
+        self._proc = None
+        self._buffer = b""
+        self._callbacks.clear()
+        self.finished.emit(died_mid_turn)

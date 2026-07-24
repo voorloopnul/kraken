@@ -106,6 +106,7 @@ class SessionController(QObject):
         self.agent.event.connect(self._on_event)
         self.agent.notify.connect(self._on_notify)
         self.agent.failed.connect(self._on_failed)
+        self.agent.finished.connect(self._on_finished)
 
     # ---- State ----------------------------------------------------------
 
@@ -391,3 +392,15 @@ class SessionController(QObject):
     def _on_failed(self, error: str) -> None:
         self.conversation.add_info(f"Pi agent unavailable: {error}", error=True)
         self.streaming_changed.emit(False)
+
+    def _on_finished(self, died_mid_turn: bool) -> None:
+        # The pi process exited. If it went down while a turn was streaming,
+        # nothing else clears the busy row (a clean exit skips `failed`), so the
+        # session would sit on "Pi is working…" forever. Surface the cut-off
+        # turn and drop the streaming flag so the row clears and Stop isn't left
+        # pointing at a dead process.
+        if died_mid_turn:
+            self.conversation.add_info(
+                "Pi agent exited before finishing the turn.", error=True
+            )
+            self.streaming_changed.emit(False)
