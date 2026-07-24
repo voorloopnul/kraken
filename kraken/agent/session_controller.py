@@ -11,6 +11,7 @@ and when the session's file path and model become known.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -95,6 +96,10 @@ class SessionController(QObject):
         self.conversation.set_theme(theme_name)
         self.agent = PiAgent(cwd, self, session_path=session_path, remote=remote)
         self._tool_blocks: dict[str, int] = {}  # toolCallId -> transcript block
+        # Monotonic clock reading of when the current turn began (agent_start),
+        # so the busy row can show elapsed time anchored to the turn itself
+        # rather than to when the row happened to appear on screen.
+        self._streaming_since: float | None = None
         # An error was already surfaced during the current turn (reset each
         # agent_start); keeps agent_end from reprinting the same failure that
         # streamed in as a message_update.
@@ -113,6 +118,13 @@ class SessionController(QObject):
     @property
     def is_streaming(self) -> bool:
         return self.agent.is_streaming
+
+    @property
+    def streaming_since(self) -> float | None:
+        """Monotonic start of the in-flight turn, or None when not streaming.
+        Lets the busy row's elapsed counter survive session switches: flipping
+        to an already-running session shows its true elapsed, not a reset."""
+        return self._streaming_since if self.is_streaming else None
 
     @property
     def running(self) -> bool:
@@ -343,6 +355,7 @@ class SessionController(QObject):
         kind = event.get("type")
         if kind == "agent_start":
             self._turn_had_error = False
+            self._streaming_since = time.monotonic()
             self.streaming_changed.emit(True)
         elif kind == "agent_end":
             # A request the provider rejected outright (e.g. HTTP 400) ends

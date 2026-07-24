@@ -211,7 +211,7 @@ class WorkspaceView(QWidget):
         previous = self.focused
         self.focused = controller
         self.center_panel.set_focused_conversation(controller.conversation)
-        self.center_panel.set_busy(controller.is_streaming)
+        self.center_panel.set_busy(controller.is_streaming, controller.streaming_since)
         self.center_panel.chat.set_model_label(controller.model_label)
         self._apply_effort(controller)
         # Retire the session we're leaving unless it's still streaming (then it
@@ -360,7 +360,7 @@ class WorkspaceView(QWidget):
 
     def _on_streaming_changed(self, controller: SessionController, streaming: bool) -> None:
         if controller is self.focused:
-            self.center_panel.set_busy(streaming)
+            self.center_panel.set_busy(streaming, controller.streaming_since)
         if not streaming:
             # A turn finished; its messages are now on disk.
             if controller is not self.focused:

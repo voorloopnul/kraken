@@ -1,6 +1,8 @@
 """Conversation pane: the stack of per-session transcripts plus chat input."""
 
-from PySide6.QtCore import Qt
+import time
+
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -58,6 +60,12 @@ class CenterPanel(Panel):
         column.setContentsMargins(0, 0, 0, 0)
 
         self._busy_label = QLabel("Pi is working…")
+        # Elapsed time of the current turn, ticked once a second while busy.
+        self._elapsed_label = QLabel("")
+        self._elapsed_started: float | None = None
+        self._elapsed_timer = QTimer(self)
+        self._elapsed_timer.setInterval(1000)
+        self._elapsed_timer.timeout.connect(self._refresh_elapsed)
         self.stop_button = QToolButton()
         self.stop_button.setText("Stop")
         self.stop_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -66,6 +74,8 @@ class CenterPanel(Panel):
         row_layout = QHBoxLayout(busy_row)
         row_layout.setContentsMargins(4, 0, 4, 2)
         row_layout.addWidget(self._busy_label)
+        row_layout.addSpacing(8)
+        row_layout.addWidget(self._elapsed_label)
         row_layout.addStretch(1)
         row_layout.addWidget(self.stop_button)
         busy_row.setVisible(False)
@@ -121,8 +131,37 @@ class CenterPanel(Panel):
             self._scrollbar.setSingleStep(self._bound.singleStep())
         self._scrollbar.setVisible(maximum > minimum)
 
-    def set_busy(self, busy: bool) -> None:
+    def set_busy(self, busy: bool, started: float | None = None) -> None:
         self._busy_row.setVisible(busy)
+        if busy:
+            # Anchor to the turn's real start (monotonic) when the controller
+            # knows it, so switching to an already-running session shows its
+            # true elapsed rather than restarting from zero.
+            self._elapsed_started = started if started is not None else time.monotonic()
+            self._refresh_elapsed()
+            self._elapsed_timer.start()
+        else:
+            self._elapsed_timer.stop()
+            self._elapsed_started = None
+            self._elapsed_label.clear()
+
+    def _refresh_elapsed(self) -> None:
+        if self._elapsed_started is None:
+            return
+        self._elapsed_label.setText(
+            self._format_elapsed(int(time.monotonic() - self._elapsed_started))
+        )
+
+    @staticmethod
+    def _format_elapsed(seconds: int) -> str:
+        seconds = max(seconds, 0)
+        if seconds < 60:
+            return f"{seconds}s"
+        minutes, secs = divmod(seconds, 60)
+        if minutes < 60:
+            return f"{minutes}:{secs:02d}"
+        hours, minutes = divmod(minutes, 60)
+        return f"{hours}:{minutes:02d}:{secs:02d}"
 
     def set_theme(self, name: str) -> None:
         # The transcripts paint transparent, so the stack that hosts them must
