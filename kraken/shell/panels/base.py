@@ -71,7 +71,7 @@ class Panel(QWidget):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(8, 8, 8, 8)
+        self._layout.setContentsMargins(2, 2, 2, 2)
 
     def add_widget(self, widget: QWidget, stretch: int = 0) -> None:
         self._layout.addWidget(widget, stretch)

@@ -56,11 +56,15 @@ class _GripHandle(QSplitterHandle):
     handle nearly vanishes against the light theme's background."""
 
     _LENGTH = 36.0
-    _THICKNESS = 3.0
+    _THICKNESS = 12.0
+    # The bar is a hint, not furniture: wide enough to grab, faint enough to
+    # read as part of the gap between the cards.
+    _OPACITY = 0.10
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setOpacity(self._OPACITY)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(self.splitter().grip_color)
         if self.orientation() == Qt.Orientation.Horizontal:
@@ -86,7 +90,9 @@ class _GripSplitter(QSplitter):
     def __init__(self, orientation: Qt.Orientation, parent: QWidget | None = None):
         super().__init__(orientation, parent)
         self.grip_color = QColor(_GRIP_COLORS[DEFAULT_THEME])
-        self.setHandleWidth(8)
+        # The bar fills the handle exactly; the only gap to the panel cards is
+        # the 2px margin Panel keeps around its card.
+        self.setHandleWidth(12)
         self.setChildrenCollapsible(False)
 
     def set_grip_color(self, color: str) -> None:
@@ -278,7 +284,10 @@ class DockArea(QWidget):
 
         self._splitter = _GripSplitter(Qt.Orientation.Horizontal)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        # Clear the surrounding chrome (top bar, workspace bar, side bar): with
+        # Panel's own 2px margin this leaves 10px of breathing room all round,
+        # while panels inside the dock stay tight against their grips.
+        layout.setContentsMargins(8, 8, 8, 8)
         layout.addWidget(self._splitter)
 
         self._overlay = _DropOverlay(self)
