@@ -325,7 +325,7 @@ class DockArea(QWidget):
             for key in keys:
                 column.addWidget(self._panels[key])
                 self._shown.add(key)
-            self._splitter.insertWidget(self._splitter.count(), column)
+            self._insert_column(self._splitter.count(), column)
             column.setVisible(True)
         self._reflow()
 
@@ -345,7 +345,7 @@ class DockArea(QWidget):
         if not isinstance(column, _DockColumn):
             column = self._acquire_column()
             column.addWidget(panel)
-            self._splitter.insertWidget(self._insertion_index(key), column)
+            self._insert_column(self._insertion_index(key), column)
         panel.setVisible(True)
         column.setVisible(True)
         self._reflow(pre)
@@ -389,6 +389,17 @@ class DockArea(QWidget):
 
     def _column_has_shown(self, column: _DockColumn) -> bool:
         return any(p.key in self._shown for p in column.panels())
+
+    def _insert_column(self, index: int, column: _DockColumn) -> None:
+        """Put `column` at splitter slot `index`. QSplitter.insertWidget removes
+        the widget from its current slot first and applies the index to the
+        shortened list, so a recycled column (see _acquire_column) already
+        sitting left of the target would land one slot too far right — dropping
+        a panel on the opposite side of the one the indicator promised."""
+        current = self._splitter.indexOf(column)
+        if 0 <= current < index:
+            index -= 1
+        self._splitter.insertWidget(index, column)
 
     def _acquire_column(self) -> _DockColumn:
         """A column to place a panel in: reuse an emptied (childless) one if the
@@ -439,7 +450,13 @@ class DockArea(QWidget):
             width[column] = w if w > 0 else self._pref_width(column)
             fixed_total += width[column]
         if stretch_col is not None:
-            avail = self._splitter.width()
+            # QSplitter spends handleWidth between each pair of visible columns
+            # and normalizes the sizes it is handed to fit what's left. Budget
+            # for the handles here or every reflow over-allocates and Qt shaves
+            # the difference off the columns we meant to preserve.
+            avail = self._splitter.width() - self._splitter.handleWidth() * max(
+                len(active) - 1, 0
+            )
             # The stretch column takes whatever is left, shrinking (down to a
             # floor; Qt still enforces its real minimum) so the preserved
             # columns keep their exact widths rather than being scaled down.
@@ -489,6 +506,10 @@ class DockArea(QWidget):
         if not columns:
             return None
         local = self._splitter.mapFromGlobal(global_pos)
+        if not self._splitter.rect().contains(local):
+            # Outside the dock (title bar, another monitor): no target, so the
+            # drag can be cancelled by releasing there.
+            return None
         column = self._column_at(local.x(), columns)
         keys = [p.key for p in column.panels()]
         # A fixed panel hard-anchors its column: no new column opens to its
@@ -564,9 +585,7 @@ class DockArea(QWidget):
             column = self._acquire_column()
             column.addWidget(panel)  # reparents out of source
             at = self._splitter.indexOf(dest)
-            self._splitter.insertWidget(
-                at if mode == "new_before" else at + 1, column
-            )
+            self._insert_column(at if mode == "new_before" else at + 1, column)
             column.setVisible(True)
         dest.setVisible(True)
         panel.setVisible(True)

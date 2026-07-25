@@ -1,8 +1,8 @@
 from importlib.resources import files
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QAction, QIcon, QPixmap
+from PySide6.QtCore import QEvent, QSize, Qt
+from PySide6.QtGui import QAction, QGuiApplication, QIcon, QPixmap
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (
     QApplication,
@@ -165,13 +165,24 @@ def _looks_blank(pixmap: QPixmap) -> bool:
     return True
 
 
+def _default_size() -> QSize:
+    """Preferred opening size, clamped to the screen. The window is frameless,
+    so one that opens larger than the display has no native decoration to drag
+    it back by — only the edge grips, which would be off-screen too."""
+    preferred = QSize(1920, 1080)
+    screen = QGuiApplication.primaryScreen()
+    if screen is None:
+        return preferred
+    return preferred.boundedTo(screen.availableGeometry().size())
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Kraken")
         # The TitleBar widget replaces the native decoration.
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
-        self.resize(1920, 1080)
+        self.resize(_default_size())
         self.current_workspace: str | None = None
         # Set while pushing a workspace's stored panel state into the toggle
         # buttons on a switch, so the resulting `toggled` signals only update
