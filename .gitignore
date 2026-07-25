@@ -19,3 +19,8 @@ packaging/appimage/tools/
 # Vendored ghostty source (see README for build steps)
 vendor/ghostty/
 vendor/toolchain/
+
+# JetBrains Mono download and its extraction; the faces the app actually
+# loads are committed under kraken/ui/assets/fonts (see kraken/ui/fonts.py)
+/fonts/
+vendor/JetBrainsMono-*.zip

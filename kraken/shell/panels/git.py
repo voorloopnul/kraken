@@ -9,8 +9,6 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QGuiApplication, QTextDocument
 from PySide6.QtWidgets import (
-    QHBoxLayout,
-    QLabel,
     QListWidget,
     QListWidgetItem,
     QMenu,
@@ -143,17 +141,13 @@ class GitPanel(Panel):
         self._theme_name = DEFAULT_THEME
         self._card = Card()
 
-        header = QWidget()
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(0, 0, 0, 0)
+        # The refresh button lives in the dock's drag-grip row (see
+        # WorkspaceView), which is mounted as the card's top header.
         self.refresh_button = QToolButton()
         self.refresh_button.setText("↻")
         self.refresh_button.setToolTip("Refresh")
         self.refresh_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.refresh_button.clicked.connect(self.refresh)
-        header_layout.addWidget(QLabel("Git History"))
-        header_layout.addStretch(1)
-        header_layout.addWidget(self.refresh_button)
 
         # Rows act through their context menu only, so no selection; the
         # monospace font keeps the graph columns aligned across rows.
@@ -166,7 +160,6 @@ class GitPanel(Panel):
         # own color while the rest of the row keeps the theme text color.
         self._list.setItemDelegate(_RichTextDelegate(self._list))
 
-        self._card.add_widget(header)
         self._card.add_widget(self._list, stretch=1)
         self.add_widget(self._card, stretch=1)
 

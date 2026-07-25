@@ -60,6 +60,10 @@ class Card(QFrame):
     def add_widget(self, widget: QWidget, stretch: int = 0) -> None:
         self._layout.addWidget(widget, stretch)
 
+    def add_header(self, widget: QWidget) -> None:
+        """Place a widget as the card's top row (above whatever was added)."""
+        self._layout.insertWidget(0, widget)
+
 
 class Panel(QWidget):
     """Base panel: a container with a vertical layout to add widgets to."""
@@ -71,3 +75,13 @@ class Panel(QWidget):
 
     def add_widget(self, widget: QWidget, stretch: int = 0) -> None:
         self._layout.addWidget(widget, stretch)
+
+    def mount_grip(self, grip: QWidget) -> None:
+        """Host the dock's drag grip inside this panel: at the top of the
+        card when the panel has one (so the grip sits within the rounded
+        border), otherwise at the very top of the panel's own layout."""
+        card = getattr(self, "_card", None)
+        if card is not None:
+            card.add_header(grip)
+        else:
+            self._layout.insertWidget(0, grip)

@@ -9,7 +9,7 @@ import re
 from math import cos, radians, sin
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -150,6 +150,49 @@ def abbreviation(folder_name: str) -> str:
     return name[:2].upper()
 
 
+class _WorkspaceButton(QToolButton):
+    """A workspace button that paints a blinking blue dot in its top-right
+    corner while that workspace has a Pi agent running, so a session processing
+    in the background stays visible even when the workspace isn't on screen."""
+
+    _DOT_COLOR = QColor("#4f83e0")
+    _DOT_RADIUS = 4
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._active = False
+        self._blink_on = True
+        self._timer = QTimer(self)
+        self._timer.setInterval(600)
+        self._timer.timeout.connect(self._toggle)
+
+    def set_active(self, active: bool) -> None:
+        if active == self._active:
+            return
+        self._active = active
+        if active:
+            self._blink_on = True
+            self._timer.start()
+        else:
+            self._timer.stop()
+        self.update()
+
+    def _toggle(self) -> None:
+        self._blink_on = not self._blink_on
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        if not (self._active and self._blink_on):
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(self._DOT_COLOR)
+        d = self._DOT_RADIUS * 2
+        painter.drawEllipse(self.width() - d - 2, 2, d, d)
+
+
 class WorkspaceBar(QWidget):
     workspace_selected = Signal(str)  # key (local path or remote anchor) chosen
     add_local_requested = Signal()
@@ -225,7 +268,7 @@ class WorkspaceBar(QWidget):
             path = str(Path(path).expanduser().resolve())
         btn = self._workspaces.get(path)
         if btn is None:
-            btn = QToolButton()
+            btn = _WorkspaceButton()
             btn.setText(abbrev or abbreviation(Path(path).name))
             btn.setToolTip(tooltip or path)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -247,6 +290,13 @@ class WorkspaceBar(QWidget):
         if select:
             btn.setChecked(True)
             self.workspace_selected.emit(path)
+
+    def set_workspace_active(self, path: str, active: bool) -> None:
+        """Show/hide the blinking activity dot on a workspace's button, keyed by
+        the same path/anchor used to add it."""
+        btn = self._workspaces.get(path)
+        if isinstance(btn, _WorkspaceButton):
+            btn.set_active(active)
 
     def select_workspace(self, path: str) -> None:
         """Programmatically select an existing workspace button."""

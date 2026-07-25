@@ -171,7 +171,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Kraken")
         # The TitleBar widget replaces the native decoration.
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
-        self.resize(1300, 720)
+        self.resize(1920, 1080)
         self.current_workspace: str | None = None
         # Set while pushing a workspace's stored panel state into the toggle
         # buttons on a switch, so the resulting `toggled` signals only update
@@ -241,6 +241,13 @@ class MainWindow(QMainWindow):
                 Qt.Edge.BottomEdge,
             )
         ]
+
+        # Safety net: some exit paths (app.quit(), the last window closing via
+        # the WM) don't deliver closeEvent, so reap the agent processes when the
+        # event loop is about to end too. Idempotent with closeEvent.
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._shutdown_all_views)
 
         self._create_actions()
         # Reopen the workspaces from the last run (folders that vanished
@@ -380,6 +387,13 @@ class MainWindow(QMainWindow):
                     else None
                 )
             )
+            # Blink the workspace's bar button while any of its sessions is
+            # streaming — visible even when another workspace is on screen.
+            view.activity_changed.connect(
+                lambda active, p=path: self.workspace_bar.set_workspace_active(
+                    p, active
+                )
+            )
             # A new workspace keeps WorkspaceView's own defaults (only History
             # open); the toggle buttons are synced to it just below.
             self.views[path] = view
@@ -404,9 +418,19 @@ class MainWindow(QMainWindow):
             workspaces=self.workspace_bar.workspaces, current_workspace=path
         )
 
+    def _shutdown_all_views(self) -> None:
+        """Stop every workspace's agent processes. Guarded per view so one
+        workspace's failing teardown can't leave another's `pi` running, and
+        idempotent (a second pass finds already-stopped agents) so wiring it to
+        both closeEvent and aboutToQuit is safe."""
+        for view in list(self.views.values()):
+            try:
+                view.shutdown()
+            except Exception:
+                pass
+
     def closeEvent(self, event) -> None:
-        for view in self.views.values():
-            view.shutdown()
+        self._shutdown_all_views()
         super().closeEvent(event)
 
     def _screenshot_browser(self) -> None:

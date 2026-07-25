@@ -9,60 +9,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QPainter
-from PySide6.QtWidgets import QSplitter, QSplitterHandle, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import QVBoxLayout, QWidget
 
+from kraken.shell.dock import DockArea, DockPanel
 from kraken.shell.panels import BrowserPanel, CenterPanel, GitPanel, LeftPanel, RightPanel
 from kraken.agent.session_controller import SessionController
-from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
+from kraken.ui.themes import DEFAULT_THEME
 
 if TYPE_CHECKING:
     from kraken.agent.remote import RemoteTarget
-
-
-class _GripSplitter(QSplitter):
-    """Splitter whose handles paint a short rounded grip bar; the stock
-    dotted handle nearly vanishes against the light theme's background."""
-
-    def __init__(self, orientation: Qt.Orientation, parent: QWidget | None = None):
-        super().__init__(orientation, parent)
-        self.grip_color = QColor("#c9c4b4")
-        self.setHandleWidth(8)
-
-    def set_grip_color(self, color: str) -> None:
-        self.grip_color = QColor(color)
-        for i in range(1, self.count()):
-            self.handle(i).update()
-
-    def createHandle(self) -> QSplitterHandle:
-        return _GripHandle(self.orientation(), self)
-
-
-class _GripHandle(QSplitterHandle):
-    _LENGTH = 36.0
-    _THICKNESS = 3.0
-
-    def paintEvent(self, event) -> None:
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(self.splitter().grip_color)
-        if self.orientation() == Qt.Orientation.Horizontal:
-            rect = QRectF(
-                (self.width() - self._THICKNESS) / 2,
-                (self.height() - self._LENGTH) / 2,
-                self._THICKNESS,
-                self._LENGTH,
-            )
-        else:
-            rect = QRectF(
-                (self.width() - self._LENGTH) / 2,
-                (self.height() - self._THICKNESS) / 2,
-                self._LENGTH,
-                self._THICKNESS,
-            )
-        painter.drawRoundedRect(rect, self._THICKNESS / 2, self._THICKNESS / 2)
 
 
 class WorkspaceView(QWidget):
@@ -70,6 +26,9 @@ class WorkspaceView(QWidget):
     browser_requested = Signal()
     # Focused conversation's title, for the window title bar.
     title_changed = Signal(str)
+    # True while any of this workspace's sessions has an agent streaming, so the
+    # workspace-bar button can blink its activity dot (even in the background).
+    activity_changed = Signal(bool)
 
     def __init__(
         self,
@@ -86,8 +45,10 @@ class WorkspaceView(QWidget):
         self.remote = remote
 
         self.left_panel = LeftPanel(cwd=path)
+        # Only a floor: the History panel grows to fill its column so its
+        # resize grip stays flush with the panel edge rather than detaching
+        # once the content hits a maximum.
         self.left_panel.setMinimumWidth(280)
-        self.left_panel.setMaximumWidth(380)
         self.center_panel = CenterPanel()
         # Per-workspace browser, like the terminals; it's lazily populated
         # on first show, so hidden panels cost no Chromium processes.
@@ -99,47 +60,49 @@ class WorkspaceView(QWidget):
         # stops the drag here rather than letting it collapse to a sliver.
         self.right_panel.setMinimumWidth(380)
 
-        # Terminals and git history share the rightmost column, terminals on
-        # top; the column drops out entirely when both are toggled off (see
-        # set_panel_visible).
-        self._right_column = _GripSplitter(Qt.Orientation.Vertical)
-        self._right_column.addWidget(self.right_panel)
-        self._right_column.addWidget(self.git_panel)
-        self._right_column.setChildrenCollapsible(False)
-        self._right_column.setSizes([420, 300])
-
-        splitter = _GripSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self.left_panel)
-        splitter.addWidget(self.center_panel)
-        splitter.addWidget(self.browser_panel)
-        splitter.addWidget(self._right_column)
-
-        # Center panel absorbs extra space when the window resizes.
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setStretchFactor(2, 0)
-        splitter.setStretchFactor(3, 0)
-        splitter.setSizes([300, 500, 480, 480])
-        splitter.setChildrenCollapsible(False)
-        self._splitter = splitter
+        # Every panel lives in the dock, wrapped in a draggable header. The
+        # dock arranges them into columns (up to two panels stacked per column)
+        # and lets the user drag a panel's header to re-column or stack it.
+        self._dock = DockArea(
+            order=["left", "center", "browser", "git", "right"],
+            stretch_key="center",
+            fixed_keys={"left"},
+            no_stack_keys={"center"},
+        )
+        # History is a fixed anchor on the far left: not draggable, and nothing
+        # may stack with it or open a column to its left. The conversation is
+        # also un-draggable and refuses stacking, but columns may still open on
+        # either side of it.
+        anchors = {"left", "center"}
+        for key, title, content in (
+            ("left", "History", self.left_panel),
+            ("center", "Conversation", self.center_panel),
+            ("browser", "Browser", self.browser_panel),
+            ("git", "Git History", self.git_panel),
+            ("right", "Terminal", self.right_panel),
+        ):
+            panel = DockPanel(key, title, content, draggable=key not in anchors)
+            # Git's refresh button rides in the grip row rather than a row of
+            # its own inside the card.
+            if key == "git":
+                panel.header.add_trailing(self.git_panel.refresh_button)
+            self._dock.register(panel)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(splitter)
+        layout.addWidget(self._dock)
 
         # Panel visibility is per-workspace, not global: a new workspace opens
-        # with only History showing, and the terminal, browser, and git panes
-        # stay closed until opened here — independently of what's open in other
-        # workspaces. Applying the defaults now also keeps the lazy panes
-        # (terminal shell, browser Chromium) from spinning up unopened.
+        # with History and the conversation showing; the terminal, browser, and
+        # git panes stay closed (and their lazy shell/Chromium processes unspun)
+        # until toggled open here, independently of other workspaces.
         self._panel_visible = {
             "left": True,
             "browser": False,
             "git": False,
             "right": False,
         }
-        for side, visible in self._panel_visible.items():
-            self.set_panel_visible(side, visible)
+        self._dock.set_layout([["left"], ["center"]])
 
         # Live sessions (one agent + transcript each). Agents start lazily on
         # the first prompt, so opening a workspace stays instant. `unseen`
@@ -148,6 +111,9 @@ class WorkspaceView(QWidget):
         self.controllers: list[SessionController] = []
         self.focused: SessionController | None = None
         self.unseen: set[str] = set()
+        # Last emitted activity state (any session streaming), to fire
+        # activity_changed only on transitions.
+        self._active = False
 
         self.center_panel.chat.submitted.connect(self._on_prompt)
         self.center_panel.chat.model_menu_requested.connect(self._on_model_menu)
@@ -241,6 +207,10 @@ class WorkspaceView(QWidget):
             self._controller_key(c) for c in self.controllers if c.is_streaming
         }
         self.left_panel.set_session_status(running, self.unseen)
+        active = bool(running)
+        if active != self._active:
+            self._active = active
+            self.activity_changed.emit(active)
         self.title_changed.emit(
             self.focused.title if self.focused is not None else ""
         )
@@ -386,35 +356,18 @@ class WorkspaceView(QWidget):
 
     def set_panel_visible(self, side: str, visible: bool) -> None:
         self._panel_visible[side] = visible
-        panel = {
-            "left": self.left_panel,
-            "browser": self.browser_panel,
-            "git": self.git_panel,
-            "right": self.right_panel,
-        }[side]
-        panel.setVisible(visible)
-        # The right column only earns splitter space while it has a visible
-        # pane; a hidden QSplitter child gives up its slot, but the column
-        # widget itself would still claim one.
-        self._right_column.setVisible(
-            not self.right_panel.isHidden() or not self.git_panel.isHidden()
-        )
+        if visible:
+            self._dock.show_panel(side)
+        else:
+            self._dock.hide_panel(side)
 
     # ---- Theme / lifecycle -----------------------------------------------
 
     def set_theme(self, name: str) -> None:
         self._theme_name = name
-        ui = UI_COLORS[name]
-        # Styling the splitter covers the view background and cascades text
-        # color to every panel label.
-        self._splitter.setStyleSheet(
-            f"QSplitter {{ background: {ui['window']}; }}"
-            f" QLabel {{ color: {ui['text']}; }}"
-        )
-        # Same handle colors as the conversation scrollbar, per theme.
-        grip = "#3a3d45" if name == "dark" else "#c9c4b4"
-        self._splitter.set_grip_color(grip)
-        self._right_column.set_grip_color(grip)
+        # The dock paints the view background, colors the splitter grips, and
+        # themes each panel's drag header.
+        self._dock.set_theme(name)
         self.left_panel.set_theme(name)
         self.center_panel.set_theme(name)
         self.browser_panel.set_theme(name)
@@ -424,6 +377,15 @@ class WorkspaceView(QWidget):
             controller.set_theme(name)
 
     def shutdown(self) -> None:
+        # Reap every agent process even if one teardown misbehaves: a raised
+        # exception here must not skip the remaining controllers (or, up in
+        # MainWindow, the remaining workspaces) and leave a live `pi` behind.
         for controller in self.controllers:
-            controller.stop()
-        self.right_panel.shutdown()
+            try:
+                controller.stop()
+            except Exception:
+                pass
+        try:
+            self.right_panel.shutdown()
+        except Exception:
+            pass

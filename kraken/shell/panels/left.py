@@ -5,7 +5,6 @@ import html
 from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtGui import QFont, QIcon, QTextDocument, QTextOption
 from PySide6.QtWidgets import (
-    QLabel,
     QListWidget,
     QListWidgetItem,
     QMenu,
@@ -180,8 +179,6 @@ class LeftPanel(Panel):
         # what fixes the row size the delegate measures and paints with.
         sans = QFont(UI_SANS_FAMILY)
         sans.setPixelSize(13)
-        title = QLabel("History")
-        title.setFont(sans)
         self._new_button = QPushButton("＋  New Session")
         self._new_button.setFont(sans)
         self._new_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -212,7 +209,6 @@ class LeftPanel(Panel):
         self._live: list[tuple[str, str, str | None, bool]] = []
         self._running_icon = _dot_icon("#e0a030")
         self._unseen_icon = _dot_icon("#2ea043")
-        self._card.add_widget(title)
         self._card.add_widget(self._new_button)
         self._card.add_widget(self._list, stretch=1)
         self.add_widget(self._card, stretch=1)
