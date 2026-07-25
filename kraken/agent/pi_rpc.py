@@ -93,20 +93,36 @@ class PiAgent(QObject):
             args += ["--session", self._session_path]
         proc.start("pi", args)
 
+    def set_session_path(self, path: str) -> None:
+        """Remember the session file pi bound itself to. The path is usually
+        learned after launch (a fresh session names its own file), and a
+        respawn after a mid-turn death has to resume *that* session — without
+        it `ensure_started` would silently open an empty one while the
+        transcript still shows the old conversation."""
+        self._session_path = path
+
+    def _detach(self, proc: QProcess) -> None:
+        """Unhook a process we are done with. Its signals must never reach us
+        again: `errorOccurred` can still fire after `finished`, and by then
+        `self._proc` may be a replacement — a stray `_on_error` would clear
+        is_streaming and announce a failure for a turn that is running fine."""
+        proc.readyReadStandardOutput.disconnect(self._on_stdout)
+        proc.readyReadStandardError.disconnect(self._on_stderr)
+        proc.errorOccurred.disconnect(self._on_error)
+        proc.finished.disconnect(self._on_finished)
+
     def stop(self) -> None:
         if self._proc is None:
             return
         proc, self._proc = self._proc, None
         self._callbacks.clear()
-        proc.readyReadStandardOutput.disconnect(self._on_stdout)
-        proc.readyReadStandardError.disconnect(self._on_stderr)
-        proc.errorOccurred.disconnect(self._on_error)
-        proc.finished.disconnect(self._on_finished)
+        self._detach(proc)
         if proc.state() != QProcess.ProcessState.NotRunning:
             proc.terminate()
             if not proc.waitForFinished(2000):
                 proc.kill()
                 proc.waitForFinished(1000)
+        proc.deleteLater()
 
     # ---- Commands -------------------------------------------------------
 
@@ -250,9 +266,14 @@ class PiAgent(QObject):
         died_mid_turn = self.is_streaming
         self.is_streaming = False
         # Drop the dead process and its orphaned callbacks so the next prompt
-        # respawns via ensure_started (resuming the session with --session when
-        # the path is known) instead of writing into a corpse.
-        self._proc = None
+        # respawns via ensure_started (resuming the session with --session,
+        # whose path set_session_path keeps current) instead of writing into a
+        # corpse. The QProcess is a child of ours, so unhook it and hand it to
+        # deleteLater or it lingers, still wired to our slots.
+        proc, self._proc = self._proc, None
+        if proc is not None:
+            self._detach(proc)
+            proc.deleteLater()
         self._buffer = b""
         self._callbacks.clear()
         self.finished.emit(died_mid_turn)

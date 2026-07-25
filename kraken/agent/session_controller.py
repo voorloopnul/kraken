@@ -234,6 +234,9 @@ class SessionController(QObject):
         session_file = data.get("sessionFile")
         if session_file and session_file != self.session_path:
             self.session_path = session_file
+            # The agent needs it too: it launches with `--session` and would
+            # otherwise respawn into an empty session after a mid-turn death.
+            self.agent.set_session_path(session_file)
             self.path_known.emit(session_file)
         model = data.get("model") or {}
         self.thinking_levels = _available_levels(model)
