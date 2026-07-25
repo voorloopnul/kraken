@@ -18,7 +18,9 @@ QTabBar::tab {
     color: #c8cad0;
     border: 1px solid #33353c;
     border-radius: 6px;
-    padding: 4px 10px;
+    font-size: 13px;
+    /* Tight on the right: the ✕ button supplies the trailing space. */
+    padding: 4px 0 4px 10px;
     margin: 2px 6px 2px 0;
 }
 QTabBar::tab:selected {
@@ -44,7 +46,9 @@ QTabBar::tab {
     color: #4a4d55;
     border: 1px solid #d8d8dd;
     border-radius: 6px;
-    padding: 4px 10px;
+    font-size: 13px;
+    /* Tight on the right: the ✕ button supplies the trailing space. */
+    padding: 4px 0 4px 10px;
     margin: 2px 6px 2px 0;
 }
 QTabBar::tab:selected {
@@ -130,7 +134,7 @@ class BrowserTabs(QWidget):
         self._stack.addWidget(browser)
 
         self._counter += 1
-        label = "Browser" if self._counter == 1 else f"Browser ({self._counter})"
+        label = "Browser" if self._counter == 1 else f"Browser#{self._counter}"
         index = self._tab_bar.addTab(label)
 
         close = QToolButton()
