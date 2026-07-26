@@ -168,6 +168,19 @@ class BrowserWidget(QWidget):
         self._url_bar.setText("" if text == "about:blank" else text)
         self._apply_page_background()
 
+    # ---- State ---------------------------------------------------------
+
+    @property
+    def is_blank(self) -> bool:
+        """True when no page is loaded — a fresh tab sits on about:blank."""
+        return self.web.url().toString() in _BLANK_URLS
+
+    @property
+    def crashed(self) -> bool:
+        """True while the tab is showing the renderer-crash notice, i.e. its
+        page is gone and only an explicit reload will bring it back."""
+        return self._crash_notice.isVisible()
+
     # ---- Renderer crashes ----------------------------------------------
 
     # main.py caps Chromium at a single renderer process for the whole app, so
@@ -188,6 +201,12 @@ class BrowserWidget(QWidget):
             # every reload into the one shared renderer, so a background tab
             # waits until someone actually looks at it.
             self._reload_pending = True
+            return
+        # An empty tab holds no content that could have killed anything — it
+        # died only because it shares the one renderer with whichever tab did.
+        # Never accuse it: just put a live page back underneath it.
+        if self.is_blank:
+            self.web.reload()
             return
         # A rendering fault is usually transient, so the first one costs a
         # single silent reload. One that comes straight back is reproducible,
@@ -261,8 +280,7 @@ class BrowserWidget(QWidget):
         white and picks its text colors against it, so keeping the dark tint
         would leave those pages dark-on-dark.
         """
-        blank = self.web.url().toString() in _BLANK_URLS
-        color = UI_COLORS[self._theme_name]["card"] if blank else "#ffffff"
+        color = UI_COLORS[self._theme_name]["card"] if self.is_blank else "#ffffff"
         try:
             self.web.page().setBackgroundColor(QColor(color))
         except RuntimeError:  # page torn down mid-teardown, as in _set_lifecycle

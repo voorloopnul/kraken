@@ -456,6 +456,20 @@ class MainWindow(QMainWindow):
         if browser is None or not view.browser_panel.isVisible():
             QToolTip.showText(pos, "Open the browser panel first", button)
             return
+        # Both of these would grab a blank image and land on the "still
+        # rendering" advice below, which is wrong for either: a crashed page
+        # never finishes rendering, and an empty tab has nothing to render.
+        if browser.crashed:
+            QMessageBox.warning(
+                self,
+                "Screenshot failed",
+                "This page crashed and was closed. Reload it in the browser "
+                "panel, then try again.",
+            )
+            return
+        if browser.is_blank:
+            QToolTip.showText(pos, "This tab has no page loaded", button)
+            return
         pixmap = browser.web.grab()
         if pixmap.isNull() or _looks_blank(pixmap):
             QMessageBox.warning(
