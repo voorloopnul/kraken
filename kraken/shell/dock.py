@@ -16,7 +16,7 @@ move untouched."""
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -26,7 +26,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from kraken.ui.fonts import UI_SANS_FAMILY
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 
 # Preferred column widths per panel key, used to size a column when the dock
@@ -40,10 +39,10 @@ _EDGE_BAND = 0.28
 _DRAG_THRESHOLD = 6
 
 # The grip sits inside the panel's card, so it paints transparent over the
-# card and only carries a faint bottom rule to separate it from the content.
+# card and carries nothing but the glyph itself.
 _HEADER_COLORS = {
-    "dark": {"text": "#c8cad0", "grip": "#5a5d65", "rule": "#33353c", "hover": "#2c2e35"},
-    "light": {"text": "#4a4d55", "grip": "#a9acb4", "rule": "#e4e4e8", "hover": "#ececef"},
+    "dark": {"grip": "#5a5d65", "hover": "#2c2e35"},
+    "light": {"grip": "#a9acb4", "hover": "#ececef"},
 }
 _GRIP_COLORS = {"dark": "#3a3d45", "light": "#c9c4b4"}
 # Drop indicator: a translucent fill with a solid accent border.
@@ -104,70 +103,35 @@ class _GripSplitter(QSplitter):
         return _GripHandle(self.orientation(), self)
 
 
-class _PanelHeader(QWidget):
-    """The slim bar atop each panel: a two-dot grip glyph plus the panel title.
-    Pressing and dragging it moves the whole panel; the DockArea listens to
-    these signals and drives the move."""
+class PanelGrip(QLabel):
+    """The two-dot glyph that drags a panel. It is the *only* drag surface —
+    whatever it is mounted next to (a tab strip, a header row) keeps its own
+    mouse handling. The DockArea listens to these signals and drives the move."""
 
     pressed = Signal(QPoint)  # global cursor position at press
     moved = Signal(QPoint)  # global cursor position while the button is held
     released = Signal(QPoint)  # global cursor position at release
 
-    def __init__(
-        self, title: str, draggable: bool = True, parent: QWidget | None = None
-    ):
-        super().__init__(parent)
-        # A styled background/border only paints on a plain QWidget with this.
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__("⠿", parent)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setFixedHeight(24)
-        self.draggable = draggable
-        if draggable:
-            self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._down = False
-        font = QFont(UI_SANS_FAMILY)
-        font.setPixelSize(12)
-        font.setWeight(QFont.Weight.DemiBold)
-        # A non-draggable header carries no grip glyph — there's nothing to grab.
-        self._grip = QLabel("⠿" if draggable else "")
-        self._title = QLabel(title)
-        self._title.setFont(font)
-        # The card already pads its edges, so the grip only needs a little
-        # breathing room of its own.
-        self._layout = QHBoxLayout(self)
-        self._layout.setContentsMargins(2, 0, 2, 0)
-        self._layout.setSpacing(6)
-        self._layout.addWidget(self._grip)
-        self._layout.addWidget(self._title)
-        self._layout.addStretch(1)
-
-    def add_trailing(self, widget: QWidget) -> None:
-        """Add a control (e.g. a refresh button) at the far right of the grip
-        row, past the stretch."""
-        self._layout.addWidget(widget)
 
     def set_theme(self, name: str) -> None:
         c = _HEADER_COLORS[name]
-        # Transparent over the card; a hover tint hints the drag affordance,
-        # but only where there is actually something to grab.
-        hover = (
-            f" _PanelHeader:hover {{ background: {c['hover']}; }}"
-            if self.draggable
-            else ""
-        )
+        # Transparent over whatever it rides in; the hover tint is what hints
+        # that this glyph — and nothing around it — is the thing to grab.
         self.setStyleSheet(
-            f"_PanelHeader {{ background: transparent;"
-            f" border-bottom: 1px solid {c['rule']}; }}"
-            f"{hover}"
-            f" QLabel {{ color: {c['text']}; background: transparent;"
-            " font-size: 12px; }"
+            f"PanelGrip {{ background: transparent; padding: 0 4px;"
+            f" color: {c['grip']}; font-size: 13px; border-radius: 4px; }}"
+            f" PanelGrip:hover {{ background: {c['hover']}; }}"
         )
-        self._grip.setStyleSheet(f"color: {c['grip']}; font-size: 13px;")
 
     # A left-button press starts a potential drag; Qt's implicit mouse grab
     # keeps the moves and the release coming here even over other widgets.
     def mousePressEvent(self, event) -> None:
-        if not self.draggable:
-            return super().mousePressEvent(event)
         if event.button() == Qt.MouseButton.LeftButton:
             self._down = True
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
@@ -187,33 +151,59 @@ class _PanelHeader(QWidget):
             event.accept()
 
 
+class _PanelHeader(QWidget):
+    """A slim row of its own for the grip, used by panels that have no strip of
+    their own for it to ride in. Trailing controls (e.g. git's refresh button)
+    sit at its far right."""
+
+    def __init__(self, grip: PanelGrip, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setFixedHeight(24)
+        # The card already pads its edges, so the row only needs a little
+        # breathing room of its own.
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(2, 0, 2, 0)
+        self._layout.setSpacing(6)
+        self._layout.addWidget(grip)
+        self._layout.addStretch(1)
+
+    def add_trailing(self, widget: QWidget) -> None:
+        """Add a control (e.g. a refresh button) at the far right of the grip
+        row, past the stretch."""
+        self._layout.addWidget(widget)
+
+
 class DockPanel(QWidget):
-    """One dockable panel. Its drag-handle header lives *inside* the content
-    panel (mounted into the card's top row), so the grip reads as part of the
-    panel rather than a bar wrapped around it. The content is created and
+    """One dockable panel. Its drag grip lives *inside* the content panel, so
+    it reads as part of the panel rather than a bar wrapped around it: panels
+    with a tab strip take the grip into that strip (ahead of the first tab),
+    the rest get a slim header row of their own. The content is created and
     themed by WorkspaceView; the dock only moves the DockPanel between columns,
     so the content's live state is preserved."""
 
-    def __init__(
-        self, key: str, title: str, content: QWidget, draggable: bool = True
-    ):
+    def __init__(self, key: str, content: QWidget, draggable: bool = True):
         super().__init__()
         self.key = key
         self.content = content
         self.draggable = draggable
-        # Only a draggable panel carries a grip header; the fixed anchors
-        # (History, Conversation) show no header at all.
-        self.header = _PanelHeader(title, draggable=True) if draggable else None
-        if self.header is not None:
-            content.mount_grip(self.header)
+        # Only a draggable panel carries a grip; the fixed anchors (History,
+        # Conversation) show none at all.
+        self.grip = PanelGrip() if draggable else None
+        self.header = None
+        if self.grip is not None:
+            # The content takes the bare grip if it has somewhere to put it;
+            # otherwise it gets a header row built around it.
+            if not content.mount_grip(self.grip):
+                self.header = _PanelHeader(self.grip)
+                content.mount_grip_row(self.header)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(content, stretch=1)
 
     def set_theme(self, name: str) -> None:
-        if self.header is not None:
-            self.header.set_theme(name)
+        if self.grip is not None:
+            self.grip.set_theme(name)
 
 
 class _DockColumn(_GripSplitter):
@@ -309,13 +299,13 @@ class DockArea(QWidget):
 
     def register(self, panel: DockPanel) -> None:
         """Make a panel known to the dock (hidden until placed). Wires its
-        header so a drag on it is routed here."""
+        grip so a drag on it is routed here."""
         self._panels[panel.key] = panel
         if not panel.draggable:
-            return  # anchored panel: no header, no drag wiring
-        panel.header.pressed.connect(lambda pos, p=panel: self._on_press(p, pos))
-        panel.header.moved.connect(self._on_move)
-        panel.header.released.connect(self._on_release)
+            return  # anchored panel: no grip, no drag wiring
+        panel.grip.pressed.connect(lambda pos, p=panel: self._on_press(p, pos))
+        panel.grip.moved.connect(self._on_move)
+        panel.grip.released.connect(self._on_release)
 
     def set_layout(self, columns: list[list[str]]) -> None:
         """Build the initial column layout from a list of columns, each a list

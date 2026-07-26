@@ -31,7 +31,17 @@ class RightPanel(Panel):
         self._remote = remote
         self.terminals = None
         self._creating = False
+        # Held (unparented, so nothing paints) until the tab strip it rides in
+        # exists; the dock hands it over long before the panel is first shown.
+        self._grip = None
         self.add_widget(self._card, stretch=1)
+
+    def mount_grip(self, grip: QWidget) -> bool:
+        """The grip rides at the head of the terminal's own tab strip."""
+        self._grip = grip
+        if self.terminals is not None:
+            self.terminals.mount_grip(grip)
+        return True
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -49,6 +59,8 @@ class RightPanel(Panel):
 
             terminals = TerminalTabs(self, cwd=self._cwd, remote=self._remote)
             terminals.set_theme(self._theme_name)
+            if self._grip is not None:
+                terminals.mount_grip(self._grip)
             self._card.add_widget(terminals, stretch=1)
             self.terminals = terminals
         finally:

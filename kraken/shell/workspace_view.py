@@ -74,14 +74,14 @@ class WorkspaceView(QWidget):
         # also un-draggable and refuses stacking, but columns may still open on
         # either side of it.
         anchors = {"left", "center"}
-        for key, title, content in (
-            ("left", "History", self.left_panel),
-            ("center", "Conversation", self.center_panel),
-            ("browser", "Browser", self.browser_panel),
-            ("git", "Git History", self.git_panel),
-            ("right", "Terminal", self.right_panel),
+        for key, content in (
+            ("left", self.left_panel),
+            ("center", self.center_panel),
+            ("browser", self.browser_panel),
+            ("git", self.git_panel),
+            ("right", self.right_panel),
         ):
-            panel = DockPanel(key, title, content, draggable=key not in anchors)
+            panel = DockPanel(key, content, draggable=key not in anchors)
             # Git's refresh button rides in the grip row rather than a row of
             # its own inside the card.
             if key == "git":

@@ -17,7 +17,17 @@ class BrowserPanel(Panel):
         self._theme_name = DEFAULT_THEME
         self.browsers = None
         self._creating = False
+        # Held (unparented, so nothing paints) until the tab strip it rides in
+        # exists; the dock hands it over long before the panel is first shown.
+        self._grip = None
         self.add_widget(self._card, stretch=1)
+
+    def mount_grip(self, grip: QWidget) -> bool:
+        """The grip rides at the head of the browser's own tab strip."""
+        self._grip = grip
+        if self.browsers is not None:
+            self.browsers.mount_grip(grip)
+        return True
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -36,6 +46,8 @@ class BrowserPanel(Panel):
 
             tabs = BrowserTabs(self)
             tabs.set_theme(self._theme_name)
+            if self._grip is not None:
+                tabs.mount_grip(self._grip)
             self._card.add_widget(tabs, stretch=1)
             self.browsers = tabs
         finally:

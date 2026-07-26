@@ -76,12 +76,19 @@ class Panel(QWidget):
     def add_widget(self, widget: QWidget, stretch: int = 0) -> None:
         self._layout.addWidget(widget, stretch)
 
-    def mount_grip(self, grip: QWidget) -> None:
-        """Host the dock's drag grip inside this panel: at the top of the
-        card when the panel has one (so the grip sits within the rounded
-        border), otherwise at the very top of the panel's own layout."""
+    def mount_grip(self, grip: QWidget) -> bool:
+        """Take the dock's bare drag grip into a strip this panel already has
+        (a tab row, say). Returning False means there is nowhere for it to
+        ride, so the dock will wrap it in a row of its own and hand that back
+        through mount_grip_row()."""
+        return False
+
+    def mount_grip_row(self, row: QWidget) -> None:
+        """Host the dock's grip row inside this panel: at the top of the card
+        when the panel has one (so the row sits within the rounded border),
+        otherwise at the very top of the panel's own layout."""
         card = getattr(self, "_card", None)
         if card is not None:
-            card.add_header(grip)
+            card.add_header(row)
         else:
-            self._layout.insertWidget(0, grip)
+            self._layout.insertWidget(0, row)

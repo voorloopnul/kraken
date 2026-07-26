@@ -32,8 +32,8 @@ QTabBar::tab {
     border-radius: 6px;
     font-size: 13px;
     /* Tight on the right: the ✕ button supplies the trailing space. */
-    padding: 4px 0 4px 10px;
-    margin: 2px 6px 2px 0;
+    padding: 3px 0 3px 8px;
+    margin: 2px 4px 2px 0;
 }
 QTabBar::tab:selected {
     background: #1c2f50;
@@ -60,8 +60,8 @@ QTabBar::tab {
     border-radius: 6px;
     font-size: 13px;
     /* Tight on the right: the ✕ button supplies the trailing space. */
-    padding: 4px 0 4px 10px;
-    margin: 2px 6px 2px 0;
+    padding: 3px 0 3px 8px;
+    margin: 2px 4px 2px 0;
 }
 QTabBar::tab:selected {
     background: #dce8fb;
@@ -117,6 +117,7 @@ class TerminalTabs(QWidget):
         tab_row.setStyleSheet(_TAB_ROW_STYLES[self._theme_name])
         self._tab_row = tab_row
         row_layout = QHBoxLayout(tab_row)
+        self._row_layout = row_layout
         row_layout.setContentsMargins(6, 4, 6, 4)
         row_layout.setSpacing(0)
         row_layout.addWidget(self._tab_bar)
@@ -132,6 +133,12 @@ class TerminalTabs(QWidget):
         layout.addWidget(self._stack, stretch=1)
 
         self.add_terminal()
+
+    def mount_grip(self, grip: QWidget) -> None:
+        """Seat the dock's drag grip at the head of the tab strip, ahead of the
+        first tab."""
+        self._row_layout.insertWidget(0, grip)
+        self._row_layout.insertSpacing(1, 6)
 
     # ---- Tabs ----------------------------------------------------------
 
@@ -164,11 +171,11 @@ class TerminalTabs(QWidget):
         close.clicked.connect(lambda: self._close_terminal(term))
         # Wrapper keeps the button inside the pill: the tab bar positions
         # side-buttons relative to the tab rect, which includes the pill's
-        # 6px margin-right, so without the inset the ✕ lands on the border.
+        # 4px margin-right, so without the inset the ✕ lands on the border.
         holder = QWidget()
-        holder.setFixedSize(26, 16)
+        holder.setFixedSize(22, 16)
         holder_layout = QHBoxLayout(holder)
-        holder_layout.setContentsMargins(0, 0, 10, 0)
+        holder_layout.setContentsMargins(0, 0, 6, 0)
         holder_layout.addWidget(close)
         self._tab_bar.setTabButton(index, QTabBar.ButtonPosition.RightSide, holder)
 
