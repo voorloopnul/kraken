@@ -1,14 +1,23 @@
 """Chat input box: a bordered container with an attachment chip row, a
-multiline prompt field, and a footer row (attach and model selector on the
-left; effort selector and Send on the right). Emits `submitted` with the text
-and any attached images."""
+multiline prompt field, and a footer row (attach, dictate and model selector
+on the left; effort selector and Send on the right). Emits `submitted` with
+the text and any attached images."""
 
 from __future__ import annotations
 
 import base64
 from pathlib import Path
 
-from PySide6.QtCore import QBuffer, QEvent, QIODevice, QMimeData, QPoint, Qt, Signal
+from PySide6.QtCore import (
+    QBuffer,
+    QEvent,
+    QIODevice,
+    QMimeData,
+    QPoint,
+    Qt,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import QImage, QImageReader, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -317,6 +326,13 @@ class ChatInput(QFrame):
     # The user picked a reasoning effort level from the menu.
     effort_selected = Signal(str)
 
+    # Mic button faces. Recording swaps in an elapsed timer, transcribing a
+    # static marker — the button is the only progress indicator the feature
+    # needs, so it never grows a spinner of its own.
+    _MIC_IDLE = "🎙"
+    _MIC_BUSY = "🎙 …"
+    _MIC_COLOR = "#e0574f"
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("chatBox")
@@ -325,6 +341,16 @@ class ChatInput(QFrame):
         # other files (folded into the message text on submit, since the pi
         # RPC prompt only carries images).
         self._attachments: list[tuple[dict | str, QWidget]] = []
+
+        # Voice input state. The recorder and transcriber are built on the
+        # first mic click so a session that never dictates never imports
+        # onnxruntime or opens an audio device.
+        self._recorder = None
+        self._transcriber = None
+        self._voice_peak = 0.0
+        self._mic_timer = QTimer(self)
+        self._mic_timer.setInterval(200)
+        self._mic_timer.timeout.connect(self._tick_recording)
 
         self._edit = _PromptEdit()
         self._edit.setPlaceholderText(
@@ -351,6 +377,9 @@ class ChatInput(QFrame):
         self._attach = tool_button("+")
         self._attach.setToolTip("Attach images or files")
         self._attach.clicked.connect(self._pick_files)
+        self._mic = tool_button(self._MIC_IDLE)
+        self._mic.setToolTip("Dictate a prompt")
+        self._mic.clicked.connect(self._toggle_recording)
         self._model = tool_button("Model  ⌄")
         self._model.setToolTip("Switch model")
         self._model.clicked.connect(self.model_menu_requested)
@@ -366,6 +395,7 @@ class ChatInput(QFrame):
         footer.setContentsMargins(4, 0, 4, 2)
         footer.setSpacing(6)
         footer.addWidget(self._attach)
+        footer.addWidget(self._mic)
         footer.addWidget(separator())
         footer.addWidget(self._model)
         footer.addStretch(1)
@@ -498,6 +528,93 @@ class ChatInput(QFrame):
         self._attach_row.hide()
         self._on_text_changed()
 
+    # ---- Voice input -------------------------------------------------------
+
+    def _notify_mic(self, text: str) -> None:
+        QToolTip.showText(self._mic.mapToGlobal(self._mic.rect().center()), text, self._mic)
+
+    def _toggle_recording(self) -> None:
+        """Click to start, click again to transcribe. The model is downloaded
+        on the first click ever, before the mic is opened — asking
+        mid-recording would throw away whatever was said during the dialog."""
+        if self._recorder is not None and self._recorder.is_recording:
+            self._finish_recording()
+            return
+
+        from kraken.voice import ui as voice_ui
+        from kraken.voice.recorder import Recorder, has_input_device
+
+        if not has_input_device():
+            self._notify_mic("No microphone found")
+            return
+        if not voice_ui.ensure_model(self):
+            return
+
+        if self._recorder is None:
+            self._recorder = Recorder(self)
+            self._recorder.level.connect(self._on_level)
+        self._voice_peak = 0.0
+        if not self._recorder.start():
+            self._notify_mic("Could not open the microphone")
+            return
+        self._mic.setStyleSheet(f"color: {self._MIC_COLOR};")
+        self._tick_recording()
+        self._mic_timer.start()
+        self._edit.setFocus()
+
+    def _on_level(self, level: float) -> None:
+        self._voice_peak = max(self._voice_peak, level)
+
+    def _tick_recording(self) -> None:
+        seconds = int(self._recorder.seconds)
+        self._mic.setText(f"⏺ {seconds // 60}:{seconds % 60:02d}")
+
+    def _finish_recording(self) -> None:
+        pcm = self._recorder.stop()
+        self._mic_timer.stop()
+        # A take with no signal at all is almost always a muted or misrouted
+        # device; transcribing it would just return nothing with no clue why.
+        if self._voice_peak < 0.01:
+            self._reset_mic()
+            self._notify_mic("No sound was recorded — check your microphone")
+            return
+
+        from kraken.voice.service import Transcriber
+
+        if self._transcriber is None:
+            self._transcriber = Transcriber(self)
+            self._transcriber.finished.connect(self._on_transcribed)
+        self._mic.setEnabled(False)
+        self._mic.setText(self._MIC_BUSY)
+        self._transcriber.start(pcm)
+
+    def _cancel_recording(self) -> None:
+        if self._recorder is not None and self._recorder.is_recording:
+            self._recorder.cancel()
+            self._mic_timer.stop()
+            self._reset_mic()
+
+    def _reset_mic(self) -> None:
+        self._mic.setEnabled(True)
+        self._mic.setStyleSheet("")
+        self._mic.setText(self._MIC_IDLE)
+
+    def _on_transcribed(self, text: str, error: str) -> None:
+        self._reset_mic()
+        if error:
+            self._notify_mic(f"Transcription failed: {error}")
+            return
+        if not text:
+            self._notify_mic("Nothing was said")
+            return
+        # Insert rather than replace: dictation composes with what's already
+        # typed, and lands where the cursor is.
+        cursor = self._edit.textCursor()
+        before = self._edit.toPlainText()[: cursor.selectionStart()]
+        cursor.insertText(text if not before or before[-1].isspace() else " " + text)
+        self._edit.setTextCursor(cursor)
+        self._edit.setFocus()
+
     def set_model_label(self, text: str | None) -> None:
         self._model.setText(f"{text or 'Model'}  ⌄")
 
@@ -560,16 +677,23 @@ class ChatInput(QFrame):
         return self._edit.toPlainText()
 
     def eventFilter(self, obj, event) -> bool:
-        from PySide6.QtCore import QEvent
-
+        if obj is not self._edit or event.type() != QEvent.Type.KeyPress:
+            return super().eventFilter(obj, event)
         if (
-            obj is self._edit
-            and event.type() == QEvent.Type.KeyPress
-            and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+            event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
             and event.modifiers() & Qt.KeyboardModifier.ControlModifier
         ):
+            # Ctrl+Enter while dictating means "that's the prompt": close the
+            # recording first so the transcript lands before the send.
+            if self._recorder is not None and self._recorder.is_recording:
+                self._finish_recording()
+                return True
             self._submit()
             return True
+        if event.key() == Qt.Key.Key_Escape and self._recorder is not None:
+            if self._recorder.is_recording:
+                self._cancel_recording()
+                return True
         return super().eventFilter(obj, event)
 
     def _on_text_changed(self) -> None:

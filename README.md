@@ -10,6 +10,7 @@ It is built on the [Pi coding agent](https://github.com/earendil-works/pi-coding
 - [x] an embedded terminal
 - [x] an embedded browser
 - [x] workspace/project switching
+- [x] voice input — dictate a prompt, transcribed locally on the CPU
 
 ## Minimum Requirements
 
@@ -33,10 +34,23 @@ The packaged launcher can self-install into `~/.local/share/kraken` and create a
 Kraken stores app state in:
 
 - `~/.kraken/state.json`
+- `~/.kraken/models` — speech-to-text weights, downloaded on first use
 
 Pi sessions are read from:
 
 - `~/.pi/agent/sessions`
+
+## Voice input
+
+The mic button next to the prompt box records from the default input device
+and transcribes it into the prompt. Everything runs locally through
+onnxruntime; audio never leaves the machine.
+
+The first click asks to download the model — Parakeet TDT 0.6B v2, English,
+~661 MB — into `~/.kraken/models`. It is accurate on code and technical
+terms, and punctuates and capitalises.
+
+Click to start, click again to transcribe, `Esc` to discard the take.
 
 ## Notes
 

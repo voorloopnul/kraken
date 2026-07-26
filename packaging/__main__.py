@@ -25,7 +25,14 @@ import zipfile
 APP_NAME = "kraken"
 APP_DISPLAY = "Kraken"
 # Third-party runtime dependencies (everything else the app uses is stdlib).
-DEPS = ["pyside6>=6.11.1", "pygments>=2.20.0"]
+DEPS = [
+    "pyside6>=6.11.1",
+    "pygments>=2.20.0",
+    # Voice input: onnx-asr brings onnxruntime + numpy + huggingface-hub and
+    # drives the Parakeet model. The weights themselves are not bundled — they
+    # are fetched into ~/.kraken/models on first use.
+    "onnx-asr[cpu,hub]>=0.12.0",
+]
 PYTHON_VERSION = "3.14"
 # The Pi coding agent is an npm CLI (node dist/cli.js). We provision it via npm
 # into a private prefix rather than bundling its ~180MB of JS + native modules.
