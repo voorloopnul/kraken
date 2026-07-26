@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import time
+
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QColor
 from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 
@@ -40,6 +49,10 @@ QLineEdit {
 
 class BrowserWidget(QWidget):
     """One browser instance with back/forward/reload/address bar."""
+
+    # A second crash this soon after an automatic reload is a page that kills
+    # the renderer every time it renders, not a one-off fault.
+    _RELOAD_GRACE = 10.0
 
     # New tabs start on about:blank: a blank page costs ~0 memory, while a
     # real start page costs its full content (~40MB for duckduckgo.com) in
@@ -89,11 +102,38 @@ class BrowserWidget(QWidget):
 
         self.web = QWebEngineView()
 
+        # Shown in the web view's place when a crashed page is not worth
+        # retrying. Built up front so the crash path never has to allocate.
+        self._crash_notice = QWidget()
+        self._crash_notice.setObjectName("crashNotice")
+        self._crash_notice.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        crash_label = QLabel(
+            "This page stopped responding and was closed.\n"
+            "Reloading it crashed the browser again."
+        )
+        crash_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        retry = QToolButton()
+        retry.setText("Reload")
+        retry.setCursor(Qt.CursorShape.PointingHandCursor)
+        retry.clicked.connect(self._retry_after_crash)
+        crash_layout = QVBoxLayout(self._crash_notice)
+        crash_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        crash_layout.setSpacing(12)
+        crash_layout.addWidget(crash_label)
+        crash_layout.addWidget(retry, alignment=Qt.AlignmentFlag.AlignCenter)
+        self._crash_notice.hide()
+
+        # Crash bookkeeping: when the last automatic reload went out, and
+        # whether a tab that crashed while hidden still owes one.
+        self._last_auto_reload = 0.0
+        self._reload_pending = False
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addLayout(top)
         layout.addWidget(self.web, 1)
+        layout.addWidget(self._crash_notice, 1)
 
         back.clicked.connect(self.web.back)
         forward.clicked.connect(self.web.forward)
@@ -101,6 +141,7 @@ class BrowserWidget(QWidget):
         go.clicked.connect(self._go)
         self._url_bar.returnPressed.connect(self._go)
         self.web.urlChanged.connect(self._update_url)
+        self.web.page().renderProcessTerminated.connect(self._on_render_crash)
 
         self._theme_name = DEFAULT_THEME
         self.set_theme(DEFAULT_THEME)
@@ -119,12 +160,53 @@ class BrowserWidget(QWidget):
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
         self._url_bar.setText(url)
+        self._show_crash_notice(False)
         self.web.load(QUrl(url))
 
     def _update_url(self, url: QUrl) -> None:
         text = url.toString()
         self._url_bar.setText("" if text == "about:blank" else text)
         self._apply_page_background()
+
+    # ---- Renderer crashes ----------------------------------------------
+
+    # main.py caps Chromium at a single renderer process for the whole app, so
+    # a page that kills it blanks every open tab at once, in every workspace.
+    # Qt reports the death and does nothing else — it never respawns, paints no
+    # error page, and url() keeps returning the address that died — so without
+    # the handling below a crash leaves the tab showing a white void under a
+    # perfectly normal-looking address bar, forever.
+
+    def _on_render_crash(self, status, exit_code: int) -> None:
+        normal = QWebEnginePage.RenderProcessTerminationStatus.NormalTerminationStatus
+        if status == normal:
+            return  # an orderly shutdown (page closed), not a failure
+        if not self.isVisible():
+            # Hidden tabs are deliberately frozen to keep Chromium's footprint
+            # down (see the lifecycle section below). Reviving all of them at
+            # once — they all just died together — would undo that and pile
+            # every reload into the one shared renderer, so a background tab
+            # waits until someone actually looks at it.
+            self._reload_pending = True
+            return
+        # A rendering fault is usually transient, so the first one costs a
+        # single silent reload. One that comes straight back is reproducible,
+        # and retrying it forever would just wedge the browser.
+        if time.monotonic() - self._last_auto_reload < self._RELOAD_GRACE:
+            self._show_crash_notice(True)
+            return
+        self._last_auto_reload = time.monotonic()
+        self.web.reload()
+
+    def _retry_after_crash(self) -> None:
+        # An explicit retry earns a fresh automatic attempt next time.
+        self._last_auto_reload = 0.0
+        self._show_crash_notice(False)
+        self.web.reload()
+
+    def _show_crash_notice(self, crashed: bool) -> None:
+        self._crash_notice.setVisible(crashed)
+        self.web.setVisible(not crashed)
 
     # ---- Lifecycle -----------------------------------------------------
 
@@ -138,6 +220,11 @@ class BrowserWidget(QWidget):
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._set_lifecycle(QWebEnginePage.LifecycleState.Active)
+        if self._reload_pending:
+            # Crashed while hidden; this is the first time it's been looked at.
+            self._reload_pending = False
+            self._last_auto_reload = time.monotonic()
+            self.web.reload()
 
     def hideEvent(self, event) -> None:
         super().hideEvent(event)
@@ -155,7 +242,12 @@ class BrowserWidget(QWidget):
 
     def set_theme(self, name: str) -> None:
         self._theme_name = name
-        self.setStyleSheet(_BROWSER_STYLES[name])
+        ui = UI_COLORS[name]
+        self.setStyleSheet(
+            _BROWSER_STYLES[name]
+            + f"#crashNotice {{ background: {ui['card']}; }}"
+            f" #crashNotice QLabel {{ color: {ui['text']}; font-size: 13px; }}"
+        )
         self._apply_page_background()
 
     def _apply_page_background(self) -> None:
