@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QColor
 from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QToolButton, QVBoxLayout, QWidget
 
-from kraken.ui.themes import DEFAULT_THEME
+from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
+
+_BLANK_URLS = ("", "about:blank")
 
 _BROWSER_STYLES = {
     "dark": """
@@ -85,7 +88,6 @@ class BrowserWidget(QWidget):
         top.addWidget(go)
 
         self.web = QWebEngineView()
-        self.web.load(QUrl(initial_url))
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -102,6 +104,8 @@ class BrowserWidget(QWidget):
 
         self._theme_name = DEFAULT_THEME
         self.set_theme(DEFAULT_THEME)
+        # Loaded last so the blank page is already tinted when it paints.
+        self.web.load(QUrl(initial_url))
 
     # ---- Navigation ----------------------------------------------------
 
@@ -120,6 +124,7 @@ class BrowserWidget(QWidget):
     def _update_url(self, url: QUrl) -> None:
         text = url.toString()
         self._url_bar.setText("" if text == "about:blank" else text)
+        self._apply_page_background()
 
     # ---- Lifecycle -----------------------------------------------------
 
@@ -151,6 +156,25 @@ class BrowserWidget(QWidget):
     def set_theme(self, name: str) -> None:
         self._theme_name = name
         self.setStyleSheet(_BROWSER_STYLES[name])
+        self._apply_page_background()
+
+    def _apply_page_background(self) -> None:
+        """Paint the canvas behind the document. A new tab sits on about:blank,
+        which declares no background of its own, so Chromium's default shows
+        through — a sheet of white in the middle of a dark window. Tint it to
+        match the card instead.
+
+        Only while blank, though: hand the white back the moment a real page
+        loads. A site that declares no background expects the canvas to be
+        white and picks its text colors against it, so keeping the dark tint
+        would leave those pages dark-on-dark.
+        """
+        blank = self.web.url().toString() in _BLANK_URLS
+        color = UI_COLORS[self._theme_name]["card"] if blank else "#ffffff"
+        try:
+            self.web.page().setBackgroundColor(QColor(color))
+        except RuntimeError:  # page torn down mid-teardown, as in _set_lifecycle
+            pass
 
     @property
     def theme_name(self) -> str:
