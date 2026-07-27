@@ -115,7 +115,7 @@ class BrowserWidget(QWidget):
         retry = QToolButton()
         retry.setText("Reload")
         retry.setCursor(Qt.CursorShape.PointingHandCursor)
-        retry.clicked.connect(self._retry_after_crash)
+        retry.clicked.connect(self._reload_page)
         crash_layout = QVBoxLayout(self._crash_notice)
         crash_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         crash_layout.setSpacing(12)
@@ -137,7 +137,7 @@ class BrowserWidget(QWidget):
 
         back.clicked.connect(self.web.back)
         forward.clicked.connect(self.web.forward)
-        reload.clicked.connect(self.web.reload)
+        reload.clicked.connect(self._reload_page)
         go.clicked.connect(self._go)
         self._url_bar.returnPressed.connect(self._go)
         self.web.urlChanged.connect(self._update_url)
@@ -194,6 +194,12 @@ class BrowserWidget(QWidget):
         normal = QWebEnginePage.RenderProcessTerminationStatus.NormalTerminationStatus
         if status == normal:
             return  # an orderly shutdown (page closed), not a failure
+        if self.crashed:
+            # Already given up on this one: its page is hidden behind the notice
+            # and only the user asking can bring it back. This death is some
+            # other tab's doing, and reloading here would put a live page back
+            # underneath a notice that says the tab is gone.
+            return
         if not self.isVisible():
             # Hidden tabs are deliberately frozen to keep Chromium's footprint
             # down (see the lifecycle section below). Reviving all of them at
@@ -206,6 +212,12 @@ class BrowserWidget(QWidget):
         # died only because it shares the one renderer with whichever tab did.
         # Never accuse it: just put a live page back underneath it.
         if self.is_blank:
+            # Rate-limited all the same: whatever is killing the renderer will
+            # keep killing it, and an unthrottled blank tab would just spin on
+            # crash-reload-crash. Sitting still costs nothing — it's blank.
+            if time.monotonic() - self._last_auto_reload < self._RELOAD_GRACE:
+                return
+            self._last_auto_reload = time.monotonic()
             self.web.reload()
             return
         # A rendering fault is usually transient, so the first one costs a
@@ -217,7 +229,10 @@ class BrowserWidget(QWidget):
         self._last_auto_reload = time.monotonic()
         self.web.reload()
 
-    def _retry_after_crash(self) -> None:
+    def _reload_page(self) -> None:
+        """Reload on the user's say-so — the toolbar button and the crash
+        notice's Reload are the same action. Every reload has to take the
+        notice down with it, or the page comes back invisible underneath it."""
         # An explicit retry earns a fresh automatic attempt next time.
         self._last_auto_reload = 0.0
         self._show_crash_notice(False)
@@ -241,8 +256,11 @@ class BrowserWidget(QWidget):
         self._set_lifecycle(QWebEnginePage.LifecycleState.Active)
         if self._reload_pending:
             # Crashed while hidden; this is the first time it's been looked at.
+            # It may have died once before while visible, so the notice can
+            # already be up over the page this reload is about to bring back.
             self._reload_pending = False
             self._last_auto_reload = time.monotonic()
+            self._show_crash_notice(False)
             self.web.reload()
 
     def hideEvent(self, event) -> None:
