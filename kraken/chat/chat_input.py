@@ -308,7 +308,7 @@ class _EffortPopup(QFrame):
 
 
 class ChatInput(QFrame):
-    """The prompt box; Send (or Ctrl+Enter) emits `submitted` and clears."""
+    """The prompt box; Send (or Enter) emits `submitted` and clears."""
 
     # (text, images, files) — images are prompt-ready dicts
     # {"type": "image", "data": <base64>, "mimeType": "image/png"}; files are
@@ -348,8 +348,8 @@ class ChatInput(QFrame):
         self._recorder = None
         self._transcriber = None
         self._voice_peak = 0.0
-        # Set when the recording was closed by Ctrl+Enter, which means "send
-        # this once you've transcribed it" rather than just "stop".
+        # Set when the recording was closed by Enter, which means "send this
+        # once you've transcribed it" rather than just "stop".
         self._submit_after_transcribe = False
         self._mic_timer = QTimer(self)
         self._mic_timer.setInterval(200)
@@ -688,11 +688,11 @@ class ChatInput(QFrame):
     def eventFilter(self, obj, event) -> bool:
         if obj is not self._edit or event.type() != QEvent.Type.KeyPress:
             return super().eventFilter(obj, event)
-        if (
-            event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
-            and event.modifiers() & Qt.KeyboardModifier.ControlModifier
-        ):
-            # Ctrl+Enter while dictating means "that's the prompt": close the
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            # Enter sends, Shift+Enter breaks the line.
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                return super().eventFilter(obj, event)
+            # Enter while dictating means "that's the prompt": close the
             # recording and let the send wait for the transcript, which arrives
             # from a worker thread some time after _finish_recording returns.
             if self._recorder is not None and self._recorder.is_recording:
