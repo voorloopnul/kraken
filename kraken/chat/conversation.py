@@ -178,6 +178,10 @@ _BUBBLE_MARGIN = _BUBBLE_GAP + _BUBBLE_PAD_Y
 # frame guarantees room; it must clear the largest interior pad plus a gap.
 _DOC_MARGIN_Y = _BUBBLE_GAP + max(_BUBBLE_PAD_Y, _CODE_CARD_PAD_Y)
 
+# How far off the bottom the view can sit and still count as "at the bottom",
+# so a stray pixel of rounding doesn't read as the reader having scrolled up.
+_STICK_SLACK = 4
+
 # Lexer lookup is not free; cache per fence language (None = no lexer).
 _LEXERS: dict[str, object] = {}
 
@@ -237,10 +241,57 @@ class ConversationView(QTextBrowser):
         # bubbles painted behind them in paintEvent.
         self._user_ranges: list[tuple[int, int]] = []
         self._copy_buttons: list[QToolButton] = []
-        self.verticalScrollBar().valueChanged.connect(self._layout_copy_buttons)
+        # Sticky bottom: the transcript follows new content while the reader is
+        # already at the end, and stays put once they scroll up to read.
+        # _stick_pending coalesces the deferred pins (see _follow_bottom).
+        self._stick_to_bottom = True
+        self._stick_pending = False
+        self._rebuilding = False
+        scrollbar = self.verticalScrollBar()
+        scrollbar.valueChanged.connect(self._layout_copy_buttons)
+        scrollbar.valueChanged.connect(self._update_stick)
+        scrollbar.rangeChanged.connect(self._follow_bottom)
         # set_theme() below repaints (clearing and re-applying the frame
         # margins), so no separate _apply_frame_margins() is needed here.
         self.set_theme(DEFAULT_THEME)
+
+    # ---- Sticky bottom -----------------------------------------------------
+
+    # Following has to key off the scroll *range*, not off painting. Plenty of
+    # things grow the range without painting a block — above all the busy row,
+    # which appears right after a prompt is sent and takes its height out of the
+    # transcript's viewport. Deciding "am I at the bottom?" only inside _paint
+    # left the view stranded those few dozen pixels short, and every later paint
+    # then read that gap as the reader having scrolled up: the reply streamed in
+    # below the fold and following never resumed. rangeChanged catches the lot.
+
+    def _update_stick(self, value: int) -> None:
+        """Follow only from the bottom. Fires for our own pinning too, which
+        lands exactly at maximum and so keeps following."""
+        if self._rebuilding:
+            return
+        self._stick_to_bottom = value >= self.verticalScrollBar().maximum() - _STICK_SLACK
+
+    def _follow_bottom(self, *_range) -> None:
+        if self._rebuilding:
+            return
+        # Deferred, not immediate: the panel-edge scrollbar mirrors this one and
+        # syncs its own range from this same signal, so scrolling now is mirrored
+        # out to a bar still holding the old maximum, clamped there, and mirrored
+        # straight back — which pins the transcript near the top instead of the
+        # bottom. Yielding lets every handler settle first, and collapses a burst
+        # of range changes into one pin.
+        if not self._stick_to_bottom or self._stick_pending:
+            return
+        self._stick_pending = True
+        QTimer.singleShot(0, self._scroll_to_bottom)
+
+    def _scroll_to_bottom(self) -> None:
+        self._stick_pending = False
+        if not self._stick_to_bottom:
+            return  # the reader scrolled away while the pin was pending
+        scrollbar = self.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
 
     def _apply_frame_margins(self) -> None:
         """Reserve fixed vertical space inside the root frame so the first
@@ -270,6 +321,11 @@ class ConversationView(QTextBrowser):
         self._flush_timer.stop()
         self._assistant_dirty = False
         scroll = self.verticalScrollBar().value()
+        # Emptying and refilling the document churns the scroll range and value;
+        # shut the sticky-bottom logic out of it, or the momentarily empty
+        # document reads as the reader sitting at the end and the rebuild
+        # overrides where they actually were.
+        self._rebuilding = True
         self.clear()
         # clear() resets the root frame to Qt's default margins, dropping the
         # top/bottom space that keeps the first/last bubble from clipping.
@@ -280,7 +336,11 @@ class ConversationView(QTextBrowser):
         for kind, payload in self._blocks:
             self._paint(kind, payload)
         self._sync_code_ui()
-        self.verticalScrollBar().setValue(scroll)
+        self._rebuilding = False
+        if self._stick_to_bottom:
+            self._follow_bottom()
+        else:
+            self.verticalScrollBar().setValue(scroll)
 
     def _format(self, role: str, bold: bool, italic: bool) -> QTextCharFormat:
         fmt = QTextCharFormat()
@@ -309,8 +369,6 @@ class ConversationView(QTextBrowser):
             cursor.insertBlock(block_fmt, char_fmt)
 
     def _paint(self, kind: str, payload: list) -> None:
-        scrollbar = self.verticalScrollBar()
-        follow = scrollbar.value() >= scrollbar.maximum() - 4
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         # Everything before this document position survives the paint, so
@@ -348,8 +406,7 @@ class ConversationView(QTextBrowser):
                     cursor.insertText(text, self._format(role, bold, italic))
         self._last_kind = kind
         self._sync_code_ui(changed_from)
-        if follow:
-            scrollbar.setValue(scrollbar.maximum())
+        self._follow_bottom()
 
     def _paint_tool(self, cursor: QTextCursor, payload: dict) -> None:
         """One collapsible line: a clickable '▸/▾ ⚒ tool  summary' header;
@@ -493,6 +550,8 @@ class ConversationView(QTextBrowser):
         self._assistant_start = None
         self._pending_assistant = ""
         self._user_ranges = []
+        # A fresh or newly loaded transcript opens at its end.
+        self._stick_to_bottom = True
         self._sync_code_ui()
 
     # ---- Code blocks: background + copy buttons ----------------------------
