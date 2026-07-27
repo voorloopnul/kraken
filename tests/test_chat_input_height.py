@@ -29,6 +29,17 @@ def needs_scroll(chat) -> bool:
     return edit(chat).verticalScrollBar().maximum() > 0
 
 
+def laid_out_height(box) -> float:
+    """The pixel height Qt actually gave the document, margins included."""
+    layout = box.document().documentLayout()
+    total = 2 * box.document().documentMargin()
+    block = box.document().firstBlock()
+    while block.isValid():
+        total += layout.blockBoundingRect(block).height()
+        block = block.next()
+    return total
+
+
 def test_empty_box_keeps_its_resting_height(chat, settle):
     assert edit(chat).height() == edit(chat)._MIN_HEIGHT
     assert not needs_scroll(chat)
@@ -97,6 +108,20 @@ def test_submitting_returns_the_box_to_its_resting_height(chat, settle):
 
     assert sent, "the prompt was not submitted"
     assert edit(chat).height() == resting
+
+
+def test_the_box_is_no_taller_than_its_content_needs(chat, settle):
+    """Chrome is measured off the widget and content summed from the laid-out
+    blocks. Deriving either — frameWidth() plus contentsMargins() double-counts
+    the stylesheet padding, and a line count times lineSpacing is not what Qt
+    actually spends — was wrong in both directions at once."""
+    edit(chat).setPlainText("\n".join(f"line{i}" for i in range(6)))
+    settle()
+    box = edit(chat)
+
+    outside_viewport = box.height() - box.viewport().height()
+
+    assert box.height() == pytest.approx(laid_out_height(box) + outside_viewport, abs=1)
 
 
 def test_narrowing_the_box_rewraps_and_regrows(chat, settle):

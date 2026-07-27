@@ -18,7 +18,7 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QFontMetricsF, QImage, QImageReader, QPixmap
+from PySide6.QtGui import QImage, QImageReader, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -111,18 +111,23 @@ class _PromptEdit(QPlainTextEdit):
 
     def _fit_height(self, *_size) -> None:
         document = self.document()
-        # QPlainTextDocumentLayout measures its height in *lines*, not pixels
-        # (unlike QTextDocument's default layout), and counts wrapped ones.
-        lines = document.documentLayout().documentSize().height()
-        margins = self.contentsMargins()
-        chrome = (
-            2 * document.documentMargin()
-            + 2 * self.frameWidth()
-            + margins.top()
-            + margins.bottom()
-        )
-        wanted = round(lines * QFontMetricsF(self.font()).lineSpacing() + chrome)
-        wanted = max(self._MIN_HEIGHT, min(wanted, self._MAX_HEIGHT))
+        layout = document.documentLayout()
+        # Sum the laid-out blocks rather than multiplying a line count by a font
+        # metric. QPlainTextDocumentLayout reports its documentSize height in
+        # *lines*, not pixels, and lineSpacing is not what it actually spends
+        # per line — deriving the pixels got it wrong in both directions at
+        # once. blockBoundingRect is the height Qt really used, wrapping and all.
+        content = 2 * document.documentMargin()
+        block = document.firstBlock()
+        while block.isValid():
+            content += layout.blockBoundingRect(block).height()
+            block = block.next()
+        # Everything outside the viewport — frame, stylesheet padding, a
+        # horizontal scrollbar if one shows — measured rather than derived.
+        # frameWidth() and contentsMargins() both report the stylesheet's
+        # padding, so adding them together counts it twice.
+        chrome = self.height() - self.viewport().height()
+        wanted = max(self._MIN_HEIGHT, min(round(content + chrome), self._MAX_HEIGHT))
         # Guard the resize: growing re-lays-out the viewport, which comes back
         # through documentSizeChanged.
         if wanted != self.height():
