@@ -1,24 +1,38 @@
 """The prompt box grows with its content instead of scrolling.
 
 Height is asserted through "does this need a scrollbar", not through pixel
-counts: the point of the feature is that typed lines stay visible, and a
-pixel assertion would just re-encode the arithmetic under test.
+counts: the point of the feature is that typed lines stay visible, and a pixel
+assertion would just re-encode the arithmetic under test.
+
+The box is exercised inside a host widget with room to spare, because that is
+the shape of the real layout — the prompt sits in a panel that can yield space
+to it. Sizing the ChatInput directly would cap growth at whatever height the
+test happened to pick and prove nothing about the feature.
 """
 
 import pytest
+from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from kraken.chat.chat_input import ChatInput
 
 
 @pytest.fixture
-def chat(qapp, settle):
-    widget = ChatInput()
-    widget.resize(700, 200)
-    widget.show()
+def host(qapp, settle):
+    container = QWidget()
+    container.resize(700, 600)
+    layout = QVBoxLayout(container)
+    layout.addStretch(1)
+    layout.addWidget(ChatInput())
+    container.show()
     settle()
-    yield widget
-    widget.close()
-    widget.deleteLater()
+    yield container
+    container.close()
+    container.deleteLater()
+
+
+@pytest.fixture
+def chat(host):
+    return host.findChild(ChatInput)
 
 
 def edit(chat):
@@ -110,6 +124,34 @@ def test_submitting_returns_the_box_to_its_resting_height(chat, settle):
     assert edit(chat).height() == resting
 
 
+def test_a_tall_box_is_not_a_floor_for_its_container(chat, host, settle):
+    """setFixedHeight pinned the minimum as well as the maximum, making a long
+    prompt a hard lower bound the layout could not shrink — enough to force the
+    whole window taller on a short screen."""
+    resting_minimum = host.minimumSizeHint().height()
+
+    edit(chat).setPlainText("\n".join(f"line{i}" for i in range(200)))
+    settle()
+
+    assert edit(chat).height() == edit(chat)._MAX_HEIGHT
+    assert host.minimumSizeHint().height() == resting_minimum
+
+
+def test_a_cramped_container_squeezes_the_box(chat, host, settle):
+    """Given less room than it wants, the box gives way and scrolls rather than
+    pushing its container open."""
+    edit(chat).setPlainText("\n".join(f"line{i}" for i in range(200)))
+    settle()
+    assert edit(chat).height() == edit(chat)._MAX_HEIGHT
+
+    host.resize(700, 200)
+    settle()
+
+    assert edit(chat).height() < edit(chat)._MAX_HEIGHT
+    assert edit(chat).height() >= edit(chat)._MIN_HEIGHT
+    assert needs_scroll(chat)
+
+
 def test_the_box_is_no_taller_than_its_content_needs(chat, settle):
     """Chrome is measured off the widget and content summed from the laid-out
     blocks. Deriving either — frameWidth() plus contentsMargins() double-counts
@@ -124,14 +166,14 @@ def test_the_box_is_no_taller_than_its_content_needs(chat, settle):
     assert box.height() == pytest.approx(laid_out_height(box) + outside_viewport, abs=1)
 
 
-def test_narrowing_the_box_rewraps_and_regrows(chat, settle):
+def test_narrowing_the_box_rewraps_and_regrows(chat, host, settle):
     """Shrinking the width turns one line into several; the height has to
     follow or the tail of the text is hidden."""
     edit(chat).setPlainText("wrap " * 60)
     settle()
     wide = edit(chat).height()
 
-    chat.resize(300, 200)
+    host.resize(300, 600)
     settle()
 
     assert edit(chat).height() >= wide

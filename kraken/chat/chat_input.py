@@ -14,11 +14,12 @@ from PySide6.QtCore import (
     QIODevice,
     QMimeData,
     QPoint,
+    QSize,
     Qt,
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QImage, QImageReader, QPixmap
+from PySide6.QtGui import QFontMetricsF, QImage, QImageReader, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPlainTextEdit,
+    QSizePolicy,
     QToolButton,
     QToolTip,
     QVBoxLayout,
@@ -104,10 +106,21 @@ class _PromptEdit(QPlainTextEdit):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        self.setFixedHeight(self._MIN_HEIGHT)
+        self._wanted_height = self._MIN_HEIGHT
+        # Preferred, and only the *maximum* tracks the content: the layout gives
+        # the box its wanted height when there is room and squeezes it back
+        # toward _MIN_HEIGHT when there is not. A fixed height would instead
+        # pin the minimum too, making a tall prompt a floor for the whole
+        # window — enough to force the window taller on a short screen.
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self.setMinimumHeight(self._MIN_HEIGHT)
+        self.setMaximumHeight(self._MIN_HEIGHT)
         # documentSizeChanged covers both new lines and rewrapping, which is
         # what a plain textChanged would miss when a long line reflows.
         self.document().documentLayout().documentSizeChanged.connect(self._fit_height)
+
+    def sizeHint(self) -> QSize:
+        return QSize(super().sizeHint().width(), self._wanted_height)
 
     def _fit_height(self, *_size) -> None:
         document = self.document()
@@ -130,8 +143,10 @@ class _PromptEdit(QPlainTextEdit):
         wanted = max(self._MIN_HEIGHT, min(round(content + chrome), self._MAX_HEIGHT))
         # Guard the resize: growing re-lays-out the viewport, which comes back
         # through documentSizeChanged.
-        if wanted != self.height():
-            self.setFixedHeight(wanted)
+        if wanted != self._wanted_height:
+            self._wanted_height = wanted
+            self.setMaximumHeight(wanted)
+            self.updateGeometry()
 
     def resizeEvent(self, event) -> None:
         # A narrower box rewraps its text into more lines, so the height has to
