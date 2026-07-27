@@ -52,6 +52,18 @@ terms, and punctuates and capitalises.
 
 Click to start, click again to transcribe, `Esc` to discard the take.
 
+## Tests
+
+```bash
+uv sync --group dev
+uv run pytest
+```
+
+Widget tests run against Qt's `offscreen` platform, so they need no display.
+They drive real widgets through the same panels the app assembles: transcript
+behaviour in particular depends on the panel around it, and a widget tested in
+isolation will happily pass with the bug still in it.
+
 ## Notes
 
 - The app is currently Linux-focused.

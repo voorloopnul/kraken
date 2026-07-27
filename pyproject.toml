@@ -9,3 +9,15 @@ dependencies = [
     "pygments>=2.20.0",
     "pyside6>=6.11.1",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+# The app runs from the source tree rather than being installed, so the repo
+# root has to be importable for `kraken.*` regardless of how pytest is invoked.
+pythonpath = ["."]
