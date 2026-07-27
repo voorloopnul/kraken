@@ -30,7 +30,14 @@ from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 
 # Preferred column widths per panel key, used to size a column when the dock
 # structure changes (a panel shown, hidden, or dropped elsewhere).
-_PREF_WIDTH = {"left": 300, "center": 700, "browser": 480, "git": 360, "right": 460}
+_PREF_WIDTH = {
+    "left": 300,
+    "center": 700,
+    "browser": 480,
+    "diff": 380,
+    "git": 360,
+    "right": 460,
+}
 
 # How far into a column counts as its side band (a drop there opens a new
 # column) versus its middle (a drop there stacks into the column).

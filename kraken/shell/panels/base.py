@@ -11,6 +11,34 @@ from PySide6.QtWidgets import (
 
 from kraken.ui.themes import LIGHT
 
+# Scrollbars for the panels' scroll areas, matching the conversation panel's
+# external one: a bare rounded handle on a transparent track, no stepper
+# buttons. Append to a widget's own stylesheet.
+SCROLLBAR_STYLES = {
+    "dark": """
+QScrollBar:horizontal { background: transparent; border: none; height: 10px; margin: 0; }
+QScrollBar::handle:horizontal { background: #3a3d45; border-radius: 5px; min-width: 24px; }
+QScrollBar::handle:horizontal:hover { background: #4a4e58; }
+QScrollBar:vertical { background: transparent; border: none; width: 10px; margin: 0; }
+QScrollBar::handle:vertical { background: #3a3d45; border-radius: 5px; min-height: 24px; }
+QScrollBar::handle:vertical:hover { background: #4a4e58; }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+QAbstractScrollArea::corner { background: transparent; border: none; }
+""",
+    "light": """
+QScrollBar:horizontal { background: transparent; border: none; height: 10px; margin: 0; }
+QScrollBar::handle:horizontal { background: #c9c4b4; border-radius: 5px; min-width: 24px; }
+QScrollBar::handle:horizontal:hover { background: #b3ae9e; }
+QScrollBar:vertical { background: transparent; border: none; width: 10px; margin: 0; }
+QScrollBar::handle:vertical { background: #c9c4b4; border-radius: 5px; min-height: 24px; }
+QScrollBar::handle:vertical:hover { background: #b3ae9e; }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+QAbstractScrollArea::corner { background: transparent; border: none; }
+""",
+}
+
 
 def _dot_icon(color: str) -> QIcon:
     """A small filled circle used as a history-row status indicator."""

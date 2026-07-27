@@ -13,7 +13,14 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from kraken.shell.dock import DockArea, DockPanel
-from kraken.shell.panels import BrowserPanel, CenterPanel, GitPanel, LeftPanel, RightPanel
+from kraken.shell.panels import (
+    BrowserPanel,
+    CenterPanel,
+    DiffPanel,
+    GitPanel,
+    LeftPanel,
+    RightPanel,
+)
 from kraken.agent.session_controller import SessionController
 from kraken.ui.themes import DEFAULT_THEME
 
@@ -41,7 +48,8 @@ class WorkspaceView(QWidget):
         self._theme_name = DEFAULT_THEME
         # When set, this workspace lives on a remote host: `path` is the local
         # anchor folder (where pi runs and stores sessions), while the agent,
-        # terminal, and git panel all operate on the remote over SSH.
+        # terminal, and the git and diff panels all operate on the remote over
+        # SSH.
         self.remote = remote
 
         self.left_panel = LeftPanel(cwd=path)
@@ -53,6 +61,8 @@ class WorkspaceView(QWidget):
         # Per-workspace browser, like the terminals; it's lazily populated
         # on first show, so hidden panels cost no Chromium processes.
         self.browser_panel = BrowserPanel()
+        self.diff_panel = DiffPanel(cwd=path, remote=remote)
+        self.diff_panel.setMinimumWidth(300)
         self.git_panel = GitPanel(cwd=path, remote=remote)
         self.git_panel.setMinimumWidth(320)
         self.right_panel = RightPanel(cwd=path, remote=remote)
@@ -64,7 +74,7 @@ class WorkspaceView(QWidget):
         # dock arranges them into columns (up to two panels stacked per column)
         # and lets the user drag a panel's header to re-column or stack it.
         self._dock = DockArea(
-            order=["left", "center", "browser", "git", "right"],
+            order=["left", "center", "browser", "diff", "git", "right"],
             stretch_key="center",
             fixed_keys={"left"},
             no_stack_keys={"center"},
@@ -78,14 +88,15 @@ class WorkspaceView(QWidget):
             ("left", self.left_panel),
             ("center", self.center_panel),
             ("browser", self.browser_panel),
+            ("diff", self.diff_panel),
             ("git", self.git_panel),
             ("right", self.right_panel),
         ):
             panel = DockPanel(key, content, draggable=key not in anchors)
-            # Git's refresh button rides in the grip row rather than a row of
-            # its own inside the card.
-            if key == "git":
-                panel.header.add_trailing(self.git_panel.refresh_button)
+            # The git and diff panels' refresh buttons ride in the grip row
+            # rather than a row of their own inside the card.
+            if key in ("diff", "git"):
+                panel.header.add_trailing(content.refresh_button)
             self._dock.register(panel)
 
         layout = QVBoxLayout(self)
@@ -93,12 +104,13 @@ class WorkspaceView(QWidget):
         layout.addWidget(self._dock)
 
         # Panel visibility is per-workspace, not global: a new workspace opens
-        # with History and the conversation showing; the terminal, browser, and
-        # git panes stay closed (and their lazy shell/Chromium processes unspun)
-        # until toggled open here, independently of other workspaces.
+        # with History and the conversation showing; the terminal, browser, diff,
+        # and git panes stay closed (and their lazy shell/Chromium processes
+        # unspun) until toggled open here, independently of other workspaces.
         self._panel_visible = {
             "left": True,
             "browser": False,
+            "diff": False,
             "git": False,
             "right": False,
         }
@@ -332,7 +344,10 @@ class WorkspaceView(QWidget):
         if controller is self.focused:
             self.center_panel.set_busy(streaming, controller.streaming_since)
         if not streaming:
-            # A turn finished; its messages are now on disk.
+            # A turn finished; its messages are now on disk, and whatever the
+            # agent edited is on disk too — so the diff pane is stale.
+            if self.diff_panel.isVisible():
+                self.diff_panel.refresh()
             if controller is not self.focused:
                 # Background session completed: flag it unread, then retire it.
                 if controller.session_path:
@@ -371,6 +386,7 @@ class WorkspaceView(QWidget):
         self.left_panel.set_theme(name)
         self.center_panel.set_theme(name)
         self.browser_panel.set_theme(name)
+        self.diff_panel.set_theme(name)
         self.git_panel.set_theme(name)
         self.right_panel.set_theme(name)
         for controller in self.controllers:

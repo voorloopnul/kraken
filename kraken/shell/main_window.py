@@ -483,10 +483,15 @@ class MainWindow(QMainWindow):
         QToolTip.showText(pos, "Screenshot attached to the message", button)
 
     def _on_branch_switched(self) -> None:
-        """A title-bar branch switch moved HEAD; redraw the visible git panel."""
+        """A title-bar branch switch moved HEAD; redraw the visible git and diff
+        panels, whose contents are both relative to it."""
         view = self.current_view
-        if view is not None and view.git_panel.isVisible():
+        if view is None:
+            return
+        if view.git_panel.isVisible():
             view.git_panel.refresh()
+        if view.diff_panel.isVisible():
+            view.diff_panel.refresh()
 
     def _toggle_maximized(self) -> None:
         if self.isMaximized():
@@ -555,6 +560,7 @@ class MainWindow(QMainWindow):
         for label, side in (
             ("Left Panel", "left"),
             ("Browser Panel", "browser"),
+            ("Diff Panel", "diff"),
             ("Git Panel", "git"),
             ("Right Panel", "right"),
         ):
@@ -564,11 +570,12 @@ class MainWindow(QMainWindow):
             )
             self._panel_actions[side] = action
 
-        # Side-bar icons toggle the terminal (right), browser, and git panels.
-        # They are hidden by default.
+        # Side-bar icons toggle the terminal (right), browser, diff, and git
+        # panels. They are hidden by default.
         for button_name, side in (
             ("Terminal Panel", "right"),
             ("Browser Panel", "browser"),
+            ("Diff Panel", "diff"),
             ("Git Panel", "git"),
         ):
             toggle = self.side_bar.buttons[button_name]

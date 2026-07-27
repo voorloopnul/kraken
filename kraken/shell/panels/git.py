@@ -21,44 +21,24 @@ from PySide6.QtWidgets import (
 )
 
 from kraken.shell.async_run import run_async
-from kraken.shell.panels.base import Card, Panel
+from kraken.shell.panels.base import SCROLLBAR_STYLES, Card, Panel
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 
 if TYPE_CHECKING:
     from kraken.agent.remote import RemoteTarget
 
-# Scrollbars match the conversation panel's external one: a bare rounded
-# handle on a transparent track, no stepper buttons.
 _GIT_LOG_STYLES = {
     "dark": """
 QListWidget { background: transparent; border: none; color: #c8cad0;
               font-family: 'JetBrains Mono', monospace; font-size: 11px; }
 QListWidget::item { padding: 2px 4px; border-radius: 4px; }
 QListWidget::item:hover { background: #2c2e35; }
-QScrollBar:horizontal { background: transparent; border: none; height: 10px; margin: 0; }
-QScrollBar::handle:horizontal { background: #3a3d45; border-radius: 5px; min-width: 24px; }
-QScrollBar::handle:horizontal:hover { background: #4a4e58; }
-QScrollBar:vertical { background: transparent; border: none; width: 10px; margin: 0; }
-QScrollBar::handle:vertical { background: #3a3d45; border-radius: 5px; min-height: 24px; }
-QScrollBar::handle:vertical:hover { background: #4a4e58; }
-QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
-QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
-QAbstractScrollArea::corner { background: transparent; border: none; }
 """,
     "light": """
 QListWidget { background: transparent; border: none; color: #4a4d55;
               font-family: 'JetBrains Mono', monospace; font-size: 11px; }
 QListWidget::item { padding: 2px 4px; border-radius: 4px; }
 QListWidget::item:hover { background: #e8e8ec; }
-QScrollBar:horizontal { background: transparent; border: none; height: 10px; margin: 0; }
-QScrollBar::handle:horizontal { background: #c9c4b4; border-radius: 5px; min-width: 24px; }
-QScrollBar::handle:horizontal:hover { background: #b3ae9e; }
-QScrollBar:vertical { background: transparent; border: none; width: 10px; margin: 0; }
-QScrollBar::handle:vertical { background: #c9c4b4; border-radius: 5px; min-height: 24px; }
-QScrollBar::handle:vertical:hover { background: #b3ae9e; }
-QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
-QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
-QAbstractScrollArea::corner { background: transparent; border: none; }
 """,
 }
 
@@ -396,7 +376,7 @@ class GitPanel(Panel):
         self._theme_name = name
         ui = UI_COLORS[name]
         self._card.set_colors(ui["card"], ui["card_border"])
-        self._list.setStyleSheet(_GIT_LOG_STYLES[name])
+        self._list.setStyleSheet(_GIT_LOG_STYLES[name] + SCROLLBAR_STYLES[name])
         # Row colors are baked into each item's HTML, so re-render on a
         # theme flip (hidden panels re-render on their next showEvent).
         if changed and self.isVisible():

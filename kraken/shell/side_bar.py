@@ -103,6 +103,28 @@ def _git_icon(color: str) -> QIcon:
     return QIcon(pixmap)
 
 
+def _diff_icon(color: str) -> QIcon:
+    """Diff: an added line (marked "+") above a removed one (marked "−")."""
+    pixmap = QPixmap(36, 36)
+    pixmap.setDevicePixelRatio(2.0)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(color))
+    pen.setWidthF(1.5)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    # "+" and its line.
+    painter.drawLine(QPointF(2.5, 5.5), QPointF(6.5, 5.5))
+    painter.drawLine(QPointF(4.5, 3.5), QPointF(4.5, 7.5))
+    painter.drawLine(QPointF(9.0, 5.5), QPointF(15.5, 5.5))
+    # "−" and its line.
+    painter.drawLine(QPointF(2.5, 12.5), QPointF(6.5, 12.5))
+    painter.drawLine(QPointF(9.0, 12.5), QPointF(15.5, 12.5))
+    painter.end()
+    return QIcon(pixmap)
+
+
 def _camera_icon(color: str) -> QIcon:
     """Camera: rounded body with a viewfinder bump and a lens circle."""
     pixmap = QPixmap(36, 36)
@@ -136,6 +158,7 @@ def _camera_icon(color: str) -> QIcon:
 _ICON_FACTORIES = {
     "Terminal Panel": _terminal_icon,
     "Browser Panel": _globe_icon,
+    "Diff Panel": _diff_icon,
     "Git Panel": _git_icon,
     "Screenshot": _camera_icon,
 }
@@ -157,7 +180,7 @@ class SideBar(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 8, 4, 8)
         layout.setSpacing(6)
-        for name in ("Terminal Panel", "Browser Panel", "Git Panel"):
+        for name in ("Terminal Panel", "Browser Panel", "Diff Panel", "Git Panel"):
             btn = self._make_button("", name)
             btn.setIconSize(QSize(18, 18))
             layout.addWidget(btn)
