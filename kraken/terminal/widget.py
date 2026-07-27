@@ -18,6 +18,7 @@ import termios
 import time
 from typing import TYPE_CHECKING
 
+import shiboken6
 from PySide6.QtCore import QSocketNotifier, Qt, QTimer
 from PySide6.QtGui import (
     QColor,
@@ -169,6 +170,10 @@ class GhosttyTerminalWidget(QWidget):
         self._row_selection: list[tuple[int, int] | None] = []
         self._colors = g.RenderStateColors(size=ctypes.sizeof(g.RenderStateColors))
         self._cursor: tuple[int, int, int] | None = None
+        # Set by _spawn_shell; pre-seeded so teardown is safe even if the
+        # spawn itself fails.
+        self._master_fd = -1
+        self._child_pid = -1
         self._child_exited = False
         # Set once the shell's exit status has actually been collected. Distinct
         # from `_child_exited` (which only means "stop touching the pty"): a reap
@@ -216,8 +221,24 @@ class GhosttyTerminalWidget(QWidget):
         self._resize_timer.setInterval(150)
         self._resize_timer.timeout.connect(self._apply_resize)
 
+        # Last-resort teardown. Every deliberate close calls shutdown() first,
+        # but a widget destroyed some other way (a parent chain going down)
+        # would otherwise leak the shell process and the libghostty handles,
+        # which no garbage collector knows about. destroyed() is emitted from
+        # ~QObject, so the C++ half is already gone: shutdown() must not touch
+        # it (see _disable_notifier).
+        self.destroyed.connect(lambda _obj: self.shutdown())
+
         self._spawn_shell()
         self._sync_render_state()
+
+    def _alive(self) -> bool:
+        """False once the widget's C++ half has been destroyed. Qt keeps
+        delivering to the Python wrapper in that window — the Wayland platform
+        pumps the event loop while tearing a window down, so a pending render
+        tick or pty read can land after the wrapper is invalidated and every
+        call back into Qt raises RuntimeError."""
+        return shiboken6.isValid(self)
 
     # ---- PTY ----------------------------------------------------------
 
@@ -262,6 +283,8 @@ class GhosttyTerminalWidget(QWidget):
         self._notifier.activated.connect(self._on_pty_readable)
 
     def _on_pty_readable(self) -> None:
+        if not self._alive():
+            return
         total = 0
         while total < 1 << 20:
             try:
@@ -307,7 +330,9 @@ class GhosttyTerminalWidget(QWidget):
         shell is escalated after a brief grace rather than a full second, and
         the whole thing is bounded so it can't hang the GUI if the child
         lingers (e.g. stuck in uninterruptible sleep)."""
-        if self._child_reaped:
+        if self._child_reaped or self._child_pid <= 0:
+            # A pid of -1 means the spawn never happened; waiting on it would
+            # reap an unrelated child.
             return
         # A child that already hit EOF (escalate=False) is dying and reaps in a
         # poll or two; a live shell being torn down (escalate=True) gets only a
@@ -338,37 +363,57 @@ class GhosttyTerminalWidget(QWidget):
                     return  # give up rather than block teardown indefinitely
             time.sleep(0.005)
 
+    def _disable_notifier(self) -> None:
+        """Stop watching the pty. The notifier is a child of the widget, so a
+        teardown that starts from the widget's own destruction finds it already
+        deleted — nothing left to disable."""
+        try:
+            self._notifier.setEnabled(False)
+        except RuntimeError:
+            pass
+
     def _on_child_exit(self) -> None:
         if self._child_exited:
             return
         self._child_exited = True
-        self._notifier.setEnabled(False)
+        self._disable_notifier()
         self._reap_child(escalate=False)
         msg = b"\r\n\x1b[90m[process exited]\x1b[0m\r\n"
         arr = (ctypes.c_uint8 * len(msg)).from_buffer_copy(msg)
         g.lib.ghostty_terminal_vt_write(self._term, arr, len(msg))
         self._sync_render_state()
 
+    def _close_master(self) -> None:
+        """Close the pty master exactly once. shutdown() can run twice (an
+        explicit teardown, then again from destroyed()), and by the second pass
+        the fd number may already have been handed to something else."""
+        if self._master_fd < 0:
+            return
+        fd, self._master_fd = self._master_fd, -1
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
     def shutdown(self) -> None:
         """Terminate the shell and free libghostty resources."""
         if not self._child_exited:
-            self._notifier.setEnabled(False)
-            try:
-                os.kill(self._child_pid, signal.SIGHUP)
-            except ProcessLookupError:
-                self._child_reaped = True  # already gone; nothing to collect
-            else:
-                self._reap_child(escalate=True)
-            try:
-                os.close(self._master_fd)
-            except OSError:
-                pass
+            self._disable_notifier()
+            if self._child_pid > 0:
+                try:
+                    os.kill(self._child_pid, signal.SIGHUP)
+                except ProcessLookupError:
+                    self._child_reaped = True  # already gone; nothing to collect
+                else:
+                    self._reap_child(escalate=True)
             self._child_exited = True
         elif not self._child_reaped:
             # The child exited on its own but an earlier (non-escalating) reap
             # gave up before it became reapable; finish collecting it now so it
             # can't linger as a zombie for the life of the process.
             self._reap_child(escalate=True)
+        # Also on the EOF path: the child hanging up closes its end, not ours.
+        self._close_master()
         if self._term:
             for handle in self._gesture_events.values():
                 g.lib.ghostty_selection_gesture_event_free(handle)
@@ -415,7 +460,7 @@ class GhosttyTerminalWidget(QWidget):
     # ---- Render state -> row model ------------------------------------
 
     def _sync_render_state(self) -> None:
-        if not self._term:
+        if not self._term or not self._alive():
             return
         _check(g.lib.ghostty_render_state_update(self._render_state, self._term), "render_state_update")
 
@@ -695,6 +740,8 @@ class GhosttyTerminalWidget(QWidget):
         # Never resize the PTY while hidden (e.g. in a background workspace):
         # the shell would redraw unseen, and repeated hidden resizes can
         # desync its cursor bookkeeping. showEvent applies the final size.
+        if not self._term or not self._alive():
+            return
         if not self.isVisible() or self.width() <= 0 or self.height() <= 0:
             return
         cols = max(4, self.width() // self._cell_w)
@@ -936,6 +983,8 @@ class GhosttyTerminalWidget(QWidget):
             self._clear_selection()
 
     def _autoscroll_tick(self) -> None:
+        if not self._term or not self._alive():
+            return
         if not self._selecting or self._last_mouse_pos is None:
             self._autoscroll_timer.stop()
             return
