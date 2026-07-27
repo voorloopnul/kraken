@@ -190,6 +190,38 @@ def test_rebuild_keeps_a_following_reader_at_the_bottom(panel, settle):
     assert at_bottom(view)
 
 
+def test_a_failed_rebuild_does_not_disable_following(panel, settle, monkeypatch):
+    """_repaint_all fences the sticky-bottom logic off while it empties and
+    refills the document. Painting parses markdown and lexes code, so it can
+    raise — and a fence left standing switches following off for the life of
+    the widget, with nothing else to show for it."""
+    _panel, view = panel
+    fill(view, settle)
+    painted = []
+    original = view._paint
+
+    def exploding(kind, payload):
+        painted.append(kind)
+        if len(painted) == 3:
+            raise RuntimeError("a paint blew up mid-rebuild")
+        return original(kind, payload)
+
+    monkeypatch.setattr(view, "_paint", exploding)
+    with pytest.raises(RuntimeError):
+        view._repaint_all()
+    monkeypatch.undo()
+    settle()
+
+    view.append_assistant_delta("content arriving after the failure. " * 300)
+    settle()
+
+    # The partial rebuild leaves a short document, so guard against passing
+    # vacuously: there has to be something to scroll before "at the bottom"
+    # says anything at all.
+    assert scrollbar(view).maximum() > 0, "the transcript never overflowed"
+    assert at_bottom(view), "following stayed off after a rebuild raised"
+
+
 def test_loaded_session_opens_at_the_end(panel, settle):
     _panel, view = panel
     view.render_messages(

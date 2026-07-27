@@ -325,18 +325,22 @@ class ConversationView(QTextBrowser):
         # shut the sticky-bottom logic out of it, or the momentarily empty
         # document reads as the reader sitting at the end and the rebuild
         # overrides where they actually were.
+        # try/finally: painting parses markdown and lexes code, and a flag left
+        # set by a raising paint would switch following off for good, silently.
         self._rebuilding = True
-        self.clear()
-        # clear() resets the root frame to Qt's default margins, dropping the
-        # top/bottom space that keeps the first/last bubble from clipping.
-        self._apply_frame_margins()
-        self._last_kind = None
-        self._assistant_start = None
-        self._user_ranges = []
-        for kind, payload in self._blocks:
-            self._paint(kind, payload)
-        self._sync_code_ui()
-        self._rebuilding = False
+        try:
+            self.clear()
+            # clear() resets the root frame to Qt's default margins, dropping
+            # the top/bottom space that keeps the first/last bubble unclipped.
+            self._apply_frame_margins()
+            self._last_kind = None
+            self._assistant_start = None
+            self._user_ranges = []
+            for kind, payload in self._blocks:
+                self._paint(kind, payload)
+            self._sync_code_ui()
+        finally:
+            self._rebuilding = False
         if self._stick_to_bottom:
             self._follow_bottom()
         else:
