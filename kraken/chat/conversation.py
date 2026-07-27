@@ -270,6 +270,14 @@ class ConversationView(QTextBrowser):
         lands exactly at maximum and so keeps following."""
         if self._rebuilding:
             return
+        if self._stick_pending:
+            # A pin is already scheduled for this turn of the loop, and not
+            # every value change in between is the reader's doing — Qt adjusts
+            # the scrollbar itself as it lays out. Treating one of those as
+            # "scrolled up" would cancel the pin the range change just earned.
+            # The decision stands as it was when the pin was scheduled; a real
+            # gesture cannot fit inside the single turn this covers.
+            return
         self._stick_to_bottom = value >= self.verticalScrollBar().maximum() - _STICK_SLACK
 
     def _follow_bottom(self, *_range) -> None:
