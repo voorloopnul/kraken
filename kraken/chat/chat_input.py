@@ -18,7 +18,7 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QImage, QImageReader, QPixmap
+from PySide6.QtGui import QFontMetricsF, QImage, QImageReader, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -88,10 +88,51 @@ class _PromptEdit(QPlainTextEdit):
     drop through insertFromMimeData, so overriding it here covers them all.
     Without it an image paste inserts nothing: QPlainTextEdit is text-only and
     silently drops the image data.
+
+    It also sizes itself to its content, growing from _MIN_HEIGHT as lines are
+    added and stopping at _MAX_HEIGHT, past which it scrolls like any text box.
     """
 
     image_pasted = Signal(QImage)
     files_pasted = Signal(list)
+
+    # Three-ish lines empty, about sixteen before it stops growing. The cap
+    # matters: the prompt shares the panel with the transcript, and a box that
+    # grew without limit would push the conversation off the top of the screen.
+    _MIN_HEIGHT = 64
+    _MAX_HEIGHT = 320
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setFixedHeight(self._MIN_HEIGHT)
+        # documentSizeChanged covers both new lines and rewrapping, which is
+        # what a plain textChanged would miss when a long line reflows.
+        self.document().documentLayout().documentSizeChanged.connect(self._fit_height)
+
+    def _fit_height(self, *_size) -> None:
+        document = self.document()
+        # QPlainTextDocumentLayout measures its height in *lines*, not pixels
+        # (unlike QTextDocument's default layout), and counts wrapped ones.
+        lines = document.documentLayout().documentSize().height()
+        margins = self.contentsMargins()
+        chrome = (
+            2 * document.documentMargin()
+            + 2 * self.frameWidth()
+            + margins.top()
+            + margins.bottom()
+        )
+        wanted = round(lines * QFontMetricsF(self.font()).lineSpacing() + chrome)
+        wanted = max(self._MIN_HEIGHT, min(wanted, self._MAX_HEIGHT))
+        # Guard the resize: growing re-lays-out the viewport, which comes back
+        # through documentSizeChanged.
+        if wanted != self.height():
+            self.setFixedHeight(wanted)
+
+    def resizeEvent(self, event) -> None:
+        # A narrower box rewraps its text into more lines, so the height has to
+        # be recomputed from the width it actually ended up with.
+        super().resizeEvent(event)
+        self._fit_height()
 
     def canInsertFromMimeData(self, source: QMimeData) -> bool:
         # Also what enables Paste in the context menu.
@@ -359,7 +400,7 @@ class ChatInput(QFrame):
         self._edit.setPlaceholderText(
             "Follow-up on this task, @ for mentions, / for commands"
         )
-        self._edit.setFixedHeight(64)
+        # Sizes itself to its content; the scrollbar only appears at its cap.
         self._edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._edit.textChanged.connect(self._on_text_changed)
         self._edit.image_pasted.connect(self._attach_pasted_image)

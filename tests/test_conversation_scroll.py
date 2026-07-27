@@ -118,6 +118,19 @@ def test_resizing_keeps_the_bottom(panel, settle):
     assert at_bottom(view)
 
 
+def test_growing_the_prompt_box_keeps_the_bottom(panel, settle):
+    """The prompt box grows into the transcript's space as lines are typed —
+    the same kind of range change as the busy row, from the other direction."""
+    panel_widget, view = panel
+    fill(view, settle)
+    assert at_bottom(view)
+
+    panel_widget.chat._edit.setPlainText("\n".join(f"line{i}" for i in range(10)))
+    settle()
+
+    assert at_bottom(view)
+
+
 def test_scrolled_up_reader_is_not_yanked(panel, settle):
     _panel, view = panel
     fill(view, settle)
