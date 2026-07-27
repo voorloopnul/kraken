@@ -158,9 +158,9 @@ class _PromptEdit(QPlainTextEdit):
 
 _STYLES = {
     "dark": """
-#chatBox { background: #1b1c1f; border: 1px solid #4f83e0; border-radius: 10px; }
+#chatBox { background: #1b1c1f; border: 1px solid #33353c; border-radius: 10px; }
 QPlainTextEdit {
-    background: #131417; border: none; border-radius: 6px;
+    background: transparent; border: none; border-radius: 6px;
     color: #d6d8dd; padding: 4px 6px;
 }
 QToolButton {
@@ -187,9 +187,9 @@ QToolButton:disabled { color: #55575d; }
 #attachChip QLabel { color: #c8cad0; font-size: 11px; }
 """,
     "light": """
-#chatBox { background: #ffffff; border: 1px solid #4f83e0; border-radius: 10px; }
+#chatBox { background: #ffffff; border: 1px solid #d8d8dd; border-radius: 10px; }
 QPlainTextEdit {
-    background: #f2f2f4; border: none; border-radius: 6px;
+    background: transparent; border: none; border-radius: 6px;
     color: #26282e; padding: 4px 6px;
 }
 QToolButton {
