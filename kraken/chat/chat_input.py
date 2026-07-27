@@ -348,6 +348,9 @@ class ChatInput(QFrame):
         self._recorder = None
         self._transcriber = None
         self._voice_peak = 0.0
+        # Set when the recording was closed by Ctrl+Enter, which means "send
+        # this once you've transcribed it" rather than just "stop".
+        self._submit_after_transcribe = False
         self._mic_timer = QTimer(self)
         self._mic_timer.setInterval(200)
         self._mic_timer.timeout.connect(self._tick_recording)
@@ -595,11 +598,15 @@ class ChatInput(QFrame):
             self._reset_mic()
 
     def _reset_mic(self) -> None:
+        # Back to idle, so any send the recording still owed is off too — the
+        # one caller that honours it reads the flag before resetting.
+        self._submit_after_transcribe = False
         self._mic.setEnabled(True)
         self._mic.setStyleSheet("")
         self._mic.setText(self._MIC_IDLE)
 
     def _on_transcribed(self, text: str, error: str) -> None:
+        submit = self._submit_after_transcribe
         self._reset_mic()
         if error:
             self._notify_mic(f"Transcription failed: {error}")
@@ -614,6 +621,8 @@ class ChatInput(QFrame):
         cursor.insertText(text if not before or before[-1].isspace() else " " + text)
         self._edit.setTextCursor(cursor)
         self._edit.setFocus()
+        if submit:
+            self._submit()
 
     def set_model_label(self, text: str | None) -> None:
         self._model.setText(f"{text or 'Model'}  ⌄")
@@ -684,8 +693,10 @@ class ChatInput(QFrame):
             and event.modifiers() & Qt.KeyboardModifier.ControlModifier
         ):
             # Ctrl+Enter while dictating means "that's the prompt": close the
-            # recording first so the transcript lands before the send.
+            # recording and let the send wait for the transcript, which arrives
+            # from a worker thread some time after _finish_recording returns.
             if self._recorder is not None and self._recorder.is_recording:
+                self._submit_after_transcribe = True
                 self._finish_recording()
                 return True
             self._submit()
