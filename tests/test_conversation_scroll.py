@@ -71,7 +71,7 @@ def test_busy_row_does_not_strand_the_newest_message(panel, settle):
     fill(view, settle)
 
     view.add_user("tell me a joke")
-    _panel_widget.set_busy(True, time.time())
+    _panel_widget.set_busy(True, time.monotonic())
     settle()
 
     assert at_bottom(view), "the sent message was left under the busy row"
@@ -83,7 +83,7 @@ def test_reply_stays_in_view_while_streaming(panel, settle):
     _panel_widget, view = panel
     fill(view, settle)
     view.add_user("tell me a joke")
-    _panel_widget.set_busy(True, time.time())
+    _panel_widget.set_busy(True, time.monotonic())
     settle()
 
     for chunk in ["Why did ", "the chicken ", "cross the road?\n\n", "To get to " * 40]:
