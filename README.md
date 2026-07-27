@@ -14,20 +14,26 @@ It is built on the [Pi coding agent](https://github.com/earendil-works/pi-coding
 
 ## Minimum Requirements
 
-Before running the installer be sure you have the following:
-
 - Linux ( tested mostly with Ubuntu )
-- Python >= 3.8
-- Node.js 22.19+ and npm (for installing the Pi agent CLI)
+
+The AppImage bundles its own Python, Qt, Node.js and the Pi agent, so nothing
+needs to be installed alongside it.
 
 ## Quick start
 
-Download the installer from the releases page and execute it:
+Download `Kraken-x86_64.AppImage` from the releases page, then:
 
 ```bash
-python3 kraken.pyz
+chmod +x Kraken-x86_64.AppImage
+./Kraken-x86_64.AppImage
 ```
-The packaged launcher can self-install into `~/.local/share/kraken` and create a shortcut in `~/.local/bin`.
+
+To build one from a checkout — needs [uv](https://docs.astral.sh/uv/), `curl`,
+and a built `libghostty-vt` (see Notes):
+
+```bash
+packaging/appimage/build_appimage.sh
+```
 
 ## Storage
 

@@ -9,9 +9,6 @@ wheels/
 # Virtual environments
 .venv
 
-# Build output of packaging/build_pyz.sh
-kraken.pyz
-
 # Build output of packaging/appimage/build_appimage.sh
 Kraken-*.AppImage
 packaging/appimage/tools/

@@ -45,9 +45,10 @@ _EXT_DIR = config.CONFIG_DIR / "ext"
 
 def ssh_extension_path() -> str:
     """Unpack the bundled ssh routing extension to a stable on-disk path and
-    return it, for `pi -e <path>`. Reads through importlib.resources so it
-    works from a source checkout and from inside the packaged .pyz alike;
-    rewritten on every call so it tracks the shipped version."""
+    return it, for `pi -e <path>`. Reads through importlib.resources, which
+    locates the asset relative to the package itself, so a source checkout and
+    the AppImage's bundled tree both work; rewritten on every call so it tracks
+    the shipped version."""
     _EXT_DIR.mkdir(parents=True, exist_ok=True)
     dest = _EXT_DIR / "ssh_remote.ts"
     data = files("kraken.agent.assets").joinpath("ssh_remote.ts").read_bytes()

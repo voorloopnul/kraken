@@ -47,10 +47,10 @@ _EDGE_CURSORS = {
 def _asset_pixmap(name: str) -> QPixmap:
     """Load a bundled theme image as a pixmap.
 
-    Reads the bytes through importlib.resources so it works both from a source
-    checkout and from inside the packaged .pyz (where a filesystem path into
-    the archive would fail). Returns a null pixmap if the asset is missing, so
-    callers can fall back gracefully.
+    Reads the bytes through importlib.resources, which locates them relative to
+    the package itself — so a source checkout and the AppImage's bundled tree
+    both work without assuming anything about the layout around them. Returns a
+    null pixmap if the asset is missing, so callers can fall back gracefully.
     """
     pixmap = QPixmap()
     try:

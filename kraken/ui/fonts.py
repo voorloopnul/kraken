@@ -43,10 +43,11 @@ def load_fonts() -> None:
     """Register the bundled fonts with Qt. Call once, after the QApplication
     exists and before any widget is built.
 
-    Reads the bytes through importlib.resources so it works both from a source
-    checkout and from inside the packaged .pyz (where a filesystem path into
-    the archive would fail). A font that fails to load is skipped: Qt then
-    falls back to the system's default mono font for it.
+    Reads the bytes through importlib.resources, which locates them relative to
+    the package itself — so a source checkout and the AppImage's bundled tree
+    both work without assuming anything about the layout around them. A font
+    that fails to load is skipped: Qt then falls back to the system's default
+    mono font for it.
     """
     global _loaded
     if _loaded:
