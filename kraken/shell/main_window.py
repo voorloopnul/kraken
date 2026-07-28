@@ -21,6 +21,7 @@ from kraken.agent import remote as remote_mod
 from kraken.agent.config import load_state, save_state
 from kraken.shell.remote_dialog import RemoteWorkspaceDialog
 from kraken.shell.side_bar import SideBar
+from kraken.ui.chrome import WINDOW_RADIUS
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 from kraken.shell.title_bar import TitleBar
 from kraken.shell.workspace_bar import WorkspaceBar, abbreviation
@@ -62,9 +63,12 @@ def _asset_pixmap(name: str) -> QPixmap:
 
 
 class _HomeScreen(QWidget):
+    """The logo shown when no workspace is open. It paints no background of its
+    own: it fills the stack, which reaches the window's rounded bottom-right
+    corner, and the window frame behind it already carries the window color."""
+
     def __init__(self):
         super().__init__()
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._logo = QLabel()
         self._logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._logo.setScaledContents(False)
@@ -78,8 +82,6 @@ class _HomeScreen(QWidget):
         layout.addStretch(1)
 
     def set_theme(self, name: str) -> None:
-        ui = UI_COLORS[name]
-        self.setStyleSheet(f"background: {ui['window']};")
         self._pixmap = _asset_pixmap(name)
         self._update_logo()
 
@@ -182,8 +184,17 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Kraken")
         # The TitleBar widget replaces the native decoration.
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+        # Rounded corners mean the pixels outside the radius belong to nobody, so
+        # the window has to be able to leave them empty rather than painting them.
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.resize(_default_size())
         self.current_workspace: str | None = None
+        # Set properly by set_theme below; seeded because a window-state change
+        # can arrive while the window is still being built.
+        self._theme_name = DEFAULT_THEME
+        # The radius the corner widgets were last given, to skip the work when a
+        # state change does not actually change the shape.
+        self._corners_applied: int | None = None
         # Set while pushing a workspace's stored panel state into the toggle
         # buttons on a switch, so the resulting `toggled` signals only update
         # the button visuals and don't re-apply onto the view (which would
@@ -194,6 +205,12 @@ class MainWindow(QMainWindow):
         # workspace, keyed by absolute path; the stack shows the current one.
         self.views: dict[str, WorkspaceView] = {}
         self._view_stack = QStackedWidget()
+        # Transparent rather than window-colored, and set once since it carries
+        # no color: on the home screen the stack reaches into the window's
+        # rounded bottom-right corner (the side bar is hidden there), and an
+        # opaque background would square that corner off again. The frame behind
+        # it holds the window color for both.
+        self._view_stack.setStyleSheet("QStackedWidget { background: transparent; }")
         self._home_screen = _HomeScreen()
         self._view_stack.addWidget(self._home_screen)
         self._view_stack.setCurrentWidget(self._home_screen)
@@ -219,7 +236,14 @@ class MainWindow(QMainWindow):
         content_layout.addWidget(self._view_stack, stretch=1)
         content_layout.addWidget(self.side_bar)
 
+        # The frame behind every child. With a translucent window, anything no
+        # child paints would come out transparent — including the corner a
+        # rounded child leaves open — so this carries the window color under
+        # them all, rounded to the same radius.
         central = QWidget()
+        central.setObjectName("windowFrame")
+        central.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._frame = central
         central_layout = QVBoxLayout(central)
         central_layout.setContentsMargins(0, 0, 0, 0)
         central_layout.setSpacing(0)
@@ -238,6 +262,7 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
         self.set_theme(DEFAULT_THEME)
+        self._apply_corners()
         self.title_bar.set_workspace(None)
         self.title_bar.set_conversation("")
 
@@ -289,18 +314,45 @@ class MainWindow(QMainWindow):
         self.side_bar.setVisible(on_workspace)
         self.title_bar.left_panel_toggle.setVisible(on_workspace)
 
+    def _corner_radius(self) -> int:
+        """The window's corner radius as things stand. A maximized window is
+        square: there is nothing beside it to round against, and a gap at the
+        screen's own corner reads as a glitch."""
+        return 0 if self.isMaximized() else WINDOW_RADIUS
+
+    def _apply_corners(self) -> None:
+        """Push the radius into the widgets that own the window's corners — each
+        corner is rounded by whatever sits in it, with the frame underneath
+        matching so the curves coincide rather than one showing past the other.
+
+        Returns early when the shape has not moved. Every widget here rebuilds
+        its style sheet, and one on the frame repolishes the whole tree beneath
+        it (transcript, terminal, web view); minimize and restore both arrive
+        here without changing the radius at all."""
+        radius = self._corner_radius()
+        if radius == self._corners_applied:
+            return
+        self._corners_applied = radius
+        self.title_bar.set_corner_radius(radius)
+        self.workspace_bar.set_corner_radius(radius)
+        self.side_bar.set_corner_radius(radius)
+        self._apply_frame()
+
+    def _apply_frame(self) -> None:
+        self._frame.setStyleSheet(
+            f"#windowFrame {{ background: {UI_COLORS[self._theme_name]['window']};"
+            f" border-radius: {self._corner_radius()}px; }}"
+        )
+
     def set_theme(self, name: str) -> None:
         """Apply the selected theme throughout the application."""
         self._theme_name = name
-        ui = UI_COLORS[name]
         icon = _theme_icon(name)
         self.setWindowIcon(icon)
         app = QApplication.instance()
         if app is not None:
             app.setWindowIcon(icon)
-        self._view_stack.setStyleSheet(
-            f"QStackedWidget {{ background: {ui['window']}; }}"
-        )
+        self._apply_frame()
         for view in self.views.values():
             view.set_theme(name)
         self._home_screen.set_theme(name)
@@ -501,11 +553,13 @@ class MainWindow(QMainWindow):
 
     def changeEvent(self, event) -> None:
         # Keep the title bar's maximize/restore glyph in sync however the
-        # state changes (button, double-click, or the window manager), and
-        # drop the resize grips while maximized. The hasattr guards state
-        # changes delivered mid-__init__.
-        if event.type() == QEvent.Type.WindowStateChange and hasattr(self, "title_bar"):
+        # state changes (button, double-click, or the window manager), round or
+        # square the corners to match, and drop the resize grips while
+        # maximized. State changes do arrive mid-__init__, so the guard names the
+        # last of the three to be built rather than the first.
+        if event.type() == QEvent.Type.WindowStateChange and hasattr(self, "_grips"):
             self.title_bar.set_maximized(self.isMaximized())
+            self._apply_corners()
             for grip in self._grips:
                 grip.setVisible(not self.isMaximized())
         super().changeEvent(event)

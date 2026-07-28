@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from kraken.ui.chrome import SCROLLBAR_STYLES, Card
+from kraken.ui.chrome import SCROLLBAR_STYLES, WINDOW_RADIUS, Card
 from kraken.ui.fonts import MONO_FAMILY
 from kraken.ui.highlight import TOKEN_COLORS, lexer_for_filename, resolve_token
 from kraken.ui.themes import UI_COLORS
@@ -671,7 +671,18 @@ class DiffViewer(QWidget):
         scrim = QColor(_COLORS[self._theme]["scrim"])
         scrim.setAlpha(int(scrim.alpha() * self._fade))
         painter = QPainter(self)
-        painter.fillRect(self.rect(), scrim)
+        # Rounded like the window it covers. Filling the plain rect would paint
+        # the corners the frame deliberately leaves empty, squaring the window
+        # off for as long as a diff is open — and over the desktop rather than
+        # over the app, since those pixels are transparent.
+        radius = 0 if self._host.isMaximized() else WINDOW_RADIUS
+        if radius:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(scrim)
+            painter.drawRoundedRect(self.rect(), radius, radius)
+        else:
+            painter.fillRect(self.rect(), scrim)
         painter.end()
 
     def mousePressEvent(self, event) -> None:

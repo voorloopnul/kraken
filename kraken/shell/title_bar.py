@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from kraken.shell.async_run import run_async
+from kraken.ui.chrome import corner_style
 from kraken.ui.themes import DEFAULT_THEME
 
 if TYPE_CHECKING:
@@ -199,6 +200,9 @@ class TitleBar(QWidget):
         # QWidget subclasses ignore stylesheet backgrounds without this.
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedHeight(36)
+        self._theme_name = DEFAULT_THEME
+        # Set by MainWindow, which owns the window's shape.
+        self._corner_radius = 0
         self._workspace_path: str | None = None
         # Set for a remote workspace: git runs on the host, and the folder
         # label shows the remote destination rather than the local anchor.
@@ -466,9 +470,22 @@ class TitleBar(QWidget):
 
     # ---- Theme --------------------------------------------------------------
 
+    def set_corner_radius(self, radius: int) -> None:
+        """Round the window's top corners, which are the title bar's own."""
+        self._corner_radius = radius
+        self._apply_style()
+
+    def _apply_style(self) -> None:
+        self.setStyleSheet(
+            _STYLES[self._theme_name]
+            + corner_style(
+                "#titleBar", ("top-left", "top-right"), self._corner_radius
+            )
+        )
+
     def set_theme(self, name: str) -> None:
         self._theme_name = name
-        self.setStyleSheet(_STYLES[name])
+        self._apply_style()
         color = _ICON_COLORS[name]
         self.branch_button.setIcon(_branch_icon(color))
         self.left_panel_toggle.setIcon(_sidebar_icon(color))

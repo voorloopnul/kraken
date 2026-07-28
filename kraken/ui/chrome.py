@@ -1,9 +1,12 @@
-"""Shared containers and scroll chrome.
+"""Shared containers, scroll chrome, and the window's own shape.
 
 The pieces of the app's look that are not specific to any one surface: the
-rounded card the panels group their content in, and the scrollbar styling their
-scroll areas share. They live here rather than with the panels because the diff
-viewer's sheet is a card too, and it is not a panel.
+rounded card the panels group their content in, the scrollbar styling their
+scroll areas share, and the corner radius of the frameless window itself. The
+first two live here rather than with the panels because the diff viewer's sheet
+is a card too, and it is not a panel; the window radius lives here because the
+widgets that have to honour it — the title bar, both side strips, the frame, and
+the viewer's scrim over all of them — have nothing else in common.
 """
 
 from PySide6.QtGui import QColor
@@ -15,6 +18,25 @@ from PySide6.QtWidgets import (
 )
 
 from kraken.ui.themes import LIGHT
+
+# Corner rounding for the frameless window. There is no decoration to round, so
+# the corner pixels belong to whichever widget sits in them — the title bar
+# along the top, the workspace and side bars at the bottom — and each rounds its
+# own outer corners to this. A maximized window is handed 0: there is nothing
+# beside it to round against, and a gap at the screen corner reads as a glitch.
+WINDOW_RADIUS = 10
+
+
+def corner_style(selector: str, corners: tuple[str, ...], radius: int) -> str:
+    """A stylesheet rule rounding only the named corners ("top-left", …) of a
+    widget that sits at the window's edge.
+
+    Appended to the widget's own style sheet rather than written into it, so the
+    radius can change — on maximize, and back — without the rest of the style
+    having to be rebuilt around it."""
+    rules = "".join(f" border-{corner}-radius: {radius}px;" for corner in corners)
+    return f"{selector} {{{rules} }}"
+
 
 # Scrollbars for the app's scroll areas, matching the conversation panel's
 # external one: a bare rounded handle on a transparent track, no stepper

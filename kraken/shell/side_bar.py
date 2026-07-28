@@ -16,6 +16,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QToolButton, QVBoxLayout, QWidget
 
+from kraken.ui.chrome import corner_style
 from kraken.ui.themes import DEFAULT_THEME
 
 _STYLES = {
@@ -175,6 +176,9 @@ class SideBar(QWidget):
         # QWidget subclasses ignore stylesheet backgrounds without this.
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedWidth(40)
+        self._theme_name = DEFAULT_THEME
+        # Set by MainWindow, which owns the window's shape.
+        self._corner_radius = 0
         self.buttons: dict[str, QToolButton] = {}
 
         layout = QVBoxLayout(self)
@@ -202,7 +206,20 @@ class SideBar(QWidget):
         self.buttons[name] = btn
         return btn
 
+    def set_corner_radius(self, radius: int) -> None:
+        """Round the window's bottom-right corner, which is the strip's own
+        whenever it is showing."""
+        self._corner_radius = radius
+        self._apply_style()
+
+    def _apply_style(self) -> None:
+        self.setStyleSheet(
+            _STYLES[self._theme_name]
+            + corner_style("#sideBar", ("bottom-right",), self._corner_radius)
+        )
+
     def set_theme(self, name: str) -> None:
-        self.setStyleSheet(_STYLES[name])
+        self._theme_name = name
+        self._apply_style()
         for button_name, factory in _ICON_FACTORIES.items():
             self.buttons[button_name].setIcon(factory(_ICON_COLORS[name]))
