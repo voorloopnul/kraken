@@ -30,7 +30,9 @@ from PySide6.QtWidgets import (
 )
 
 from kraken.shell.async_run import run_async
-from kraken.shell.panels.base import SCROLLBAR_STYLES, Card, Panel
+from kraken.shell.diff_viewer import LETTER_COLORS, DiffDocument, DiffViewer
+from kraken.shell.panels.base import Panel
+from kraken.ui.chrome import SCROLLBAR_STYLES, Card
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 
 if TYPE_CHECKING:
@@ -58,18 +60,6 @@ _DIM_COLORS = {"dark": "#7a7d85", "light": "#9a9da5"}
 _ADD_COLORS = {"dark": "#98c379", "light": "#50a14f"}
 _DEL_COLORS = {"dark": "#e06c75", "light": "#e45649"}
 
-# Accent per status letter, drawn from the same One Half palette as the themes.
-_LETTER_COLORS = {
-    "dark": {
-        "A": "#98c379", "?": "#98c379", "M": "#e5c07b", "D": "#e06c75",
-        "R": "#61afef", "C": "#61afef", "T": "#c678dd", "U": "#e06c75",
-    },
-    "light": {
-        "A": "#50a14f", "?": "#50a14f", "M": "#c18401", "D": "#e45649",
-        "R": "#0184bc", "C": "#0184bc", "T": "#a626a4", "U": "#e45649",
-    },
-}
-
 _LETTER_NAMES = {
     "A": "added", "?": "untracked", "M": "modified", "D": "deleted",
     "R": "renamed", "C": "copied", "T": "type changed", "U": "unmerged",
@@ -82,14 +72,17 @@ _COL_STATUS, _COL_PATH, _COL_ADDS, _COL_DELS = range(4)
 @dataclass(frozen=True)
 class FileChange:
     """One changed file. `adds`/`dels` are None when the count is unavailable —
-    a binary file (git reports "-" for both) or an untracked file that couldn't
-    be read."""
+    a binary file (git reports "-" for both) or a file that wasn't counted."""
 
     xy: str  # raw two-letter porcelain code, e.g. "A ", " M", "??"
     path: str  # as git reports it: relative to the repo root
     orig: str | None  # where a renamed or copied file came from
     adds: int | None
     dels: int | None
+    # Whether the counts are missing because the file is not text. A count can
+    # also go missing for a file that simply wasn't counted — past the per-refresh
+    # cap, or too large to read — and that file still has a diff worth opening.
+    binary: bool = False
 
     @property
     def letter(self) -> str:
@@ -137,7 +130,9 @@ def parse_numstat(raw: str) -> dict[str, tuple[int | None, int | None]]:
         i += 1
         if len(fields) < 3:
             continue
-        adds, dels, path = fields[0], fields[1], fields[2]
+        # Only the first two tabs are separators: the record is NUL-terminated,
+        # so anything after them is the path — tabs in the filename included.
+        adds, dels, path = fields[0], fields[1], "\t".join(fields[2:])
         if not path:  # rename: the two following tokens are old, then new
             if i + 1 >= len(tokens):
                 continue
@@ -190,6 +185,10 @@ class DiffPanel(Panel):
     # Untracked files are read to count their lines; stop at this much and
     # report no count rather than slurping a huge blob into memory.
     _MAX_READ_BYTES = 4 * 1024 * 1024
+    # A file this size is fetched whole to syntax-highlight the viewer's diff.
+    # Past it the diff still opens, uncolored: lexing megabytes would cost more
+    # of a pause than the colors are worth, and no source file is this big.
+    _MAX_HIGHLIGHT_BYTES = 512 * 1024
 
     def __init__(
         self,
@@ -205,6 +204,12 @@ class DiffPanel(Panel):
         # finished after a newer one started) is discarded rather than rendered.
         self._refresh_gen = 0
         self._theme_name = DEFAULT_THEME
+        # Repo root, learned on each refresh. git reports porcelain paths
+        # relative to it, which is not where the workspace necessarily sits: a
+        # workspace can be any subdirectory of the repo.
+        self._root: str | None = None
+        # The open viewer sheet, so a second click can't stack another on it.
+        self._viewer: DiffViewer | None = None
         self._card = Card()
 
         # The refresh button lives in the dock's drag-grip row (see
@@ -236,6 +241,11 @@ class DiffPanel(Panel):
         self._tree.setTextElideMode(Qt.TextElideMode.ElideLeft)
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_context_menu)
+        # A row opens the file's diff. Both signals are wired so the keyboard
+        # reaches it too (activated fires on Enter); a double-click sends both,
+        # which the one-sheet-at-a-time guard absorbs.
+        self._tree.itemClicked.connect(self._on_item_chosen)
+        self._tree.itemActivated.connect(self._on_item_chosen)
         header = self._tree.header()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(
@@ -257,7 +267,7 @@ class DiffPanel(Panel):
 
     def refresh(self) -> None:
         if not self._cwd:
-            self._render(None)
+            self._show_message("No workspace")
             return
         # A remote gather is a blocking SSH round trip; run it off the GUI
         # thread and render when it returns, so the window never freezes. The
@@ -277,6 +287,11 @@ class DiffPanel(Panel):
     def _on_gathered(self, gen: int, data) -> None:
         # Ignore a result that a newer refresh (or a workspace switch) obsoleted.
         if gen != self._refresh_gen:
+            return
+        if data is None:
+            # run_async delivers None when the gather raised. Saying "No changes"
+            # here would assert a clean tree on the strength of a failure.
+            self._show_message("Could not read the working tree")
             return
         self._render(data)
 
@@ -329,21 +344,40 @@ class DiffPanel(Panel):
         entries = parse_status(status.stdout)
         shown = entries[: self._MAX_FILES]
         counts = self._numstat()
+        root = self._repo_root()
         # Only the rows that will be listed are worth counting lines for.
         untracked = [path for xy, path, _ in shown if xy == "??"]
-        added = self._untracked_counts(untracked[: self._MAX_COUNTED_UNTRACKED])
+        added = self._untracked_counts(untracked[: self._MAX_COUNTED_UNTRACKED], root)
         files = []
         for xy, path, orig in shown:
             if xy == "??":
                 # Every line of a new file is an addition and none are removals
                 # — unless the additions couldn't be counted at all, in which
                 # case claiming zero removals would be inventing a number.
-                adds = added.get(path)
+                adds, binary = added.get(path, (None, False))
                 dels = 0 if adds is not None else None
             else:
                 adds, dels = counts.get(path, (0, 0))
-            files.append(FileChange(xy=xy, path=path, orig=orig, adds=adds, dels=dels))
-        return {"files": files, "omitted": max(len(entries) - self._MAX_FILES, 0)}
+                # git reporting "-" for both counts is what makes it binary; a
+                # path missing from numstat entirely is unchanged, not binary.
+                binary = path in counts and (adds, dels) == (None, None)
+            files.append(
+                FileChange(
+                    xy=xy, path=path, orig=orig, adds=adds, dels=dels, binary=binary
+                )
+            )
+        return {
+            "files": files,
+            "omitted": max(len(entries) - self._MAX_FILES, 0),
+            "root": root,
+        }
+
+    def _repo_root(self) -> str:
+        """The repo's top level. Porcelain paths are relative to it, while a
+        pathspec and a filesystem read are relative to where git ran — so a
+        workspace opened on a subdirectory needs this to bridge the two."""
+        result = self._git_text(["rev-parse", "--show-toplevel"])
+        return result.stdout.strip() if result is not None else (self._cwd or "")
 
     def _numstat(self) -> dict[str, tuple[int | None, int | None]]:
         """Per-file line counts for every tracked change, staged or not, against
@@ -365,44 +399,216 @@ class DiffPanel(Panel):
                     counts[path] = (_add(have[0], adds), _add(have[1], dels))
         return counts
 
-    def _untracked_counts(self, paths: list[str]) -> dict[str, int | None]:
-        """Lines in each untracked file — its additions, since every line is
-        new. git's diff doesn't cover untracked files, so this counts them."""
+    def _untracked_counts(
+        self, paths: list[str], root: str
+    ) -> dict[str, tuple[int | None, bool]]:
+        """(lines, binary) for each untracked file — its additions, since every
+        line is new. git's diff doesn't cover untracked files, so this counts
+        them itself."""
         if not paths:
             return {}
         if self._remote is not None:
-            return self._remote_line_counts(paths)
-        root = Path(self._cwd)
-        return {path: _count_lines(root / path, self._MAX_READ_BYTES) for path in paths}
+            return self._remote_line_counts(paths, root)
+        base = Path(root)
+        return {
+            path: _count_lines(base / path, self._MAX_READ_BYTES) for path in paths
+        }
 
-    def _remote_line_counts(self, paths: list[str]) -> dict[str, int | None]:
+    def _remote_line_counts(
+        self, paths: list[str], root: str
+    ) -> dict[str, tuple[int | None, bool]]:
         """The same counts for a remote workspace, in one round trip: `wc -l`
         over the whole list. It counts newlines, so a file that doesn't end in
         one comes out a line short of what git would say — a better answer than
-        no answer. A host without `wc` leaves every count unknown."""
-        command = "wc -l -- " + " ".join(shlex.quote(p) for p in paths)
+        no answer. A host without `wc` leaves every count unknown, and nothing
+        here can tell a binary file from a text one.
+
+        `wc` exits non-zero if *any* path failed while still printing counts for
+        the rest, so the output is read whatever the exit status: one file deleted
+        between the status call and this one must not blank out every count."""
+        absolute = {f"{root}/{path}": path for path in paths}
+        output = self._remote_shell(
+            "wc -l -- " + " ".join(shlex.quote(name) for name in absolute),
+            partial=True,
+        )
+        counts: dict[str, int | None] = {}
+        for line in output.splitlines():
+            number, _, name = line.strip().partition(" ")
+            path = absolute.get(name.strip())
+            # `wc` appends a "total" line for multiple files, which is no path.
+            if path is None:
+                continue
+            try:
+                counts[path] = int(number)
+            except ValueError:
+                continue
+        return {path: (counts.get(path), False) for path in paths}
+
+    def _remote_shell(
+        self, command: str, timeout: float = 20, partial: bool = False
+    ) -> str:
+        """stdout of a plain shell command on the remote host, or "" if it fails.
+        For the two things git cannot answer about a file it doesn't track: how
+        many lines it has, and what is in it. `partial` keeps the output of a
+        command that failed but printed usable results anyway."""
         try:
             result = subprocess.run(
                 self._remote.ssh_argv(command),
-                timeout=20,
+                timeout=timeout,
                 capture_output=True,
                 text=True,
                 errors="replace",
             )
         except (OSError, subprocess.TimeoutExpired):
-            return {}
-        counts: dict[str, int | None] = {}
-        for line in result.stdout.splitlines():
-            number, _, name = line.strip().partition(" ")
-            name = name.strip()
-            # `wc` appends a "total" line for multiple files, which is not a path.
-            if name in counts or not name:
-                continue
-            try:
-                counts[name] = int(number)
-            except ValueError:
-                continue
-        return {path: counts.get(path) for path in paths}
+            return ""
+        return result.stdout if partial or result.returncode == 0 else ""
+
+    # ---- Viewer -----------------------------------------------------------
+
+    def _on_item_chosen(self, item, _column: int = 0) -> None:
+        # A rebuild between the click and its delivery leaves no item at all.
+        change = (
+            item.data(_COL_PATH, Qt.ItemDataRole.UserRole + 1)
+            if item is not None
+            else None
+        )
+        # One sheet at a time, so a double-click doesn't stack two.
+        if change is None or self._viewer is not None:
+            return
+        root = self._root or self._cwd or ""
+        if self._remote is None:
+            self._show_viewer(self._diff_document(change, root), change)
+            return
+        # Three SSH round trips (the diff and both sides of the file); off the
+        # GUI thread, like the refresh, so the window doesn't freeze on a click.
+        run_async(
+            lambda: self._diff_document(change, root),
+            lambda document: self._show_viewer(document, change),
+            self,
+        )
+
+    def _show_viewer(self, document: DiffDocument | None, change: FileChange) -> None:
+        if self._viewer is not None:
+            return
+        # The pane was closed (or its workspace left) while the fetch was in
+        # flight: a sheet appearing over an unrelated view would be a surprise.
+        if not self.isVisible():
+            return
+        if document is None:
+            # The gather raised. Say so in the sheet rather than swallowing the
+            # click, which reads as the app having ignored it.
+            document = DiffDocument(
+                path=change.path,
+                letter=change.letter,
+                subtitle=_describe(change),
+                message="Could not read the diff",
+            )
+        # The sheet covers the whole window: dimming the app is the point, and
+        # it is what makes the viewer modal.
+        self._viewer = DiffViewer.open_on(
+            self.window(), self._theme_name, document
+        )
+        self._viewer.destroyed.connect(self._on_viewer_closed)
+
+    def _on_viewer_closed(self, *_args) -> None:
+        self._viewer = None
+
+    def _diff_document(self, change: FileChange, root: str) -> DiffDocument:
+        """One file's diff plus both sides of the file whole, which is what lets
+        the viewer color a line with the context above it in hand. No Qt here —
+        this runs on a worker thread for remote workspaces."""
+        subtitle = _describe(change)
+        if change.adds is not None and change.dels is not None:
+            subtitle = f"{subtitle} · +{change.adds} −{change.dels}"
+        if change.binary:
+            # Only a file git (or the untracked-file read) called binary skips the
+            # diff. A count that merely went missing — past the refresh cap, or
+            # too big to read — still has a diff worth showing.
+            return DiffDocument(
+                path=change.path,
+                letter=change.letter,
+                subtitle=subtitle,
+                message="Binary file — no text diff",
+            )
+        diff_text = self._file_diff(change, root)
+        if diff_text is None:
+            return DiffDocument(
+                path=change.path,
+                letter=change.letter,
+                subtitle=subtitle,
+                message="Could not read the diff",
+            )
+        return DiffDocument(
+            path=change.path,
+            letter=change.letter,
+            diff_text=diff_text,
+            # A file that is new on this side has nothing to read on the other.
+            old_text=(
+                "" if change.letter in ("A", "?")
+                else self._head_text(change.orig or change.path)
+            ),
+            new_text="" if change.letter == "D" else self._worktree_text(
+                change.path, root
+            ),
+            subtitle=subtitle,
+        )
+
+    def _file_diff(self, change: FileChange, root: str) -> str | None:
+        """The unified diff for one file, against HEAD. `:(top)` anchors the
+        pathspec to the repo root, which is what git reported the path relative
+        to; a bare path would be read relative to git's cwd and quietly match
+        nothing when the workspace is a subdirectory."""
+        if change.xy == "??":
+            return self._new_file_diff(root, change.path)
+        args = ["diff", "HEAD", "--", f":(top){change.path}"]
+        if change.orig:
+            # Without the old path in the pathspec, a rename reads as an add.
+            args.append(f":(top){change.orig}")
+        result = self._git_text(args, timeout=10)
+        if result is not None:
+            return result.stdout
+        # No HEAD to diff against: an unborn branch, where every line is new.
+        return self._new_file_diff(root, change.path)
+
+    def _new_file_diff(self, root: str, path: str) -> str | None:
+        """A file with no counterpart in the repo, diffed against nothing so it
+        shows as all additions. `--no-index` exits 1 when its two inputs differ,
+        which for a file with any content at all is the normal outcome."""
+        try:
+            result = self._run_git(
+                ["diff", "--no-index", "--", "/dev/null", f"{root}/{path}"],
+                timeout=10,
+                capture_output=True,
+                text=True,
+                errors="replace",
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return result.stdout if result.returncode in (0, 1) else None
+
+    def _head_text(self, path: str) -> str:
+        """The file as HEAD has it. `HEAD:<path>` is resolved from the repo root
+        unless it starts with "./", so the porcelain path works as it stands."""
+        result = self._git_text(["show", f"HEAD:{path}"], timeout=10)
+        return result.stdout if result is not None else ""
+
+    def _worktree_text(self, path: str, root: str) -> str:
+        """The file as it is on disk now. Returns "" when it is too big to be
+        worth lexing, or unreadable — the diff still opens, just uncolored."""
+        if self._remote is not None:
+            # head -c caps the transfer; a file that big only loses the colors
+            # on the lines past the cap.
+            return self._remote_shell(
+                f"head -c {self._MAX_HIGHLIGHT_BYTES} -- "
+                f"{shlex.quote(f'{root}/{path}')}"
+            )
+        target = Path(root, path)
+        try:
+            if target.stat().st_size > self._MAX_HIGHLIGHT_BYTES:
+                return ""
+            return target.read_text(errors="replace")
+        except OSError:
+            return ""
 
     # ---- Rendering --------------------------------------------------------
 
@@ -413,17 +619,18 @@ class DiffPanel(Panel):
             f"{html.escape(message)}</span>"
         )
 
-    def _render(self, data: dict | None) -> None:
-        if not data or "files" not in data:
-            self._show_message((data or {}).get("message") or "No changes")
+    def _render(self, data: dict) -> None:
+        if "files" not in data:
+            self._show_message(data.get("message") or "No changes")
             return
         files: list[FileChange] = data["files"]
+        self._root = data.get("root") or self._cwd
         if not files:
             self._show_message("No changes")
             return
         self._render_summary(files, data.get("omitted", 0))
         self._tree.clear()
-        letters = _LETTER_COLORS[self._theme_name]
+        letters = LETTER_COLORS[self._theme_name]
         text = QColor(_TEXT_COLORS[self._theme_name])
         dim = QColor(_DIM_COLORS[self._theme_name])
         add_color = QColor(_ADD_COLORS[self._theme_name])
@@ -451,6 +658,9 @@ class DiffPanel(Panel):
                 )
             item.setToolTip(_COL_PATH, _tooltip(change))
             item.setData(_COL_PATH, Qt.ItemDataRole.UserRole, change.path)
+            # The whole change rides on the row: opening the viewer needs more
+            # of it than the path (the old name of a rename, the counts).
+            item.setData(_COL_PATH, Qt.ItemDataRole.UserRole + 1, change)
             self._tree.addTopLevelItem(item)
 
     def _render_summary(self, files: list[FileChange], omitted: int) -> None:
@@ -493,6 +703,10 @@ class DiffPanel(Panel):
         ui = UI_COLORS[name]
         self._card.set_colors(ui["card"], ui["card_border"])
         self._tree.setStyleSheet(_TREE_STYLES[name] + SCROLLBAR_STYLES[name])
+        # An open sheet is a surface of its own and has to be told; nothing else
+        # reaches into it once it is up.
+        if self._viewer is not None:
+            self._viewer.set_theme(name)
         # Row and summary colors are set per item, so re-render on a theme flip
         # (hidden panels re-render on their next showEvent).
         if changed and self.isVisible():
@@ -519,10 +733,12 @@ def _count_text(count: int | None, sign: str) -> str:
     return "—" if count is None else f"{sign}{count}"
 
 
-def _count_lines(path: Path, max_bytes: int) -> int | None:
-    """Lines in a file, or None when it can't be counted: unreadable, binary, or
-    larger than `max_bytes`. Read in chunks so a big file isn't held in memory
-    whole, and counted git's way — a final line without a newline still counts."""
+def _count_lines(path: Path, max_bytes: int) -> tuple[int | None, bool]:
+    """(lines, binary) for a file. `lines` is None when it can't be counted —
+    unreadable, not text, or larger than `max_bytes` — and `binary` separates the
+    one of those that means "there is no text diff to show" from the two that
+    only mean "we didn't count". Read in chunks so a big file isn't held in
+    memory whole, and counted git's way: a final line without a newline counts."""
     lines = 0
     read = 0
     tail = b""
@@ -534,26 +750,36 @@ def _count_lines(path: Path, max_bytes: int) -> int | None:
                     break
                 read += len(chunk)
                 if read > max_bytes:
-                    return None
+                    return None, False
                 if b"\0" in chunk:
-                    return None  # binary, like git's own numstat
+                    return None, True  # binary, like git's own numstat
                 lines += chunk.count(b"\n")
                 tail = chunk[-1:]
     except OSError:
-        return None
+        return None, False
     if tail and tail != b"\n":
         lines += 1
-    return lines
+    return lines, False
+
+
+def _describe(change: FileChange) -> str:
+    """What happened to the file, in words: "modified · not staged"."""
+    name = _LETTER_NAMES.get(change.letter, "changed")
+    note = _staged_note(change.xy)
+    return name if note == name else f"{name} · {note}"
 
 
 def _tooltip(change: FileChange) -> str:
-    name = _LETTER_NAMES.get(change.letter, "changed")
-    note = _staged_note(change.xy)
-    lines = [change.path, name if note == name else f"{name} · {note}"]
+    lines = [change.path, _describe(change)]
     if change.orig:
         lines.append(f"from {change.orig}")
-    if change.adds is None or change.dels is None:
+    if change.binary:
         lines.append("binary — no line count")
+    elif change.adds is None or change.dels is None:
+        # Not counted rather than not countable: too large to read, or past the
+        # cap on how many files one refresh counts. Its diff still opens.
+        lines.append("lines not counted")
     else:
         lines.append(f"+{change.adds}  −{change.dels}")
+    lines.append("Click to view the diff")
     return "\n".join(lines)

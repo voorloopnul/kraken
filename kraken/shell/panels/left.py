@@ -16,7 +16,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from kraken.shell.panels.base import Card, Panel, _dot_icon
+from kraken.shell.panels.base import Panel, _dot_icon
+from kraken.ui.chrome import Card
 from kraken.ui.fonts import UI_SANS_FAMILY
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 

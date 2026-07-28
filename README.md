@@ -10,7 +10,8 @@ It is built on the [Pi coding agent](https://github.com/earendil-works/pi-coding
 - [x] an embedded terminal
 - [x] an embedded browser
 - [x] a diff pane — the files changed since the last commit, with the lines
-  added and removed in each
+  added and removed in each; click a file to read its diff, syntax
+  highlighted, over the dimmed app
 - [x] workspace/project switching
 - [x] voice input — dictate a prompt, transcribed locally on the CPU
 

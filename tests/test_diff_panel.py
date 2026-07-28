@@ -9,6 +9,7 @@ imagined git prints, which is the part most likely to be wrong.
 import subprocess
 
 import pytest
+from PySide6.QtCore import Qt
 
 from kraken.shell.panels.diff import DiffPanel, parse_numstat, parse_status
 
@@ -176,6 +177,190 @@ def test_outside_a_repository_says_so(tmp_path, panel):
 
     assert rows(widget) == {}
     assert "Not a git repository" in widget._summary.text()
+
+
+def viewer_for(widget, row_index, settle):
+    """Click a row the way the tree does, and return the sheet it opened."""
+    item = widget._tree.topLevelItem(row_index)
+    widget._tree.itemClicked.emit(item, 1)
+    settle(300)  # let the fade finish
+    return widget._viewer
+
+
+def test_clicking_a_row_opens_the_file_diff(repo, panel, settle):
+    (repo / "keep.txt").write_text("a\nb\nc\nadded here\n")
+
+    widget = panel(repo)
+    viewer = viewer_for(widget, 0, settle)
+
+    assert viewer is not None
+    body = viewer._body.document()
+    lines = [body.findBlockByNumber(i).text() for i in range(body.blockCount())]
+    assert "+added here" in lines
+    # Context comes through as well, so the change is readable in place.
+    assert " a" in lines
+
+
+def test_a_second_click_does_not_stack_another_sheet(repo, panel, settle):
+    (repo / "keep.txt").write_text("a\nb\nc\nd\n")
+
+    widget = panel(repo)
+    first = viewer_for(widget, 0, settle)
+    second = viewer_for(widget, 0, settle)
+
+    assert first is second
+
+
+def test_closing_the_sheet_lets_the_next_click_open_one(repo, panel, settle):
+    (repo / "keep.txt").write_text("a\nb\nc\nd\n")
+
+    widget = panel(repo)
+    first = viewer_for(widget, 0, settle)
+    first.close_view()
+    settle(300)
+    assert widget._viewer is None
+
+    assert viewer_for(widget, 0, settle) is not None
+
+
+def test_an_untracked_file_opens_as_all_additions(repo, panel, settle):
+    (repo / "fresh.py").write_text("import os\n\n\ndef main():\n    return os\n")
+
+    widget = panel(repo)
+    viewer = viewer_for(widget, 0, settle)
+
+    body = viewer._body.document()
+    lines = [body.findBlockByNumber(i).text() for i in range(body.blockCount())]
+    assert "+import os" in lines
+    assert "+def main():" in lines
+
+
+def test_a_binary_file_says_so_instead_of_opening_a_diff(repo, panel, settle):
+    (repo / "blob.bin").write_bytes(b"\x00\x01binary\x00")
+
+    widget = panel(repo)
+    viewer = viewer_for(widget, 0, settle)
+
+    assert viewer is not None
+    assert viewer._body is None  # a message, not a diff
+
+
+def test_the_panels_theme_reaches_an_open_sheet(repo, panel, settle):
+    """The app's theme toggle runs through every panel's set_theme; the sheet is
+    a surface of its own, and nothing else reaches into it once it is up."""
+    (repo / "keep.txt").write_text("a\nb\nc\nd\n")
+
+    widget = panel(repo)
+    viewer = viewer_for(widget, 0, settle)
+    assert viewer._theme == "light"
+
+    widget.set_theme("dark")
+    settle()
+
+    assert viewer._theme == "dark"
+
+
+def test_a_workspace_on_a_subdirectory_still_finds_its_files(tmp_path, panel, settle):
+    """git reports paths relative to the repo root, while a pathspec and a file
+    read are relative to where git ran. A workspace opened on a subdirectory is
+    where those two disagree, and both the counts and the diff depend on it."""
+    root = tmp_path / "repo"
+    (root / "pkg" / "deep").mkdir(parents=True)
+    git(root, "init", "-q", "-b", "main")
+    git(root, "config", "user.email", "test@example.com")
+    git(root, "config", "user.name", "Test")
+    (root / "pkg" / "tracked.txt").write_text("one\ntwo\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "init")
+    (root / "pkg" / "tracked.txt").write_text("one\ntwo\nthree\n")
+    (root / "pkg" / "fresh.txt").write_text("new\nlines\n")
+
+    # The workspace is two levels below the root.
+    widget = panel(root / "pkg" / "deep")
+    listed = rows(widget)
+
+    assert listed["pkg/tracked.txt"] == ("M", "+1", "−0")
+    # The untracked count is a filesystem read, which is the half that breaks
+    # when the root is assumed to be the workspace.
+    assert listed["pkg/fresh.txt"] == ("?", "+2", "−0")
+
+    viewer = viewer_for(widget, 0, settle)
+    body = viewer._body.document()
+    lines = [body.findBlockByNumber(i).text() for i in range(body.blockCount())]
+    assert "+three" in lines
+
+
+def test_an_uncounted_text_file_is_not_called_binary(repo, panel, settle, monkeypatch):
+    """A count can go missing for a file that simply wasn't counted — past the
+    per-refresh cap, or too large to read. Such a file still has a diff, and
+    reporting it as binary both mislabels the row and refuses to open it."""
+    monkeypatch.setattr(DiffPanel, "_MAX_COUNTED_UNTRACKED", 1)
+    (repo / "a_first.txt").write_text("only counted one\n")
+    (repo / "b_beyond_cap.txt").write_text("still text\nand still openable\n")
+
+    widget = panel(repo)
+    listed = rows(widget)
+
+    # The row past the cap has no count, and says so with a dash.
+    assert listed["b_beyond_cap.txt"] == ("?", "—", "—")
+    item = widget._tree.topLevelItem(1)
+    change = item.data(1, Qt.ItemDataRole.UserRole + 1)
+    assert change.path == "b_beyond_cap.txt"
+    assert change.binary is False
+    # And the tooltip says what actually happened rather than calling it binary.
+    assert "not counted" in item.toolTip(1)
+    assert "binary" not in item.toolTip(1)
+
+    # And clicking it opens the real diff rather than a "binary" message.
+    viewer = viewer_for(widget, 1, settle)
+    assert viewer._body is not None, "an uncounted text file should still open"
+    body = viewer._body.document()
+    lines = [body.findBlockByNumber(i).text() for i in range(body.blockCount())]
+    assert "+still text" in lines
+
+
+def test_a_binary_file_is_still_marked_binary(repo, panel):
+    (repo / "untracked.bin").write_bytes(b"\x00\x01binary\x00")
+    (repo / "keep.txt").write_bytes(b"a\nb\n\x00tracked binary now\x00")
+
+    widget = panel(repo)
+    changes = {
+        widget._tree.topLevelItem(i).data(1, Qt.ItemDataRole.UserRole + 1).path:
+        widget._tree.topLevelItem(i).data(1, Qt.ItemDataRole.UserRole + 1).binary
+        for i in range(widget._tree.topLevelItemCount())
+    }
+
+    # git's "-" for a tracked file, and the NUL byte for an untracked one.
+    assert changes == {"keep.txt": True, "untracked.bin": True}
+
+
+class _LocalShell:
+    """Stands in for a remote target, running the command locally instead of
+    over SSH so the panel's remote path can be exercised."""
+
+    def ssh_argv(self, command: str) -> list[str]:
+        return ["sh", "-c", command]
+
+
+def test_remote_counts_survive_one_unreadable_file(tmp_path, qapp):
+    """`wc -l` exits non-zero if any argument fails, while still printing counts
+    for the rest. A file that vanished between the status call and this one is
+    routine while an agent works, and must not blank out every other count."""
+    (tmp_path / "here.txt").write_text("one\ntwo\n")
+    widget = DiffPanel(cwd=str(tmp_path), remote=_LocalShell())
+
+    counts = widget._remote_line_counts(["here.txt", "gone.txt"], str(tmp_path))
+
+    assert counts["here.txt"] == (2, False)
+    assert counts["gone.txt"] == (None, False)
+    widget.deleteLater()
+
+
+def test_parse_numstat_keeps_a_tab_inside_a_path():
+    # The record is NUL-terminated, so only the first two tabs are separators.
+    counts = parse_numstat("3\t1\tta\tb.txt\0")
+
+    assert counts == {"ta\tb.txt": (3, 1)}
 
 
 def test_parse_status_pairs_a_rename_with_its_origin():

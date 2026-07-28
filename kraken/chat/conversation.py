@@ -25,9 +25,6 @@ from PySide6.QtGui import (
     QTextFormat,
 )
 from PySide6.QtWidgets import QApplication, QTextBrowser, QToolButton, QWidget
-from pygments.lexers import get_lexer_by_name
-from pygments.token import Token
-from pygments.util import ClassNotFound
 
 from kraken.chat.formatting import (
     _clip,
@@ -37,6 +34,7 @@ from kraken.chat.formatting import (
     error_summary,
 )
 from kraken.ui.fonts import MONO_FAMILY
+from kraken.ui.highlight import TOKEN_COLORS, lexer_for, resolve_token
 from kraken.ui.themes import DEFAULT_THEME
 
 # The horizontal scrollbar (wide code blocks) matches the panel-edge
@@ -103,41 +101,6 @@ QToolButton:hover { background: #efeadb; color: #1b1d22; }
 """,
 }
 
-# Syntax highlight colors per theme: token type -> (color, italic). Token
-# types resolve through their parents, so Token.Literal.String.Doc finds
-# Token.Literal.String. Dark leans on One Dark; light uses darkened One
-# Light values that keep contrast on the tinted code background.
-_HIGHLIGHT = {
-    "dark": {
-        Token.Keyword: ("#c678dd", False),
-        Token.Keyword.Constant: ("#d19a66", False),
-        Token.Operator.Word: ("#c678dd", False),
-        Token.Literal.String: ("#98c379", False),
-        Token.Literal.Number: ("#d19a66", False),
-        Token.Comment: ("#7d818c", True),
-        Token.Name.Function: ("#61afef", False),
-        Token.Name.Class: ("#e5c07b", False),
-        Token.Name.Builtin: ("#56b6c2", False),
-        Token.Name.Decorator: ("#e5c07b", False),
-        Token.Name.Tag: ("#e06c75", False),
-        Token.Name.Attribute: ("#d19a66", False),
-    },
-    "light": {
-        Token.Keyword: ("#96218f", False),
-        Token.Keyword.Constant: ("#8a5c00", False),
-        Token.Operator.Word: ("#96218f", False),
-        Token.Literal.String: ("#3c7d3b", False),
-        Token.Literal.Number: ("#8a5c00", False),
-        Token.Comment: ("#75786f", True),
-        Token.Name.Function: ("#2a5fd3", False),
-        Token.Name.Class: ("#9c6d00", False),
-        Token.Name.Builtin: ("#077a92", False),
-        Token.Name.Decorator: ("#9c6d00", False),
-        Token.Name.Tag: ("#a8232e", False),
-        Token.Name.Attribute: ("#8a5c00", False),
-    },
-}
-
 # insertMarkdown lays out headings and code fences with no vertical
 # margins; these are merged into the block formats after each render.
 _HEADING_TOP_MARGIN = 14.0
@@ -181,19 +144,6 @@ _DOC_MARGIN_Y = _BUBBLE_GAP + max(_BUBBLE_PAD_Y, _CODE_CARD_PAD_Y)
 # How far off the bottom the view can sit and still count as "at the bottom",
 # so a stray pixel of rounding doesn't read as the reader having scrolled up.
 _STICK_SLACK = 4
-
-# Lexer lookup is not free; cache per fence language (None = no lexer).
-_LEXERS: dict[str, object] = {}
-
-
-def _lexer_for(language: str):
-    if language not in _LEXERS:
-        try:
-            _LEXERS[language] = get_lexer_by_name(language)
-        except ClassNotFound:
-            _LEXERS[language] = None
-    return _LEXERS[language]
-
 
 # One span of styled text inside a non-assistant block:
 # (text, color_role, bold, italic). Assistant blocks carry markdown source
@@ -772,7 +722,7 @@ class ConversationView(QTextBrowser):
         language = first_block.blockFormat().property(
             QTextFormat.Property.BlockCodeLanguage
         )
-        lexer = _lexer_for(language) if language else None
+        lexer = lexer_for(language) if language else None
         if lexer is None:
             return
         lines = []
@@ -782,18 +732,16 @@ class ConversationView(QTextBrowser):
             block = block.next()
         code = "\n".join(lines)
 
-        table = _HIGHLIGHT[self._theme_name]
+        table = TOKEN_COLORS[self._theme_name]
         base = first_block.position()
         cursor = QTextCursor(document)
         for offset, token, value in lexer.get_tokens_unprocessed(code):
             if not value.strip():
                 continue
-            node = token
-            while node is not None and node not in table:
-                node = node.parent
-            if node is None:
+            style = resolve_token(table, token)
+            if style is None:
                 continue
-            color, italic = table[node]
+            color, italic = style
             fmt = QTextCharFormat()
             fmt.setForeground(QColor(color))
             fmt.setFontItalic(italic)

@@ -21,7 +21,8 @@ from PySide6.QtWidgets import (
 )
 
 from kraken.shell.async_run import run_async
-from kraken.shell.panels.base import SCROLLBAR_STYLES, Card, Panel
+from kraken.shell.panels.base import Panel
+from kraken.ui.chrome import SCROLLBAR_STYLES, Card
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 
 if TYPE_CHECKING:

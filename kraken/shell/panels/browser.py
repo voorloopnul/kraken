@@ -2,7 +2,8 @@
 
 from PySide6.QtWidgets import QWidget
 
-from kraken.shell.panels.base import Card, Panel
+from kraken.shell.panels.base import Panel
+from kraken.ui.chrome import Card
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 
 
