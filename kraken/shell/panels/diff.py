@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QGuiApplication
 from PySide6.QtWidgets import (
     QHeaderView,
@@ -211,6 +211,10 @@ class DiffPanel(Panel):
         self._root: str | None = None
         # The open viewer sheet, so a second click can't stack another on it.
         self._viewer: DiffViewer | None = None
+        # A click taken but not yet shown: the open is deferred out of the click
+        # (see _on_item_chosen), and until it lands there is no sheet to refuse
+        # a second one.
+        self._opening = False
         self._card = Card()
 
         # The refresh button lives in the dock's drag-grip row (see
@@ -473,12 +477,21 @@ class DiffPanel(Panel):
             if item is not None
             else None
         )
-        # One sheet at a time, so a double-click doesn't stack two.
-        if change is None or self._viewer is not None:
+        # One sheet at a time, so a double-click doesn't stack two. `_opening`
+        # covers the gap the deferral opens up, where the click has been taken
+        # but there is no sheet yet to refuse the next one.
+        if change is None or self._viewer is not None or self._opening:
             return
+        self._opening = True
         root = self._root or self._cwd or ""
         if self._remote is None:
-            self._show_viewer(self._diff_document(change, root), change)
+            # Off the click's stack. This slot runs nested inside
+            # QAbstractItemView::mouseReleaseEvent, which goes on using the view
+            # after it returns — and building a sheet means lexing the whole
+            # file for its colors, enough allocation to run the collector under
+            # a widget Qt is still holding. The remote path below is already
+            # deferred by run_async.
+            QTimer.singleShot(0, self, lambda: self._open_now(change, root))
             return
         # Three SSH round trips (the diff and both sides of the file); off the
         # GUI thread, like the refresh, so the window doesn't freeze on a click.
@@ -488,7 +501,14 @@ class DiffPanel(Panel):
             self,
         )
 
+    def _open_now(self, change: FileChange, root: str) -> None:
+        """The local open, one event-loop turn after the click that asked for
+        it. Reads the diff and puts the sheet up."""
+        self._show_viewer(self._diff_document(change, root), change)
+
     def _show_viewer(self, document: DiffDocument | None, change: FileChange) -> None:
+        # Both paths end here, so this is where the click stops being pending.
+        self._opening = False
         if self._viewer is not None:
             return
         # The pane was closed (or its workspace left) while the fetch was in

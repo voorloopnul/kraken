@@ -201,6 +201,50 @@ def test_clicking_a_row_opens_the_file_diff(repo, panel, settle):
     assert " a" in lines
 
 
+def test_the_sheet_is_not_built_inside_the_click(repo, panel, settle):
+    """The click may take the request, but must not do the work.
+
+    The slot runs nested inside QAbstractItemView::mouseReleaseEvent, which goes
+    on using the view after the slot returns. Building the sheet there means
+    lexing a whole file for its colors — enough allocation to run the collector
+    under a widget Qt is still holding, and the click segfaults on the way back
+    out. So nothing may exist until the event loop has turned.
+    """
+    (repo / "keep.txt").write_text("a\nb\nc\nd\n")
+    widget = panel(repo)
+
+    widget._tree.itemClicked.emit(widget._tree.topLevelItem(0), 1)
+
+    # Still on the click's stack: the request is taken, nothing is built.
+    assert widget._viewer is None
+    assert widget._opening is True
+
+    settle(300)
+    assert widget._viewer is not None
+    assert widget._opening is False
+
+
+def test_a_double_click_reads_the_diff_once(repo, panel, settle):
+    """A double-click sends itemClicked and itemActivated back to back, both
+    before the deferred open has run — so the open sheet cannot be what refuses
+    the second one. Without the pending flag each request would read the diff
+    (a git round trip apiece) only for one of the sheets to be thrown away."""
+    (repo / "keep.txt").write_text("a\nb\nc\nd\n")
+    widget = panel(repo)
+
+    reads = []
+    original = widget._diff_document
+    widget._diff_document = lambda *a, **k: (reads.append(1), original(*a, **k))[1]
+
+    item = widget._tree.topLevelItem(0)
+    widget._tree.itemClicked.emit(item, 1)
+    widget._tree.itemActivated.emit(item, 1)
+    settle(300)
+
+    assert widget._viewer is not None
+    assert len(reads) == 1
+
+
 def test_a_second_click_does_not_stack_another_sheet(repo, panel, settle):
     (repo / "keep.txt").write_text("a\nb\nc\nd\n")
 
