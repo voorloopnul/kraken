@@ -279,6 +279,12 @@ class DockArea(QWidget):
         self._no_stack = set(no_stack_keys or ()) | self._fixed
         self._theme_name = DEFAULT_THEME
         self._panels: dict[str, DockPanel] = {}
+        # Every column ever made. The splitter owns them in C++, but reaching
+        # them only through splitter.widget(i) leaves nothing on the Python
+        # side holding one — and a collection that takes a column deletes every
+        # panel inside it, live and on screen. Panels are kept in _panels for
+        # the same reason; columns need it just as much.
+        self._column_refs: list[_DockColumn] = []
 
         self._splitter = _GripSplitter(Qt.Orientation.Horizontal)
         layout = QVBoxLayout(self)
@@ -406,7 +412,9 @@ class DockArea(QWidget):
         for column in self._columns():
             if column.count() == 0:
                 return column
-        return _DockColumn()
+        column = _DockColumn()
+        self._column_refs.append(column)
+        return column
 
     def _snapshot(self) -> dict[_DockColumn, int]:
         """Current pixel widths of the visible columns, captured before a
