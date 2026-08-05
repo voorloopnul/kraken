@@ -21,3 +21,7 @@ vendor/toolchain/
 # loads are committed under kraken/ui/assets/fonts (see kraken/ui/fonts.py)
 /fonts/
 vendor/JetBrainsMono-*.zip
+
+# Debug logs. `--debug` writes to ~/.kraken/logs by default, but it takes a
+# path, and running from a checkout puts that path here (see DEBUG.md)
+*.log
