@@ -455,6 +455,11 @@ class MainWindow(QMainWindow):
             view.browser_requested.connect(
                 lambda: self._panel_actions["browser"].setChecked(True)
             )
+            # Closing the last tab closes the panel, through the same action,
+            # so the toggle and the panel.toggle record stay in step.
+            view.browser_closed.connect(
+                lambda: self._panel_actions["browser"].setChecked(False)
+            )
             # The title bar shows the focused conversation's title; only the
             # visible workspace's view gets to set it.
             view.title_changed.connect(

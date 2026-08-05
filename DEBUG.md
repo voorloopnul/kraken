@@ -181,7 +181,7 @@ The bias is toward native-heavy paths, because that is where the crashes are.
 | Agent (`agent/pi_rpc.py`) | `pi.start`, `pi.terminate`, `pi.kill`, `pi.exit` (with exit code and pending callbacks), `pi.error`, `pi.stderr` |
 | Sessions (`shell/workspace_view.py`) | `session.create`, `session.open`, `session.new`, `session.remove`, `session.retire`, `session.streaming`, `chat.submit`, `chat.stop`, `model.select`, `effort.select`, `view.shutdown` |
 | Terminal (`terminal/widget.py`) | `terminal.spawn` (pid, program, fd), `terminal.child-exit`, `terminal.shutdown`, `terminal.freed` |
-| Browser (`browser/widget.py`) | `browser.navigate`, `browser.render-terminated` (status and exit code) |
+| Browser (`browser/widget.py`, `shell/panels/browser.py`) | `browser.navigate`, `browser.render-terminated` (status and exit code), `browser.tabs-discarded` (last tab closed, web views destroyed) |
 | Window (`shell/main_window.py`) | `workspace.select`, `workspace.add`, `workspace.add-remote`, `workspace.edit-remote`, `workspace.remove`, `panel.toggle`, `theme.set`, `window.state`, `window.close`, `browser.screenshot`, `app.shutdown-views`, `view.discard` |
 | Dock (`shell/dock.py`) | `dock.drop` — reparenting a live panel between splitters |
 | Diff (`shell/panels/diff.py`) | `diff.open` |

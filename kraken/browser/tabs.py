@@ -3,7 +3,7 @@ of BrowserWidget instances, one per tab."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QStackedWidget, QTabBar, QToolButton, QVBoxLayout, QWidget
 
 from kraken.browser.widget import BrowserWidget
@@ -71,6 +71,10 @@ QToolButton:hover { background: #dedee2; color: #1b1d22; }
 
 class BrowserTabs(QWidget):
     """Tab bar + '+' button on top, one browser per tab below."""
+
+    # The last tab was closed. The panel reads this as "close me" rather than
+    # opening a replacement tab.
+    emptied = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -172,8 +176,11 @@ class BrowserTabs(QWidget):
         browser.deleteLater()
         self._tab_bar.removeTab(index)
         if self._stack.count() == 0:
+            # A replacement tab would pin a Chromium renderer (~200MB) for a
+            # browser nobody asked to keep open, so the last ✕ closes the
+            # panel instead and the panel drops the strip.
             self._counter = 0
-            self.add_browser()
+            self.emptied.emit()
         else:
             current = self.current_browser
             if current is not None:

@@ -32,6 +32,8 @@ if TYPE_CHECKING:
 class WorkspaceView(QWidget):
     # A transcript link asks MainWindow to show the browser panel.
     browser_requested = Signal()
+    # The last browser tab was closed; MainWindow hides the panel.
+    browser_closed = Signal()
     # Focused conversation's title, for the window title bar.
     title_changed = Signal(str)
     # True while any of this workspace's sessions has an agent streaming, so the
@@ -62,6 +64,7 @@ class WorkspaceView(QWidget):
         # Per-workspace browser, like the terminals; it's lazily populated
         # on first show, so hidden panels cost no Chromium processes.
         self.browser_panel = BrowserPanel()
+        self.browser_panel.emptied.connect(self.browser_closed)
         self.diff_panel = DiffPanel(cwd=path, remote=remote)
         self.diff_panel.setMinimumWidth(300)
         self.git_panel = GitPanel(cwd=path, remote=remote)

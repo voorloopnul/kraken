@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QColor
 from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -273,7 +273,20 @@ class BrowserWidget(QWidget):
 
     def hideEvent(self, event) -> None:
         super().hideEvent(event)
-        self._set_lifecycle(QWebEnginePage.LifecycleState.Frozen)
+        # Deferred by a turn: the page's own visibility is still updating as
+        # the hide propagates down to the view, so freezing from inside this
+        # handler loses the race and Qt refuses it outright — "failed to
+        # transition from Active to Frozen state: page is visible". Left
+        # undeferred the freeze never happened at all.
+        QTimer.singleShot(0, self._freeze_if_still_hidden)
+
+    def _freeze_if_still_hidden(self) -> None:
+        try:
+            hidden = not self.isVisible()
+        except RuntimeError:
+            return  # destroyed while the freeze sat in the queue
+        if hidden:
+            self._set_lifecycle(QWebEnginePage.LifecycleState.Frozen)
 
     def _set_lifecycle(self, state: QWebEnginePage.LifecycleState) -> None:
         # Guard the teardown path: a hide can arrive as the C++ page is being
