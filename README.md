@@ -61,6 +61,20 @@ terms, and punctuates and capitalises.
 
 Click to start, click again to transcribe, `Esc` to discard the take.
 
+## Debugging a crash
+
+`--debug` writes a trace of what the app was doing — actions, child processes,
+Qt's own warnings — and what it cost in memory, to a file:
+
+```bash
+./Kraken-x86_64.AppImage --debug        # ~/.kraken/logs/kraken-<date>-<pid>.log
+```
+
+A log that stops without its `exit  clean shutdown` marker ended in a crash,
+and the last `action` line before it is the suspect. See [DEBUG.md](DEBUG.md)
+for the log format, how to read one for leaks and hangs, and what is
+instrumented.
+
 ## Tests
 
 ```bash

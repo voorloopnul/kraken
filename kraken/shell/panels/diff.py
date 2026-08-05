@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kraken import debug
 from kraken.shell.async_run import run_async
 from kraken.shell.diff_viewer import LETTER_COLORS, DiffDocument, DiffViewer
 from kraken.shell.panels.base import Panel
@@ -505,6 +506,7 @@ class DiffPanel(Panel):
             )
         # The sheet covers the whole window: dimming the app is the point, and
         # it is what makes the viewer modal.
+        debug.action("diff.open", path=change.path, bytes=len(document.diff_text))
         self._viewer = DiffViewer.open_on(
             self.window(), self._theme_name, document
         )

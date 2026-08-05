@@ -17,6 +17,7 @@ from typing import Callable
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
+from kraken import debug
 from kraken.voice import engine, models
 from kraken.voice.models import VoiceModel
 
@@ -69,12 +70,18 @@ class Transcriber(QObject):
     finished = Signal(str, str)  # text, error message
 
     def start(self, pcm: bytes) -> None:
+        # Loading the model costs hundreds of MB on a worker thread; the paired
+        # start/end records show whether that memory is ever given back.
+        debug.proc("voice.transcribe.start", pcm_bytes=len(pcm))
+
         def work() -> None:
             try:
                 text = engine.transcribe(pcm)
             except BaseException as exc:  # noqa: BLE001 - surfaced in the UI
+                debug.exception("voice.transcribe failed", exc)
                 self.finished.emit("", str(exc))
             else:
+                debug.proc("voice.transcribe.end", chars=len(text))
                 self.finished.emit(text, "")
 
         QThreadPool.globalInstance().start(_Job(work))

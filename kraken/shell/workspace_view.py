@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
+from kraken import debug
 from kraken.shell.dock import DockArea, DockPanel
 from kraken.shell.panels import (
     BrowserPanel,
@@ -168,6 +169,11 @@ class WorkspaceView(QWidget):
         self.controllers.append(controller)
         controller.conversation.link_clicked.connect(self._open_link)
         self.center_panel.add_conversation(controller.conversation)
+        debug.log(
+            "session.create",
+            path=session_path or "(new)",
+            live=len(self.controllers),
+        )
         return controller
 
     def _open_link(self, url: str) -> None:
@@ -199,6 +205,13 @@ class WorkspaceView(QWidget):
         self._sync_history()
 
     def _retire(self, controller: SessionController) -> None:
+        # Retirement kills a pi process and deletes a transcript widget; if the
+        # tree RSS on this line never comes back down, that is the leak.
+        debug.proc(
+            "session.retire",
+            path=controller.session_path or "(unsaved)",
+            live=len(self.controllers) - 1,
+        )
         controller.stop()
         self.center_panel.remove_conversation(controller.conversation)
         controller.conversation.deleteLater()
@@ -232,6 +245,12 @@ class WorkspaceView(QWidget):
     def _on_prompt(
         self, text: str, images: list | None = None, files: list | None = None
     ) -> None:
+        debug.action(
+            "chat.submit",
+            chars=len(text),
+            images=len(images or []),
+            files=len(files or []),
+        )
         if self.focused is None:
             self._focus(self._new_controller())
         self.focused.prompt(text, images, files)
@@ -240,6 +259,7 @@ class WorkspaceView(QWidget):
         self._sync_history()
 
     def _on_stop(self) -> None:
+        debug.action("chat.stop")
         if self.focused is not None:
             self.focused.agent.abort()
 
@@ -262,6 +282,7 @@ class WorkspaceView(QWidget):
         controller.request_models(show)
 
     def _on_model_selected(self, provider: str, model_id: str) -> None:
+        debug.action("model.select", provider=provider, model=model_id)
         if self.focused is not None:
             self.focused.set_model(provider, model_id)
 
@@ -284,6 +305,7 @@ class WorkspaceView(QWidget):
         controller.request_thinking(show)
 
     def _on_effort_selected(self, level: str) -> None:
+        debug.action("effort.select", level=level)
         if self.focused is not None:
             self.focused.set_thinking_level(level)
 
@@ -298,6 +320,7 @@ class WorkspaceView(QWidget):
             self._apply_effort(controller)
 
     def _new_session(self) -> None:
+        debug.action("session.new")
         # Reuse the current session if it's already a fresh, unused one.
         if (
             self.focused is not None
@@ -314,6 +337,7 @@ class WorkspaceView(QWidget):
         # A session was archived or deleted from History. Drop its live agent
         # if it has one; if it was the focused session, its transcript is now
         # stale, so replace it with a fresh, empty session.
+        debug.action("session.remove", path=path)
         self.unseen.discard(path)
         controller = self._controller_for_key(path)
         if controller is not None:
@@ -325,6 +349,7 @@ class WorkspaceView(QWidget):
         self._sync_history()
 
     def _load_session(self, key: str) -> None:
+        debug.action("session.open", key=key)
         # Opening a session clears its "finished, unread" badge.
         self.unseen.discard(key)
         # A live session (running or in-flight, maybe not yet on disk) is keyed
@@ -341,6 +366,14 @@ class WorkspaceView(QWidget):
     # ---- Controller signals ----------------------------------------------
 
     def _on_streaming_changed(self, controller: SessionController, streaming: bool) -> None:
+        # A turn boundary is the natural sampling point for growth: the memory
+        # snapshot here shows what a whole agent turn cost.
+        debug.proc(
+            "session.streaming",
+            streaming=streaming,
+            focused=controller is self.focused,
+            path=controller.session_path or "(unsaved)",
+        )
         if controller is self.focused:
             self.center_panel.set_busy(streaming, controller.streaming_since)
         if not streaming:
@@ -396,12 +429,13 @@ class WorkspaceView(QWidget):
         # Reap every agent process even if one teardown misbehaves: a raised
         # exception here must not skip the remaining controllers (or, up in
         # MainWindow, the remaining workspaces) and leave a live `pi` behind.
+        debug.log("view.shutdown", path=self.path, sessions=len(self.controllers))
         for controller in self.controllers:
             try:
                 controller.stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                debug.exception("controller.stop failed", exc)
         try:
             self.right_panel.shutdown()
-        except Exception:
-            pass
+        except Exception as exc:
+            debug.exception("right_panel.shutdown failed", exc)

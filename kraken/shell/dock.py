@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kraken import debug
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 
 # Preferred column widths per panel key, used to size a column when the dock
@@ -563,6 +564,9 @@ class DockArea(QWidget):
 
     def _apply_drop(self, panel: DockPanel, target: tuple[str, _DockColumn]) -> None:
         mode, dest = target
+        # A drop reparents a live panel — terminals, a web view — between
+        # splitters, which is the kind of move that upsets native children.
+        debug.action("dock.drop", panel=panel.key, mode=mode)
         # Widths captured before the move so an unstacked column keeps the width
         # the stack had, rather than snapping back to its preferred size.
         pre = self._snapshot()

@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kraken import debug
 from kraken.agent import remote as remote_mod
 from kraken.agent.config import load_state, save_state
 from kraken.shell.remote_dialog import RemoteWorkspaceDialog
@@ -346,6 +347,7 @@ class MainWindow(QMainWindow):
 
     def set_theme(self, name: str) -> None:
         """Apply the selected theme throughout the application."""
+        debug.action("theme.set", name=name, views=len(self.views))
         self._theme_name = name
         icon = _theme_icon(name)
         self.setWindowIcon(icon)
@@ -362,6 +364,7 @@ class MainWindow(QMainWindow):
 
     def _add_workspace(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Add Workspace")
+        debug.action("workspace.add", path=path or "(cancelled)")
         if path:
             self.workspace_bar.add_workspace(path)
 
@@ -377,13 +380,16 @@ class MainWindow(QMainWindow):
         )
 
     def _add_remote_workspace(self) -> None:
+        debug.action("workspace.add-remote.open")
         dialog = RemoteWorkspaceDialog(self)
         if dialog.exec() and dialog.anchor:
+            debug.action("workspace.add-remote", anchor=dialog.anchor)
             target = remote_mod.resolve(dialog.anchor)
             if target is not None:
                 self._add_remote_button(dialog.anchor, target, select=True)
 
     def _edit_remote_workspace(self, anchor: str) -> None:
+        debug.action("workspace.edit-remote", anchor=anchor)
         dialog = RemoteWorkspaceDialog(self, anchor=anchor)
         if not dialog.exec():
             return
@@ -399,6 +405,7 @@ class MainWindow(QMainWindow):
         """Remove a workspace from the strip. Remote workspaces are also dropped
         from persisted state (their local anchor folder is left in place, so a
         re-add reuses any stored sessions)."""
+        debug.action("workspace.remove", key=key)
         self._discard_view(key)
         self.workspace_bar.remove_workspace(key)
         if remote_mod.resolve(key) is not None:
@@ -423,6 +430,7 @@ class MainWindow(QMainWindow):
         view = self.views.pop(key, None)
         if view is None:
             return
+        debug.log("view.discard", key=key, remaining=len(self.views))
         view.shutdown()
         self._view_stack.removeWidget(view)
         view.deleteLater()
@@ -433,6 +441,12 @@ class MainWindow(QMainWindow):
         """Show the workspace's panes, creating them on first selection."""
         target = remote_mod.resolve(path)
         view = self.views.get(path)
+        debug.action(
+            "workspace.select",
+            path=path,
+            remote=target is not None,
+            new=view is None,
+        )
         if view is None:
             view = WorkspaceView(path, remote=target)
             view.set_theme(self._theme_name)
@@ -486,13 +500,18 @@ class MainWindow(QMainWindow):
         workspace's failing teardown can't leave another's `pi` running, and
         idempotent (a second pass finds already-stopped agents) so wiring it to
         both closeEvent and aboutToQuit is safe."""
+        if self.views:
+            debug.action("app.shutdown-views", views=len(self.views))
         for view in list(self.views.values()):
             try:
                 view.shutdown()
-            except Exception:
-                pass
+            except Exception as exc:
+                # Swallowed so one workspace can't block the others, but a
+                # failure here is exactly what leaves a `pi` or a shell behind.
+                debug.exception("view.shutdown failed", exc)
 
     def closeEvent(self, event) -> None:
+        debug.action("window.close")
         self._shutdown_all_views()
         super().closeEvent(event)
 
@@ -522,6 +541,9 @@ class MainWindow(QMainWindow):
         if browser.is_blank:
             QToolTip.showText(pos, "This tab has no page loaded", button)
             return
+        # Grabbing a GPU-composited web view reaches into Chromium; log around
+        # it so a crash here is distinguishable from one in the chat input.
+        debug.action("browser.screenshot")
         pixmap = browser.web.grab()
         if pixmap.isNull() or _looks_blank(pixmap):
             QMessageBox.warning(
@@ -558,6 +580,7 @@ class MainWindow(QMainWindow):
         # maximized. State changes do arrive mid-__init__, so the guard names the
         # last of the three to be built rather than the first.
         if event.type() == QEvent.Type.WindowStateChange and hasattr(self, "_grips"):
+            debug.action("window.state", maximized=self.isMaximized())
             self.title_bar.set_maximized(self.isMaximized())
             self._apply_corners()
             for grip in self._grips:
@@ -586,6 +609,10 @@ class MainWindow(QMainWindow):
             return
         view = self.current_view
         if view is not None:
+            # Showing a panel is what spins up its native machinery — Chromium
+            # for the browser, a shell and a libghostty terminal for the right
+            # panel — so these lines bracket the app's riskiest transitions.
+            debug.action("panel.toggle", side=side, visible=visible)
             view.set_panel_visible(side, visible)
 
     def _sync_panel_toggles(self, view: WorkspaceView) -> None:

@@ -30,6 +30,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget
 
+from kraken import debug
 from kraken.terminal import ghostty_vt as g
 from kraken.terminal.keymap import QT_KEY_MAP, UNSHIFTED
 from kraken.ui.themes import DEFAULT_THEME, THEMES
@@ -278,6 +279,13 @@ class GhosttyTerminalWidget(QWidget):
                 os.chdir(old_cwd)
         os.close(slave_fd)
         os.set_blocking(self._master_fd, False)
+        debug.proc(
+            "terminal.spawn",
+            pid=self._child_pid,
+            program=program,
+            fd=self._master_fd,
+            remote=self._remote is not None,
+        )
 
         self._notifier = QSocketNotifier(self._master_fd, QSocketNotifier.Type.Read, self)
         self._notifier.activated.connect(self._on_pty_readable)
@@ -376,6 +384,7 @@ class GhosttyTerminalWidget(QWidget):
         if self._child_exited:
             return
         self._child_exited = True
+        debug.proc("terminal.child-exit", pid=self._child_pid)
         self._disable_notifier()
         self._reap_child(escalate=False)
         msg = b"\r\n\x1b[90m[process exited]\x1b[0m\r\n"
@@ -397,6 +406,15 @@ class GhosttyTerminalWidget(QWidget):
 
     def shutdown(self) -> None:
         """Terminate the shell and free libghostty resources."""
+        # Bracketed in the log because everything below is unmanaged: a PTY, a
+        # child process, and a set of libghostty handles freed by hand. A log
+        # that stops between these two lines says the crash was in here.
+        debug.proc(
+            "terminal.shutdown",
+            pid=self._child_pid,
+            exited=self._child_exited,
+            reaped=self._child_reaped,
+        )
         if not self._child_exited:
             self._disable_notifier()
             if self._child_pid > 0:
@@ -425,6 +443,7 @@ class GhosttyTerminalWidget(QWidget):
             g.lib.ghostty_key_encoder_free(self._key_encoder)
             g.lib.ghostty_terminal_free(self._term)
             self._term = ctypes.c_void_p()
+            debug.log("terminal.freed")
 
     # ---- Theme ---------------------------------------------------------
 

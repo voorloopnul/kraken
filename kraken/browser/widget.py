@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kraken import debug
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 
 _BLANK_URLS = ("", "about:blank")
@@ -159,6 +160,7 @@ class BrowserWidget(QWidget):
             return
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
+        debug.action("browser.navigate", url=url)
         self._url_bar.setText(url)
         self._show_crash_notice(False)
         self.web.load(QUrl(url))
@@ -191,6 +193,12 @@ class BrowserWidget(QWidget):
     # perfectly normal-looking address bar, forever.
 
     def _on_render_crash(self, status, exit_code: int) -> None:
+        debug.error(
+            "browser.render-terminated",
+            status=int(status),
+            code=exit_code,
+            visible=self.isVisible(),
+        )
         normal = QWebEnginePage.RenderProcessTerminationStatus.NormalTerminationStatus
         if status == normal:
             return  # an orderly shutdown (page closed), not a failure

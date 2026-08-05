@@ -18,6 +18,8 @@ from typing import Callable, TYPE_CHECKING
 
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, Signal
 
+from kraken import debug
+
 if TYPE_CHECKING:
     from kraken.agent.remote import RemoteTarget
 
@@ -91,6 +93,7 @@ class PiAgent(QObject):
             proc.setProcessEnvironment(env)
         if self._session_path:
             args += ["--session", self._session_path]
+        debug.proc("pi.start", cwd=self._cwd, remote=self._remote is not None, args=args)
         proc.start("pi", args)
 
     def set_session_path(self, path: str) -> None:
@@ -118,8 +121,12 @@ class PiAgent(QObject):
         self._callbacks.clear()
         self._detach(proc)
         if proc.state() != QProcess.ProcessState.NotRunning:
+            debug.proc("pi.terminate", pid=int(proc.processId()))
             proc.terminate()
             if not proc.waitForFinished(2000):
+                # SIGTERM was ignored — worth knowing, since a pi that will not
+                # die is also one that keeps its memory and its SSH connection.
+                debug.proc("pi.kill", pid=int(proc.processId()))
                 proc.kill()
                 proc.waitForFinished(1000)
         proc.deleteLater()
@@ -250,12 +257,16 @@ class PiAgent(QObject):
         data = bytes(self._proc.readAllStandardError()).decode(errors="replace")
         if data.strip():
             print(f"[pi rpc stderr] {data.rstrip()}", flush=True)
+            for line in data.rstrip().splitlines():
+                debug.log("pi.stderr", line=line)
 
     def _on_error(self, error) -> None:
         self.is_streaming = False
-        self.failed.emit(self._proc.errorString() if self._proc else str(error))
+        message = self._proc.errorString() if self._proc else str(error)
+        debug.error("pi.error", detail=message)
+        self.failed.emit(message)
 
-    def _on_finished(self, *_args) -> None:
+    def _on_finished(self, *args) -> None:
         # A clean exit (nonzero code, provider drop, SSH extension death on a
         # remote) fires only `finished`, never `errorOccurred`, so this is the
         # sole place a mid-turn death can be noticed. Report whether streaming
@@ -264,6 +275,12 @@ class PiAgent(QObject):
         # already reset is_streaming, so `died_mid_turn` is False and we don't
         # double-announce.
         died_mid_turn = self.is_streaming
+        debug.proc(
+            "pi.exit",
+            code=args[0] if args else "?",
+            mid_turn=died_mid_turn,
+            pending=len(self._callbacks),
+        )
         self.is_streaming = False
         # Drop the dead process and its orphaned callbacks so the next prompt
         # respawns via ensure_started (resuming the session with --session,

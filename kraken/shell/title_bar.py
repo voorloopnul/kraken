@@ -7,7 +7,6 @@ one surface."""
 
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -23,6 +22,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kraken import debug
+from kraken.debug import format_bytes, process_tree_rss
 from kraken.shell.async_run import run_async
 from kraken.ui.chrome import corner_style
 from kraken.ui.themes import DEFAULT_THEME
@@ -93,33 +94,9 @@ def git_branch(path: str) -> str:
     return ""
 
 
-def process_tree_rss() -> int:
-    """Resident set size in bytes of this process and all its descendants
-    (QtWebEngine renderers, terminal shells, agent processes)."""
-    total = 0
-    stack = [os.getpid()]
-    while stack:
-        pid = stack.pop()
-        proc = Path(f"/proc/{pid}")
-        try:
-            with open(proc / "status") as f:
-                for line in f:
-                    if line.startswith("VmRSS:"):
-                        total += int(line.split()[1]) * 1024
-                        break
-            # Children are listed per thread, so walk every task dir.
-            for task in (proc / "task").iterdir():
-                children = (task / "children").read_text().split()
-                stack.extend(int(child) for child in children)
-        except OSError:
-            continue  # process exited mid-scan
-    return total
-
-
-def format_bytes(size: int) -> str:
-    if size >= 1024**3:
-        return f"{size / 1024**3:.1f} GB"
-    return f"{size // 1024**2} MB"
+# process_tree_rss / format_bytes live in kraken.debug: the diagnostics log
+# reports the same numbers after every action, and one implementation keeps the
+# label and the log from disagreeing.
 
 
 def _branch_icon(color: str) -> QIcon:
@@ -418,6 +395,9 @@ class TitleBar(QWidget):
                 )
 
     def _switch_branch(self, branch: str) -> None:
+        debug.action(
+            "branch.checkout", branch=branch, remote=self._remote is not None
+        )
         # Remote checkout is a blocking round trip; run it off-thread.
         if self._remote is None:
             self._after_switch(self._run_checkout(branch))
@@ -440,6 +420,7 @@ class TitleBar(QWidget):
 
     def _after_switch(self, result) -> None:
         if isinstance(result, (OSError, subprocess.TimeoutExpired)):
+            debug.error("branch.checkout failed", detail=str(result))
             QMessageBox.warning(self, "Checkout failed", str(result))
             return
         if result is None or result.returncode != 0:
