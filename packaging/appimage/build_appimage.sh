@@ -70,8 +70,13 @@ log "Installing the project's dependencies into the bundled Python"
 # --no-emit-project: the app runs from usr/share/kraken, not as an installed
 # package, so we want its dependencies and not kraken itself.
 # --system: the target is a base (non-venv) interpreter, so opt in explicitly.
+# --project: uv would otherwise resolve from the caller's cwd, and this script
+# promises to run from anywhere. Inside another uv project that would bundle
+# *its* dependencies — the same silent-wrong-deps failure the export is here
+# to prevent, wearing a different hat.
 REQS="$BUILD/requirements.txt"
-uv export --no-dev --no-emit-project --format requirements-txt -o "$REQS" -q
+uv export --project "$REPO" --no-dev --no-emit-project \
+  --format requirements-txt -o "$REQS" -q
 uv pip install --system --python "$APP_PY" -r "$REQS"
 
 # --------------------------------------------------------------------------
