@@ -38,7 +38,7 @@ rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/lib" "$APPDIR/usr/share/kraken" "$TOOLS"
 
 # --------------------------------------------------------------------------
-# 1. Private Python + PySide6 + Pygments
+# 1. Private Python + the project's locked dependencies
 #    Copy a standalone (relocatable) CPython, then install the wheels into the
 #    copy so the whole tree can move into the AppImage. python-build-standalone
 #    locates itself relative to its binary, so it survives relocation.
@@ -60,9 +60,19 @@ APP_PY="$APPDIR/usr/python/bin/python3"
 # to touch them. This is our private, disposable copy, so lift the guard.
 rm -f "$APPDIR"/usr/python/lib/python*/EXTERNALLY-MANAGED
 
-log "Installing PySide6 + Pygments into the bundled Python"
+log "Installing the project's dependencies into the bundled Python"
+# From the lockfile, not a hand-written list. The list here used to be
+# "pyside6 pygments", which quietly dropped onnx-asr — so the AppImage shipped
+# without numpy/onnxruntime/huggingface_hub, and voice transcription died on
+# `import numpy` at the moment someone spoke into it, having already recorded
+# the audio. Only a build could show that: a source checkout has them from
+# .venv. Exporting keeps the bundle honest to pyproject.toml by construction.
+# --no-emit-project: the app runs from usr/share/kraken, not as an installed
+# package, so we want its dependencies and not kraken itself.
 # --system: the target is a base (non-venv) interpreter, so opt in explicitly.
-uv pip install --system --python "$APP_PY" pyside6 pygments
+REQS="$BUILD/requirements.txt"
+uv export --no-dev --no-emit-project --format requirements-txt -o "$REQS" -q
+uv pip install --system --python "$APP_PY" -r "$REQS"
 
 # --------------------------------------------------------------------------
 # 2. Node.js runtime
