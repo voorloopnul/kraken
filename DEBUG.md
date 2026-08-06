@@ -172,6 +172,27 @@ thread", "QObject::setParent: Cannot set parent" and friends are Qt naming the
 exact misuse that is about to segfault it. They are forwarded to stderr as
 well, so behaviour without `--debug` is unchanged.
 
+**A turn names its model, and it is the agent's answer, not the picker's.**
+`chat.submit` and `session.streaming` carry the model the agent reported
+through `get_state` — deliberately not the value the model menu last sent,
+which would only ever agree with itself:
+
+```
+14:22:03.114  action  chat.submit chars=41 images=0 files=0 provider=anthropic model=claude-opus-4-6
+14:22:03.140  proc    session.streaming streaming=True focused=True model=claude-opus-4-6 path=…
+```
+
+So a `model.select` that does not show up in the next turn's `model=` is a
+selection that never reached the agent:
+
+```bash
+grep -E "model\.select|chat\.submit" kraken.log   # chosen, then used
+```
+
+`model=(pending)` means no `get_state` has come back yet — the first message of
+a brand-new session, before the agent has said what it is running. It resolves
+on the turn after.
+
 ## What is instrumented
 
 The bias is toward native-heavy paths, because that is where the crashes are.

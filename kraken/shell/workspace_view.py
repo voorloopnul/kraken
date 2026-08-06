@@ -248,14 +248,21 @@ class WorkspaceView(QWidget):
     def _on_prompt(
         self, text: str, images: list | None = None, files: list | None = None
     ) -> None:
+        if self.focused is None:
+            self._focus(self._new_controller())
+        # Logged once the controller exists, so the turn can name its model.
+        # This is the agent's own reported model (folded in from get_state),
+        # not the picker's idea of it — the two disagreeing is exactly the
+        # thing worth being able to see, so logging the picker would defeat
+        # the purpose. "(pending)" until the first get_state comes back.
         debug.action(
             "chat.submit",
             chars=len(text),
             images=len(images or []),
             files=len(files or []),
+            provider=self.focused.model_provider or "?",
+            model=self.focused.model_id or "(pending)",
         )
-        if self.focused is None:
-            self._focus(self._new_controller())
         self.focused.prompt(text, images, files)
         # Surface the just-started session in History right away, so it's
         # reachable even before Pi writes its file to disk.
@@ -375,6 +382,7 @@ class WorkspaceView(QWidget):
             "session.streaming",
             streaming=streaming,
             focused=controller is self.focused,
+            model=controller.model_id or "(pending)",
             path=controller.session_path or "(unsaved)",
         )
         if controller is self.focused:
