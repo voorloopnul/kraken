@@ -940,6 +940,15 @@ class GhosttyTerminalWidget(QWidget):
             screen_height=self._rows_count * self._cell_h,
         )
 
+    def send_text(self, text: str) -> None:
+        """Type `text` into the shell, exactly as a keystroke would.
+
+        The one way in from outside: the settings window uses it to start a
+        pi login flow the RPC protocol cannot start. It goes through the same
+        write as the keyboard, so a shell that has exited swallows it rather
+        than raising on a closed pty."""
+        self._write_input(text.encode())
+
     def selection_text(self) -> str:
         """Plain text of the active selection ('' if none)."""
         opts = g.SelectionFormatOptions(

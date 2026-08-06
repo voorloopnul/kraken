@@ -125,6 +125,40 @@ def _sun_icon(color: str) -> QIcon:
     return QIcon(pixmap)
 
 
+def _gear_icon(color: str) -> QIcon:
+    """Gear: an eight-toothed outline around a hub. Drawn as one closed path so
+    the teeth and the rim share a stroke, rather than as spokes — which at this
+    size would be indistinguishable from the sun above it."""
+    pixmap = QPixmap(36, 36)
+    pixmap.setDevicePixelRatio(2.0)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(color))
+    pen.setWidthF(1.4)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    # Eight teeth: each contributes a pair of points on the outer radius and a
+    # pair on the inner one, walking the circle in increasing angle.
+    outer, inner = 7.0, 5.2
+    gear = QPainterPath()
+    for i in range(8):
+        base = i * 45.0
+        for offset, radius in ((-13.0, outer), (13.0, outer), (16.0, inner), (29.0, inner)):
+            angle = radians(base + offset)
+            point = QPointF(9.0 + cos(angle) * radius, 9.0 + sin(angle) * radius)
+            if gear.elementCount() == 0:
+                gear.moveTo(point)
+            else:
+                gear.lineTo(point)
+    gear.closeSubpath()
+    painter.drawPath(gear)
+    painter.drawEllipse(QPointF(9.0, 9.0), 2.4, 2.4)
+    painter.end()
+    return QIcon(pixmap)
+
+
 def _moon_icon(color: str) -> QIcon:
     """Crescent moon, filled."""
     pixmap = QPixmap(36, 36)
@@ -240,7 +274,7 @@ class WorkspaceBar(QWidget):
         # Workspace buttons fill the gap above this stretch, top to bottom; the
         # action buttons below the stretch stay pinned to the bottom edge.
         layout.addStretch(1)
-        for name in ("Toggle Theme", "Quit"):
+        for name in ("Toggle Theme", "Settings", "Quit"):
             btn = QToolButton()
             btn.setToolTip(name)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -350,6 +384,7 @@ class WorkspaceBar(QWidget):
         self._apply_style()
         color = _ICON_COLORS[name]
         self.add_button.setIcon(_plus_icon(color))
+        self.buttons["Settings"].setIcon(_gear_icon(color))
         self.buttons["Quit"].setIcon(_power_icon(color))
         # Show the theme you'd switch to: sun in dark mode, moon in light.
         toggle_factory = _sun_icon if name == "dark" else _moon_icon

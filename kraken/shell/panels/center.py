@@ -14,8 +14,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kraken.chat.typography import DEFAULT_SIZE, clamp, secondary
 from kraken.shell.panels.base import Panel
-from kraken.ui.themes import UI_COLORS
+from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 
 
 class CenterPanel(Panel):
@@ -37,6 +38,8 @@ class CenterPanel(Panel):
         super().__init__(parent)
         from kraken.chat.chat_input import ChatInput
 
+        self._theme_name = DEFAULT_THEME
+        self._font_size = DEFAULT_SIZE
         self._scrollbar = QScrollBar(Qt.Orientation.Vertical)
         # Keep the transcript row's width stable when the bar hides.
         policy = self._scrollbar.sizePolicy()
@@ -164,6 +167,7 @@ class CenterPanel(Panel):
         return f"{hours}:{minutes:02d}:{secs:02d}"
 
     def set_theme(self, name: str) -> None:
+        self._theme_name = name
         # The transcripts paint transparent, so the stack that hosts them must
         # carry the window background; the SessionControllers theme the text.
         self.conversation_stack.setStyleSheet(
@@ -184,10 +188,23 @@ class CenterPanel(Panel):
             " QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical"
             " { background: transparent; }"
         )
-        dim, hover = ("#7a7d85", "#2c2e35") if name == "dark" else ("#5f6269", "#e0e0e4")
+        self._apply_busy_style()
+
+    def set_font_size(self, size: int) -> None:
+        """Scale the whole conversation pane with the transcript: the composer
+        below it and the busy row between them, which would otherwise stay at
+        their own fixed sizes while the messages moved."""
+        self._font_size = clamp(size)
+        self.chat.set_font_size(self._font_size)
+        self._apply_busy_style()
+
+    def _apply_busy_style(self) -> None:
+        dark = self._theme_name == "dark"
+        dim, hover = ("#7a7d85", "#2c2e35") if dark else ("#5f6269", "#e0e0e4")
+        size = secondary(self._font_size)
         self._busy_row.setStyleSheet(
-            f"QLabel {{ color: {dim}; font-size: 12px; font-style: italic; }}"
+            f"QLabel {{ color: {dim}; font-size: {size}px; font-style: italic; }}"
             f" QToolButton {{ background: transparent; border: none; border-radius: 4px;"
-            f" color: {dim}; font-size: 12px; padding: 2px 6px; }}"
+            f" color: {dim}; font-size: {size}px; padding: 2px 6px; }}"
             f" QToolButton:hover {{ background: {hover}; }}"
         )

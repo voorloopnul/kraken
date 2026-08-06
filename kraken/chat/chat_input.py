@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kraken.chat.typography import DEFAULT_SIZE, caption, clamp, secondary
 from kraken.ui.themes import DEFAULT_THEME
 
 # Image formats model providers accept in the prompt payload, keyed by the
@@ -483,10 +484,33 @@ class ChatInput(QFrame):
         layout.addWidget(self._edit)
         layout.addLayout(footer)
 
+        self._theme_name = DEFAULT_THEME
+        self._font_size = DEFAULT_SIZE
         self.set_theme(DEFAULT_THEME)
 
     def set_theme(self, name: str) -> None:
-        self.setStyleSheet(_STYLES[name])
+        self._theme_name = name
+        self._apply_style()
+
+    def set_font_size(self, size: int) -> None:
+        """Follow the transcript's base size: the composer holds the same
+        message text the transcript will show it in."""
+        self._font_size = clamp(size)
+        self._apply_style()
+
+    def _apply_style(self) -> None:
+        """Theme first, then the sizes over it — later rules of the same
+        specificity win, so the base sheet's own sizes are the defaults."""
+        small = secondary(self._font_size)
+        self.setStyleSheet(
+            _STYLES[self._theme_name]
+            + f"""
+QPlainTextEdit {{ font-size: {self._font_size}px; }}
+QToolButton {{ font-size: {small}px; }}
+#modelMenu QLineEdit, #modelMenu QListWidget {{ font-size: {small}px; }}
+#attachChip QLabel {{ font-size: {caption(self._font_size)}px; }}
+"""
+        )
 
     # ---- Attachments -------------------------------------------------------
 

@@ -1,7 +1,7 @@
 from importlib.resources import files
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QSize, Qt
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QGuiApplication, QIcon, QPixmap
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (
@@ -20,13 +20,28 @@ from PySide6.QtWidgets import (
 from kraken import debug
 from kraken.agent import remote as remote_mod
 from kraken.agent.config import load_state, save_state
+from kraken.agent.pi_catalogue import ModelQuery, deliver_once
+from kraken.chat.typography import DEFAULT_SIZE, clamp
 from kraken.shell.remote_dialog import RemoteWorkspaceDialog
+from kraken.shell.settings_dialog import SettingsDialog
 from kraken.shell.side_bar import SideBar
 from kraken.ui.chrome import WINDOW_RADIUS
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 from kraken.shell.title_bar import TitleBar
 from kraken.shell.workspace_bar import WorkspaceBar, abbreviation
 from kraken.shell.workspace_view import WorkspaceView
+
+# Typed into a fresh terminal to start pi's ChatGPT sign-in. The echo goes
+# first because the flow itself is pi's, and its own UI is the last place that
+# can say which command to run: `echo` and `#`-free quoting behave the same in
+# bash, zsh and fish, which is not true of a trailing shell comment.
+_CODEX_SIGNIN = "echo 'In pi, run: /login openai-codex'\npi\n"
+_SIGNIN_DELAY_MS = 500
+
+# How long the font-size picker has to settle before its value is applied to
+# every open transcript. Long enough to swallow a typed number or a held step
+# button, short enough to still read as immediate.
+_FONT_APPLY_MS = 250
 
 # Grabbing within this many pixels of a window edge starts a resize; the
 # custom title bar removes the native frame, and with it native resizing.
@@ -193,6 +208,15 @@ class MainWindow(QMainWindow):
         # Set properly by set_theme below; seeded because a window-state change
         # can arrive while the window is still being built.
         self._theme_name = DEFAULT_THEME
+        # The conversation's base font size, restored from the last run. Every
+        # workspace view is handed it as it is created, so a size chosen once
+        # survives both new workspaces and new sessions.
+        self._font_size = clamp(load_state().get("chat_font_size", DEFAULT_SIZE))
+        # Coalesces a run of sizes from the picker into one apply; see
+        # set_chat_font_size.
+        self._font_apply = QTimer(self)
+        self._font_apply.setSingleShot(True)
+        self._font_apply.timeout.connect(self._apply_font_size)
         # The radius the corner widgets were last given, to skip the work when a
         # state change does not actually change the shape.
         self._corners_applied: int | None = None
@@ -362,6 +386,124 @@ class MainWindow(QMainWindow):
         self.workspace_bar.set_theme(name)
         self.title_bar.set_theme(name)
 
+    def _open_settings(self) -> None:
+        debug.action("settings.open", theme=self._theme_name, font=self._font_size)
+        dialog = SettingsDialog(
+            self,
+            theme_name=self._theme_name,
+            font_size=self._font_size,
+            fetch_models=self._fetch_models,
+        )
+        dialog.theme_selected.connect(self.set_theme)
+        dialog.font_size_selected.connect(self.set_chat_font_size)
+        dialog.codex_signin_requested.connect(self._start_codex_signin)
+        dialog.exec()
+        self.flush_font_size()
+        # A dialog parented to this window outlives the local that built it, so
+        # without this every visit to Settings leaves one behind — an OpenRouter
+        # catalogue's worth of tree items each time. A model fetch still in
+        # flight answers into the dialog, which checks it is alive first.
+        dialog.deleteLater()
+
+    def _fetch_models(self, callback) -> None:
+        """Get pi's model catalogue for the Models page to list.
+
+        The session on screen is asked when there is one — its agent is already
+        running, so the answer costs nothing. With no workspace open the
+        settings are still worth editing, so a throwaway pi is started for the
+        one question and stopped again.
+
+        Either reply is asynchronous and lands after the page is on screen; the
+        dialog is a child of this window, so it is still there to receive it
+        even if the user has closed it in the meantime. Either can also fail to
+        arrive, which `deliver_once` turns into an empty answer rather than a
+        page left waiting."""
+        view = self.current_view
+        controller = view.focused if view is not None else None
+        if controller is not None:
+            deliver = deliver_once(callback)
+            controller.request_models(
+                lambda models, provider, model_id: deliver(models)
+            )
+            return
+        # Parented to the window so it outlives this call while it waits.
+        ModelQuery(callback, parent=self)
+
+    def _start_codex_signin(self) -> None:
+        """Hand the user a terminal running pi, ready for `/login`.
+
+        pi's OAuth sign-in lives only in its interactive UI — there is no RPC
+        command and no headless CLI for it — so the honest thing is to start
+        the flow where it works and get out of the way."""
+        view = self.current_view
+        if view is None:
+            QMessageBox.information(
+                self,
+                "Sign in to ChatGPT",
+                "Open a workspace first: the sign-in runs pi in that "
+                "workspace's terminal.",
+            )
+            return
+        if view.remote is not None:
+            # This workspace's terminal is a shell on the remote host, and pi
+            # would write the credential into that machine's auth.json — not
+            # the one the local pi reads. Say so rather than signing the wrong
+            # host in.
+            QMessageBox.information(
+                self,
+                "Sign in to ChatGPT",
+                "This workspace's terminal runs on the remote host, where the "
+                "credential would be stored. Sign in from a local workspace "
+                "instead.",
+            )
+            return
+        debug.action("codex.signin", path=view.path)
+        # Ask for the terminal before showing the panel, not after: showing it
+        # builds the pane, and a pane builds itself with a first tab already
+        # open. Asked afterwards, the panel would hand back a *second* terminal
+        # and leave that first shell sitting idle behind the sign-in.
+        terminal = view.right_panel.open_terminal()
+        self._panel_actions["right"].setChecked(True)
+        if terminal is None:
+            return
+        # Let the shell get as far as its prompt first. The bytes would survive
+        # in the pty either way, but typed before the prompt they land above it
+        # and read as though the terminal had gone wrong.
+        QTimer.singleShot(_SIGNIN_DELAY_MS, lambda: terminal.send_text(_CODEX_SIGNIN))
+
+    def set_chat_font_size(self, size: int) -> None:
+        """Take the conversation's base font size, and apply it once the picker
+        settles.
+
+        The size itself is recorded at once — a workspace opened now is opened
+        at it — but applying it is not free: every open transcript re-parses its
+        markdown and re-lexes its code, and the state file is rewritten. The
+        picker is a spin box, so typing "24" or holding a step button arrives as
+        a run of values, of which only the last one is worth that work."""
+        size = clamp(size)
+        if size == self._font_size:
+            return
+        self._font_size = size
+        self._font_apply.start(_FONT_APPLY_MS)
+
+    def flush_font_size(self) -> None:
+        """Apply a size still waiting on the timer, now. Called where there is
+        no later to wait for — the picker closed, or the window did — since a
+        size the user chose and then lost is worse than one applied twice."""
+        if self._font_apply.isActive():
+            self._font_apply.stop()
+            self._apply_font_size()
+
+    def _apply_font_size(self) -> None:
+        """The settled size, everywhere, and remembered. Unlike the theme this
+        is persisted: it is a reader's accommodation, and one that reset on
+        every launch would have to be set again every time."""
+        size = self._font_size
+        debug.action("chat.font-size", size=size, views=len(self.views))
+        save_state(chat_font_size=size)
+        for view in self.views.values():
+            view.set_chat_font_size(size)
+
     def _add_workspace(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Add Workspace")
         debug.action("workspace.add", path=path or "(cancelled)")
@@ -450,6 +592,7 @@ class MainWindow(QMainWindow):
         if view is None:
             view = WorkspaceView(path, remote=target)
             view.set_theme(self._theme_name)
+            view.set_chat_font_size(self._font_size)
             # A clicked transcript link opens the browser panel through the
             # same action used by its side-bar toggle.
             view.browser_requested.connect(
@@ -517,6 +660,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         debug.action("window.close")
+        self.flush_font_size()
         self._shutdown_all_views()
         super().closeEvent(event)
 
@@ -679,6 +823,7 @@ class MainWindow(QMainWindow):
 
         self.side_bar.buttons["Screenshot"].clicked.connect(self._screenshot_browser)
         self.workspace_bar.buttons["Quit"].clicked.connect(self.close)
+        self.workspace_bar.buttons["Settings"].clicked.connect(self._open_settings)
         self.workspace_bar.buttons["Toggle Theme"].clicked.connect(
             lambda: self.set_theme("light" if self._theme_name == "dark" else "dark")
         )

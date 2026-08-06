@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from kraken.agent.remote import RemoteTarget
 
 from kraken.chat.conversation import ConversationView
+from kraken.chat.typography import DEFAULT_SIZE
 from kraken.chat.formatting import (
     _content_text,
     args_detail,
@@ -79,6 +80,7 @@ class SessionController(QObject):
         session_path: str | None = None,
         parent: QObject | None = None,
         remote: "RemoteTarget | None" = None,
+        font_size: int = DEFAULT_SIZE,
     ):
         super().__init__(parent)
         self.session_path = session_path
@@ -94,6 +96,9 @@ class SessionController(QObject):
         self.first_prompt: str | None = None  # first user message; the title
         self.conversation = ConversationView()
         self.conversation.set_theme(theme_name)
+        # A session opened after the setting was changed starts at the size the
+        # reader chose, rather than at the default until the next change.
+        self.conversation.set_font_size(font_size)
         self.agent = PiAgent(cwd, self, session_path=session_path, remote=remote)
         self._tool_blocks: dict[str, int] = {}  # toolCallId -> transcript block
         # Monotonic clock reading of when the current turn began (agent_start),
@@ -140,6 +145,9 @@ class SessionController(QObject):
 
     def set_theme(self, name: str) -> None:
         self.conversation.set_theme(name)
+
+    def set_font_size(self, size: int) -> None:
+        self.conversation.set_font_size(size)
 
     def stop(self) -> None:
         """Retire the session: kill its agent process. The transcript widget

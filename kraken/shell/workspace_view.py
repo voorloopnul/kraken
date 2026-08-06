@@ -13,6 +13,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from kraken import debug
+from kraken.agent import pi_config
 from kraken.shell.dock import DockArea, DockPanel
 from kraken.shell.panels import (
     BrowserPanel,
@@ -23,10 +24,29 @@ from kraken.shell.panels import (
     RightPanel,
 )
 from kraken.agent.session_controller import SessionController
+from kraken.chat.typography import DEFAULT_SIZE, clamp
 from kraken.ui.themes import DEFAULT_THEME
 
 if TYPE_CHECKING:
     from kraken.agent.remote import RemoteTarget
+
+
+def _offered(models: list, provider: str | None, model_id: str | None) -> list:
+    """The models the picker shows: pi's list narrowed to the scope chosen in
+    Settings › Models (`enabledModels`, which pi reads too).
+
+    The session's own model stays on the list whatever the scope says. It is
+    already running, the picker marks it as current, and dropping it would
+    leave the one model you are using as the one you cannot switch back to."""
+    offered = pi_config.in_scope(models)
+    if any(m.get("provider") == provider and m.get("id") == model_id for m in offered):
+        return offered
+    current = [
+        model
+        for model in models
+        if model.get("provider") == provider and model.get("id") == model_id
+    ]
+    return current + offered
 
 
 class WorkspaceView(QWidget):
@@ -49,6 +69,7 @@ class WorkspaceView(QWidget):
         super().__init__(parent)
         self.path = path
         self._theme_name = DEFAULT_THEME
+        self._font_size = DEFAULT_SIZE
         # When set, this workspace lives on a remote host: `path` is the local
         # anchor folder (where pi runs and stores sessions), while the agent,
         # terminal, and the git and diff panels all operate on the remote over
@@ -153,6 +174,7 @@ class WorkspaceView(QWidget):
             session_path=session_path,
             parent=self,
             remote=self.remote,
+            font_size=self._font_size,
         )
         controller.streaming_changed.connect(
             lambda streaming, c=controller: self._on_streaming_changed(c, streaming)
@@ -282,6 +304,7 @@ class WorkspaceView(QWidget):
             # The fetch is async; only act if this session is still on screen.
             if controller is not self.focused:
                 return
+            models = _offered(models, provider, model_id)
             if models:
                 self.center_panel.chat.show_model_menu(models, provider, model_id)
             else:
@@ -435,6 +458,14 @@ class WorkspaceView(QWidget):
         self.right_panel.set_theme(name)
         for controller in self.controllers:
             controller.set_theme(name)
+
+    def set_chat_font_size(self, size: int) -> None:
+        """Rescale every transcript in this workspace, live ones included, plus
+        the pane's own chrome."""
+        self._font_size = clamp(size)
+        self.center_panel.set_font_size(self._font_size)
+        for controller in self.controllers:
+            controller.set_font_size(self._font_size)
 
     def shutdown(self) -> None:
         # Reap every agent process even if one teardown misbehaves: a raised

@@ -67,6 +67,24 @@ class RightPanel(Panel):
         finally:
             self._creating = False
 
+    def open_terminal(self):
+        """Build the pane if this is its first use and return a fresh tab.
+
+        None when the terminal could not be created at all. Used for the one
+        thing that needs a shell rather than a user asking for one: pi's login
+        flow, which exists only inside pi's own interactive UI."""
+        existing = self.terminals is not None
+        self._ensure_terminals()
+        if self.terminals is None:
+            return None
+        if not existing:
+            # A pane built just now opened its own first tab. Adding another
+            # here would spawn a second shell and leave the first sitting idle
+            # behind the one the login flow is typed into — and showing the
+            # panel builds the pane, so this is the usual path, not the rare one.
+            return self.terminals.current_terminal
+        return self.terminals.add_terminal()
+
     @property
     def theme_name(self) -> str:
         return self._theme_name

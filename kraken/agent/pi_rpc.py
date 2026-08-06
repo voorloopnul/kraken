@@ -45,12 +45,17 @@ class PiAgent(QObject):
         parent: QObject | None = None,
         session_path: str | None = None,
         remote: "RemoteTarget | None" = None,
+        ephemeral: bool = False,
     ):
         super().__init__(parent)
         self._cwd = cwd
         # When set, the process is launched already bound to this session file
         # (`--session <path>`), so its history loads without a switch round-trip.
         self._session_path = session_path
+        # pi's `--no-session`: the session is held in memory and never written.
+        # For an agent that is asked a question and stopped again, which has no
+        # conversation worth keeping and should leave no file behind.
+        self._ephemeral = ephemeral
         # When set, tool execution is routed to this remote host over SSH; pi
         # itself still runs locally in `cwd` (the workspace's local anchor).
         self._remote = remote
@@ -91,7 +96,9 @@ class PiAgent(QObject):
             env = QProcessEnvironment.systemEnvironment()
             env.insert("KRAKEN_SSH", self._remote.env_value())
             proc.setProcessEnvironment(env)
-        if self._session_path:
+        if self._ephemeral:
+            args += ["--no-session"]
+        elif self._session_path:
             args += ["--session", self._session_path]
         debug.proc("pi.start", cwd=self._cwd, remote=self._remote is not None, args=args)
         proc.start("pi", args)

@@ -33,6 +33,12 @@ from kraken.chat.formatting import (
     args_summary,
     error_summary,
 )
+from kraken.chat.typography import (
+    DEFAULT_SIZE,
+    caption,
+    clamp,
+    detail_points,
+)
 from kraken.ui.fonts import MONO_FAMILY
 from kraken.ui.highlight import TOKEN_COLORS, lexer_for, resolve_token
 from kraken.ui.themes import DEFAULT_THEME
@@ -201,6 +207,9 @@ class ConversationView(QTextBrowser):
         scrollbar.valueChanged.connect(self._layout_copy_buttons)
         scrollbar.valueChanged.connect(self._update_stick)
         scrollbar.rangeChanged.connect(self._follow_bottom)
+        # The reader's base size for the whole transcript; everything else in
+        # it is derived from this (see kraken.chat.typography).
+        self._font_size = DEFAULT_SIZE
         # set_theme() below repaints (clearing and re-applying the frame
         # margins), so no separate _apply_frame_margins() is needed here.
         self.set_theme(DEFAULT_THEME)
@@ -265,8 +274,28 @@ class ConversationView(QTextBrowser):
     def set_theme(self, name: str) -> None:
         self._theme_name = name
         self._colors = _PALETTE[name]
-        self._copy_style = _COPY_STYLES[name]
-        self.setStyleSheet(_STYLES[name])
+        self._apply_style()
+
+    def set_font_size(self, size: int) -> None:
+        """Set the transcript's base size. The document is rebuilt, since the
+        sizes written into char formats (the tool detail) are derived from it
+        and would otherwise keep the old scale until the next repaint."""
+        size = clamp(size)
+        if size == self._font_size:
+            return
+        self._font_size = size
+        self._apply_style()
+
+    def _apply_style(self) -> None:
+        """Theme first, then the sizes over it: the base sheets carry the
+        default size, and these rules — later, same specificity — win."""
+        self._copy_style = _COPY_STYLES[self._theme_name] + (
+            f"QToolButton {{ font-size: {caption(self._font_size)}px; }}"
+        )
+        self.setStyleSheet(
+            _STYLES[self._theme_name]
+            + f"QTextBrowser {{ font-size: {self._font_size}px; }}"
+        )
         for button in self._copy_buttons:
             button.setStyleSheet(self._copy_style)
         self._repaint_all()
@@ -382,7 +411,7 @@ class ConversationView(QTextBrowser):
             detail = self._format("dim", False, False)
             detail.setFontFamilies([MONO_FAMILY, "monospace"])
             detail.setFontFixedPitch(True)
-            detail.setFontPointSize(9.0)
+            detail.setFontPointSize(detail_points(self._font_size))
             detail.setProperty(_TOOL_DETAIL_PROPERTY, True)
             cursor.insertText("\n" + payload["detail"], detail)
 
