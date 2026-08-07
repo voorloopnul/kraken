@@ -2,13 +2,15 @@
 
 The pieces of the app's look that are not specific to any one surface: the
 rounded card the panels group their content in, the scrollbar styling their
-scroll areas share, and the corner radius of the frameless window itself. The
-first two live here rather than with the panels because the diff viewer's sheet
-is a card too, and it is not a panel; the window radius lives here because the
-widgets that have to honour it — the title bar, both side strips, the frame, and
-the viewer's scrim over all of them — have nothing else in common.
+scroll areas share, and the shape and edge grips every frameless window of ours
+wears. The card lives here rather than with the panels because the diff viewer's
+sheet is a card too, and it is not a panel; the window pieces live here because
+the widgets that have to honour them — the title bar, both side strips, the
+frame, the viewer's scrim over all of them, and the settings window, which is a
+second frameless window — have nothing else in common.
 """
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QFrame,
@@ -25,6 +27,90 @@ from kraken.ui.themes import LIGHT
 # own outer corners to this. A maximized window is handed 0: there is nothing
 # beside it to round against, and a gap at the screen corner reads as a glitch.
 WINDOW_RADIUS = 10
+
+# Grabbing within this many pixels of a window edge starts a resize; a custom
+# title bar removes the native frame, and with it native resizing.
+RESIZE_MARGIN = 6
+# Within this many pixels of a strip's end the grab is a corner resize.
+_CORNER_MARGIN = 14
+
+_EDGE_CURSORS = {
+    Qt.Edge.LeftEdge: Qt.CursorShape.SizeHorCursor,
+    Qt.Edge.RightEdge: Qt.CursorShape.SizeHorCursor,
+    Qt.Edge.TopEdge: Qt.CursorShape.SizeVerCursor,
+    Qt.Edge.BottomEdge: Qt.CursorShape.SizeVerCursor,
+    Qt.Edge.TopEdge | Qt.Edge.LeftEdge: Qt.CursorShape.SizeFDiagCursor,
+    Qt.Edge.BottomEdge | Qt.Edge.RightEdge: Qt.CursorShape.SizeFDiagCursor,
+    Qt.Edge.TopEdge | Qt.Edge.RightEdge: Qt.CursorShape.SizeBDiagCursor,
+    Qt.Edge.BottomEdge | Qt.Edge.LeftEdge: Qt.CursorShape.SizeBDiagCursor,
+}
+
+
+class EdgeGrip(QWidget):
+    """Invisible strip overlaid along one edge of a frameless window.
+    Pressing it hands the drag to the window manager as a resize; the strip
+    ends double as corner grips by adding the perpendicular edge. A plain
+    child widget (not an application event filter) so QtWebEngine's internal
+    QObjects never pass through Python during construction — wrapping those
+    in an app-wide filter crashes PySide."""
+
+    def __init__(self, edge: Qt.Edge, parent: QWidget):
+        super().__init__(parent)
+        self.edge = edge
+        self._horizontal = edge in (Qt.Edge.TopEdge, Qt.Edge.BottomEdge)
+        self.setMouseTracking(True)
+
+    def _edges_at(self, pos) -> Qt.Edge:
+        edges = self.edge
+        along = pos.x() if self._horizontal else pos.y()
+        length = self.width() if self._horizontal else self.height()
+        if along <= _CORNER_MARGIN:
+            edges |= Qt.Edge.TopEdge if not self._horizontal else Qt.Edge.LeftEdge
+        elif along >= length - _CORNER_MARGIN:
+            edges |= (
+                Qt.Edge.BottomEdge if not self._horizontal else Qt.Edge.RightEdge
+            )
+        return edges
+
+    def mouseMoveEvent(self, event) -> None:
+        self.setCursor(_EDGE_CURSORS[self._edges_at(event.position().toPoint())])
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.window().windowHandle().startSystemResize(
+                self._edges_at(event.position().toPoint())
+            )
+            event.accept()
+
+
+def edge_grips(window: QWidget) -> list[EdgeGrip]:
+    """One grip per edge of `window`. Give the result to `place_edge_grips`
+    from the window's resizeEvent — the grips are overlaid rather than laid
+    out, so nothing else moves them."""
+    return [
+        EdgeGrip(edge, window)
+        for edge in (
+            Qt.Edge.LeftEdge,
+            Qt.Edge.RightEdge,
+            Qt.Edge.TopEdge,
+            Qt.Edge.BottomEdge,
+        )
+    ]
+
+
+def place_edge_grips(grips: list[EdgeGrip], width: int, height: int) -> None:
+    """Stretch each grip along its edge of a window that size, on top of
+    whatever the layout has put there."""
+    m = RESIZE_MARGIN
+    rects = {
+        Qt.Edge.LeftEdge: (0, 0, m, height),
+        Qt.Edge.RightEdge: (width - m, 0, m, height),
+        Qt.Edge.TopEdge: (0, 0, width, m),
+        Qt.Edge.BottomEdge: (0, height - m, width, m),
+    }
+    for grip in grips:
+        grip.setGeometry(*rects[grip.edge])
+        grip.raise_()
 
 
 def corner_style(selector: str, corners: tuple[str, ...], radius: int) -> str:

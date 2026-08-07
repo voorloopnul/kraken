@@ -1,6 +1,11 @@
 """Application settings: a navigable two-pane window in the style of Zed's
 settings UI.
 
+The window wears the app's own decoration rather than the desktop's, which is
+`framed_dialog.FramedDialog`'s doing; what is added here is the navbar's own
+bottom-left corner, the only piece of the shape a two-pane window owns that a
+plain dialog does not.
+
 The left pane is a navbar — a search field that filters it, a tree of
 categories, and a keycap hint pinned to the bottom. The right pane is one
 scrolling page per category: a breadcrumb across the top, then the settings
@@ -23,7 +28,6 @@ from PySide6.QtCore import QPointF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
-    QDialog,
     QHBoxLayout,
     QLineEdit,
     QScrollArea,
@@ -38,10 +42,16 @@ from PySide6.QtWidgets import (
 from shiboken6 import isValid
 
 from kraken.chat.typography import DEFAULT_SIZE, MAX_SIZE, MIN_SIZE, clamp
+from kraken.shell.framed_dialog import FramedDialog, ICON_COLORS
 from kraken.shell.settings_models import ModelsPage
 from kraken.shell.settings_page import Page, label, stepper
 from kraken.shell.settings_providers import ProvidersPage
-from kraken.ui.chrome import SCROLLBAR_STYLES
+from kraken.ui.chrome import (
+    RESIZE_MARGIN,
+    SCROLLBAR_STYLES,
+    WINDOW_RADIUS,
+    corner_style,
+)
 from kraken.ui.fonts import MONO_FAMILY, UI_SANS_FAMILY
 from kraken.ui.themes import DEFAULT_THEME, THEMES
 
@@ -58,13 +68,18 @@ _NAV_WIDTH = 208
 _FONT_STYLE = f"""
 QDialog, QDialog * {{ font-family: '{UI_SANS_FAMILY}'; }}
 QLabel[role="breadcrumb"], QLabel[role="section"], QLabel[role="group"],
-QLabel[role="keycap"] {{ font-family: '{MONO_FAMILY}'; }}
+QLabel[role="keycap"], QLabel[role="windowTitle"] {{ font-family: '{MONO_FAMILY}'; }}
 """
 
+# The navbar has a background of its own and reaches the window's bottom left,
+# so it rounds that corner rather than squaring off the frame's curve under it.
+# The rest of the shape is the framed dialog's.
+_SHAPE_STYLE = corner_style("QWidget#settingsNav", ("bottom-left",), WINDOW_RADIUS)
+
+# What the framed dialog does not already dress: the navbar and its search, the
+# trees, and the settings text's own hierarchy of labels.
 _STYLES = {
     "dark": """
-QDialog { background: #1f2127; }
-QLabel { color: #c8cad0; }
 QWidget#settingsNav { background: #1b1c21; border-right: 1px solid #33353c; }
 QLineEdit#settingsSearch {
     background: #26282e; border: 1px solid #33353c; border-radius: 6px;
@@ -99,34 +114,11 @@ QLabel[role="group"] { color: #c8cad0; font-size: 13px; font-weight: 600; }
 QLabel[role="title"] { color: #e6e8ec; font-size: 13px; font-weight: 600; }
 QLabel[role="description"] { color: #7c8089; font-size: 12px; }
 QFrame[role="rule"] { background: #33353c; border: none; }
-QComboBox, QSpinBox, QLineEdit[role="control"] {
-    background: #26282e; border: 1px solid #3a3d45; border-radius: 6px;
-    padding: 5px 8px; color: #c8cad0; font-size: 12px;
-}
-QComboBox:hover, QSpinBox:hover { border-color: #4a4e58; }
-QComboBox:focus, QSpinBox:focus,
-QLineEdit[role="control"]:focus { border-color: #4f83e0; }
-QComboBox::drop-down { border: none; width: 18px; }
-QSpinBox::up-button, QSpinBox::down-button {
-    background: transparent; border: none; width: 14px;
-}
-QComboBox QAbstractItemView {
-    background: #26282e; border: 1px solid #3a3d45;
-    color: #c8cad0; selection-background-color: #2c2e35;
-}
-QPushButton {
-    background: #2c2e35; border: 1px solid #3a3d45; border-radius: 6px;
-    padding: 5px 10px; color: #e6e8ec; font-size: 12px;
-}
-QPushButton:hover { background: #363943; }
-QPushButton:pressed { background: #26282e; }
 QToolButton#settingsBack { border: none; border-radius: 4px; padding: 2px; }
 QToolButton#settingsBack:hover { background: #2c2e35; }
 QToolButton#settingsBack:disabled { opacity: 0.4; }
 """,
     "light": """
-QDialog { background: #faf6ec; }
-QLabel { color: #383a42; }
 QWidget#settingsNav { background: #fafafa; border-right: 1px solid #e0e0e0; }
 QLineEdit#settingsSearch {
     background: #ffffff; border: 1px solid #d9d5c9; border-radius: 6px;
@@ -161,33 +153,10 @@ QLabel[role="group"] { color: #1b1d22; font-size: 13px; font-weight: 600; }
 QLabel[role="title"] { color: #1b1d22; font-size: 13px; font-weight: 600; }
 QLabel[role="description"] { color: #8a8d95; font-size: 12px; }
 QFrame[role="rule"] { background: #e0e0e0; border: none; }
-QComboBox, QSpinBox, QLineEdit[role="control"] {
-    background: #ffffff; border: 1px solid #d9d5c9; border-radius: 6px;
-    padding: 5px 8px; color: #383a42; font-size: 12px;
-}
-QComboBox:hover, QSpinBox:hover { border-color: #c2bdae; }
-QComboBox:focus, QSpinBox:focus,
-QLineEdit[role="control"]:focus { border-color: #4f83e0; }
-QComboBox::drop-down { border: none; width: 18px; }
-QSpinBox::up-button, QSpinBox::down-button {
-    background: transparent; border: none; width: 14px;
-}
-QComboBox QAbstractItemView {
-    background: #ffffff; border: 1px solid #d9d5c9;
-    color: #383a42; selection-background-color: #e0e0e5;
-}
-QPushButton {
-    background: #ffffff; border: 1px solid #d9d5c9; border-radius: 6px;
-    padding: 5px 10px; color: #383a42; font-size: 12px;
-}
-QPushButton:hover { background: #f2eee2; }
-QPushButton:pressed { background: #e8e4d8; }
 QToolButton#settingsBack { border: none; border-radius: 4px; padding: 2px; }
 QToolButton#settingsBack:hover { background: #e8e8ec; }
 """,
 }
-
-_ICON_COLORS = {"dark": "#9a9da5", "light": "#5a5d65"}
 
 
 def _search_icon(color: str) -> QIcon:
@@ -230,7 +199,36 @@ def _back_icon(color: str) -> QIcon:
     return QIcon(pixmap)
 
 
-class SettingsDialog(QDialog):
+class _PageStack(QStackedWidget):
+    """A stack that is as tall as the page on screen, rather than as tall as
+    the tallest page it holds.
+
+    A QStackedWidget reports the largest hint of every page in it, which put
+    Providers' hundreds of rows behind General's two lines: short pages sat in
+    a scroll area that believed they ran off the bottom, so they scrolled
+    through their own height of empty space past a scrollbar that brought
+    nothing into view. The rows' descriptions wrap, so most of that height
+    arrives through heightForWidth rather than the size hint, and both have to
+    be answered for the page actually showing."""
+
+    def sizeHint(self) -> QSize:
+        page = self.currentWidget()
+        return super().sizeHint() if page is None else page.sizeHint()
+
+    def minimumSizeHint(self) -> QSize:
+        page = self.currentWidget()
+        return super().minimumSizeHint() if page is None else page.minimumSizeHint()
+
+    def hasHeightForWidth(self) -> bool:
+        page = self.currentWidget()
+        return False if page is None else page.hasHeightForWidth()
+
+    def heightForWidth(self, width: int) -> int:
+        page = self.currentWidget()
+        return -1 if page is None else page.heightForWidth(width)
+
+
+class SettingsDialog(FramedDialog):
     """The settings window. `theme_selected` fires the moment a theme is
     picked — the window applies it everywhere, and the dialog restyles itself
     along with the rest of the app."""
@@ -246,7 +244,7 @@ class SettingsDialog(QDialog):
         font_size: int = DEFAULT_SIZE,
         fetch_models: Callable[[Callable[[list], None]], None] | None = None,
     ):
-        super().__init__(parent)
+        super().__init__("Settings", parent)
         self._theme_name = theme_name
         self._font_size = clamp(font_size)
         # How the Models page gets pi's catalogue. The window supplies it,
@@ -255,20 +253,24 @@ class SettingsDialog(QDialog):
         self._history: list[int] = []  # page indices, for the breadcrumb's back arrow
         self._going_back = False
         self._search_action = None
-        self.setWindowTitle("Settings")
         self.setMinimumSize(QSize(760, 500))
 
-        self._pages = QStackedWidget()
+        self._pages = _PageStack()
+        # Switching pages changes what the stack asks for, which the scroll
+        # area only learns about if the stack says its geometry is stale.
+        self._pages.currentChanged.connect(lambda _: self._pages.updateGeometry())
         self._search = QLineEdit()
         self._tree = QTreeWidget()
         self._breadcrumb = label("", "breadcrumb")
         self._back = QToolButton()
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.addWidget(self._build_nav())
-        layout.addWidget(self._build_content(), stretch=1)
+        panes = QWidget()
+        panes_layout = QHBoxLayout(panes)
+        panes_layout.setContentsMargins(0, 0, 0, 0)
+        panes_layout.setSpacing(0)
+        panes_layout.addWidget(self._build_nav())
+        panes_layout.addWidget(self._build_content(), stretch=1)
+        self.set_body(panes)
 
         for page in (
             self._general_page(),
@@ -351,9 +353,12 @@ class SettingsDialog(QDialog):
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scroll.setWidget(self._pages)
 
+        # Held off the window's right edge by the width of the grip strip that
+        # lies along it: the two would otherwise overlap, and the grip is on
+        # top, leaving a 10px scrollbar with 4px you can actually grab.
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 0, RESIZE_MARGIN, 0)
         layout.setSpacing(0)
         layout.addLayout(crumbs)
         layout.addWidget(self._scroll, stretch=1)
@@ -498,8 +503,10 @@ class SettingsDialog(QDialog):
 
     def set_theme(self, name: str) -> None:
         self._theme_name = name
-        self.setStyleSheet(_STYLES[name] + SCROLLBAR_STYLES[name] + _FONT_STYLE)
-        color = _ICON_COLORS[name]
+        self.apply_theme(
+            name, _STYLES[name] + SCROLLBAR_STYLES[name] + _FONT_STYLE + _SHAPE_STYLE
+        )
+        color = ICON_COLORS[name]
         # The icons are painted in the theme's own grey, so they are recoloured
         # rather than re-added; a second addAction would stack two magnifiers.
         if self._search_action is None:

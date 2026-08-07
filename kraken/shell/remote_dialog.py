@@ -5,22 +5,22 @@ project path on the remote host, and a Test Connection button that verifies it
 before committing. Saved connections become reusable host profiles; the Host
 selector also offers aliases discovered in ``~/.ssh/config`` to prefill the
 form.
+
+Like the settings window it is a `framed_dialog.FramedDialog`, so it opens in
+the app's own decoration and the app's own colours rather than the desktop's,
+and its fields are the same controls the settings pages use.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
-    QDialog,
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
@@ -29,28 +29,40 @@ from PySide6.QtWidgets import (
 
 from kraken.agent import remote
 from kraken.shell.async_run import run_command_async
+from kraken.shell.framed_dialog import FramedDialog
+from kraken.shell.settings_page import stepper
 from kraken.ui.fonts import MONO_FAMILY, UI_SANS_FAMILY
+from kraken.ui.themes import DEFAULT_THEME
+
+# Labels, buttons and status read as prose, so the dialog overrides the app-wide
+# mono with the UI font; the fields hold technical strings a user copies out of
+# a shell or ssh_config, so those stay mono. Through the style sheet rather than
+# setFont(): a stylesheet on the dialog wins over a font set on a child, so the
+# two settings would fight and the sheet would take it.
+_FONT_STYLE = f"""
+QDialog, QDialog * {{ font-family: '{UI_SANS_FAMILY}'; }}
+QLineEdit, QComboBox, QSpinBox,
+QLabel[role="windowTitle"] {{ font-family: '{MONO_FAMILY}'; }}
+"""
 
 
-class RemoteWorkspaceDialog(QDialog):
+class RemoteWorkspaceDialog(FramedDialog):
     """Collects an SshHost + remote path. On accept, saves the host profile and
     registers the remote workspace; the resulting anchor key is exposed as
     ``anchor``."""
 
-    def __init__(self, parent: QWidget | None = None, anchor: str | None = None):
-        super().__init__(parent)
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        anchor: str | None = None,
+        theme_name: str = DEFAULT_THEME,
+    ):
+        super().__init__(
+            "Edit Remote Workspace" if anchor else "Add Remote Workspace", parent
+        )
         self._edit_anchor = anchor
         self.anchor: str | None = None
-        self.setWindowTitle("Edit Remote Workspace" if anchor else "Add Remote Workspace")
         self.setMinimumWidth(440)
-        # Labels, buttons, and status read as prose, so the dialog defaults to
-        # the proportional UI font; the value-entry fields below are switched
-        # back to mono since they hold technical strings (hosts, paths, keys).
-        sans = QFont(self.font())
-        sans.setFamily(UI_SANS_FAMILY)
-        self.setFont(sans)
-        mono = QFont(self.font())
-        mono.setFamily(MONO_FAMILY)
 
         self._host_picker = QComboBox()
         self._name = QLineEdit()
@@ -61,6 +73,15 @@ class RemoteWorkspaceDialog(QDialog):
         self._port = QSpinBox()
         self._port.setRange(1, 65535)
         self._port.setValue(22)
+        # A styled spin box loses its native arrows, so the port gets the two
+        # step buttons the settings pages give a number. The trailing stretch
+        # keeps the three of them together at the left of the field column
+        # instead of spread across its width.
+        port_row = QWidget()
+        port_layout = QHBoxLayout(port_row)
+        port_layout.setContentsMargins(0, 0, 0, 0)
+        port_layout.addWidget(stepper(self._port))
+        port_layout.addStretch(1)
         self._identity = QLineEdit()
         self._identity.setPlaceholderText("optional — defaults to your ssh keys")
         browse = QPushButton("Browse…")
@@ -73,24 +94,23 @@ class RemoteWorkspaceDialog(QDialog):
         self._path = QLineEdit()
         self._path.setPlaceholderText("/absolute/path/to/project on the remote")
 
-        # The technical fields (things the user copies verbatim from a shell or
-        # ssh_config) stay monospace; labels and buttons keep the UI font.
+        # What the settings pages call a control, so the shared styles dress
+        # these fields exactly as they dress a setting's.
         for field in (
-            self._host_picker,
             self._name,
             self._hostname,
             self._user,
             self._identity,
             self._path,
         ):
-            field.setFont(mono)
+            field.setProperty("role", "control")
 
         form = QFormLayout()
         form.addRow("Host", self._host_picker)
         form.addRow("Name", self._name)
         form.addRow("Hostname", self._hostname)
         form.addRow("User", self._user)
-        form.addRow("Port", self._port)
+        form.addRow("Port", port_row)
         form.addRow("Identity file", identity_row)
         form.addRow("Remote path", self._path)
 
@@ -111,15 +131,20 @@ class RemoteWorkspaceDialog(QDialog):
         bottom.addStretch(1)
         bottom.addWidget(buttons)
 
-        layout = QVBoxLayout(self)
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
         layout.addLayout(form)
         layout.addWidget(self._status)
         layout.addLayout(bottom)
+        self.set_body(body)
 
         self._populate_host_picker()
         self._host_picker.currentIndexChanged.connect(self._on_host_picked)
         if anchor is not None:
             self._load_existing(anchor)
+        self.apply_theme(theme_name, _FONT_STYLE)
 
     # ---- Host picker -----------------------------------------------------
 

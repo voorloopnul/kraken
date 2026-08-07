@@ -25,7 +25,7 @@ from kraken.chat.typography import DEFAULT_SIZE, clamp
 from kraken.shell.remote_dialog import RemoteWorkspaceDialog
 from kraken.shell.settings_dialog import SettingsDialog
 from kraken.shell.side_bar import SideBar
-from kraken.ui.chrome import WINDOW_RADIUS
+from kraken.ui.chrome import WINDOW_RADIUS, edge_grips, place_edge_grips
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 from kraken.shell.title_bar import TitleBar
 from kraken.shell.workspace_bar import WorkspaceBar, abbreviation
@@ -42,23 +42,6 @@ _SIGNIN_DELAY_MS = 500
 # every open transcript. Long enough to swallow a typed number or a held step
 # button, short enough to still read as immediate.
 _FONT_APPLY_MS = 250
-
-# Grabbing within this many pixels of a window edge starts a resize; the
-# custom title bar removes the native frame, and with it native resizing.
-_RESIZE_MARGIN = 6
-# Within this many pixels of a strip's end the grab is a corner resize.
-_CORNER_MARGIN = 14
-
-_EDGE_CURSORS = {
-    Qt.Edge.LeftEdge: Qt.CursorShape.SizeHorCursor,
-    Qt.Edge.RightEdge: Qt.CursorShape.SizeHorCursor,
-    Qt.Edge.TopEdge: Qt.CursorShape.SizeVerCursor,
-    Qt.Edge.BottomEdge: Qt.CursorShape.SizeVerCursor,
-    Qt.Edge.TopEdge | Qt.Edge.LeftEdge: Qt.CursorShape.SizeFDiagCursor,
-    Qt.Edge.BottomEdge | Qt.Edge.RightEdge: Qt.CursorShape.SizeFDiagCursor,
-    Qt.Edge.TopEdge | Qt.Edge.RightEdge: Qt.CursorShape.SizeBDiagCursor,
-    Qt.Edge.BottomEdge | Qt.Edge.LeftEdge: Qt.CursorShape.SizeBDiagCursor,
-}
 
 
 def _asset_pixmap(name: str) -> QPixmap:
@@ -120,43 +103,6 @@ class _HomeScreen(QWidget):
                 Qt.TransformationMode.SmoothTransformation,
             )
         )
-
-
-class _EdgeGrip(QWidget):
-    """Invisible strip overlaid along one edge of the frameless window.
-    Pressing it hands the drag to the window manager as a resize; the strip
-    ends double as corner grips by adding the perpendicular edge. A plain
-    child widget (not an application event filter) so QtWebEngine's internal
-    QObjects never pass through Python during construction — wrapping those
-    in an app-wide filter crashes PySide."""
-
-    def __init__(self, edge: Qt.Edge, parent: QWidget):
-        super().__init__(parent)
-        self._edge = edge
-        self._horizontal = edge in (Qt.Edge.TopEdge, Qt.Edge.BottomEdge)
-        self.setMouseTracking(True)
-
-    def _edges_at(self, pos) -> Qt.Edge:
-        edges = self._edge
-        along = pos.x() if self._horizontal else pos.y()
-        length = self.width() if self._horizontal else self.height()
-        if along <= _CORNER_MARGIN:
-            edges |= Qt.Edge.TopEdge if not self._horizontal else Qt.Edge.LeftEdge
-        elif along >= length - _CORNER_MARGIN:
-            edges |= (
-                Qt.Edge.BottomEdge if not self._horizontal else Qt.Edge.RightEdge
-            )
-        return edges
-
-    def mouseMoveEvent(self, event) -> None:
-        self.setCursor(_EDGE_CURSORS[self._edges_at(event.position().toPoint())])
-
-    def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.window().windowHandle().startSystemResize(
-                self._edges_at(event.position().toPoint())
-            )
-            event.accept()
 
 
 def _theme_icon(name: str) -> QIcon:
@@ -292,16 +238,8 @@ class MainWindow(QMainWindow):
         self.title_bar.set_conversation("")
 
         # Frameless windows lose native edge resizing; thin grip strips
-        # overlaid on the window borders bring it back (see _EdgeGrip).
-        self._grips = [
-            _EdgeGrip(edge, self)
-            for edge in (
-                Qt.Edge.LeftEdge,
-                Qt.Edge.RightEdge,
-                Qt.Edge.TopEdge,
-                Qt.Edge.BottomEdge,
-            )
-        ]
+        # overlaid on the window borders bring it back (see EdgeGrip).
+        self._grips = edge_grips(self)
 
         # Safety net: some exit paths (app.quit(), the last window closing via
         # the WM) don't deliver closeEvent, so reap the agent processes when the
@@ -523,7 +461,7 @@ class MainWindow(QMainWindow):
 
     def _add_remote_workspace(self) -> None:
         debug.action("workspace.add-remote.open")
-        dialog = RemoteWorkspaceDialog(self)
+        dialog = RemoteWorkspaceDialog(self, theme_name=self._theme_name)
         if dialog.exec() and dialog.anchor:
             debug.action("workspace.add-remote", anchor=dialog.anchor)
             target = remote_mod.resolve(dialog.anchor)
@@ -532,7 +470,9 @@ class MainWindow(QMainWindow):
 
     def _edit_remote_workspace(self, anchor: str) -> None:
         debug.action("workspace.edit-remote", anchor=anchor)
-        dialog = RemoteWorkspaceDialog(self, anchor=anchor)
+        dialog = RemoteWorkspaceDialog(
+            self, anchor=anchor, theme_name=self._theme_name
+        )
         if not dialog.exec():
             return
         # Connection details changed: drop the open view and rebuild its button
@@ -740,16 +680,7 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         if not hasattr(self, "_grips"):
             return
-        m, w, h = _RESIZE_MARGIN, self.width(), self.height()
-        rects = {
-            Qt.Edge.LeftEdge: (0, 0, m, h),
-            Qt.Edge.RightEdge: (w - m, 0, m, h),
-            Qt.Edge.TopEdge: (0, 0, w, m),
-            Qt.Edge.BottomEdge: (0, h - m, w, m),
-        }
-        for grip in self._grips:
-            grip.setGeometry(*rects[grip._edge])
-            grip.raise_()
+        place_edge_grips(self._grips, self.width(), self.height())
 
     def _set_panel_visible(self, side: str, visible: bool) -> None:
         """A pane toggle applies only to the current workspace; each workspace

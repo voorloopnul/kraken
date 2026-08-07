@@ -1,6 +1,8 @@
-"""The settings window's frame: the navbar and its search, the breadcrumb and
-its back arrow, and a theme choice that reaches the rest of the app as it is
-picked rather than on close."""
+"""The settings window's frame: its own decoration in place of the desktop's,
+the navbar and its search, the breadcrumb and its back arrow, and a theme
+choice that reaches the rest of the app as it is picked rather than on close."""
+
+from PySide6.QtCore import Qt
 
 from kraken.chat.typography import MAX_SIZE, MIN_SIZE
 from kraken.shell.settings_dialog import SettingsDialog
@@ -24,6 +26,75 @@ def test_gear_sits_between_theme_and_quit(qapp):
     tail = [names.get(w) for w in order if w in names]
     assert tail == ["Toggle Theme", "Settings", "Quit"]
     assert not bar.buttons["Settings"].icon().isNull()
+
+
+def test_the_window_wears_its_own_decoration(qapp):
+    """A native frame would come in the desktop's colours over a themed
+    window, so the settings window is frameless and draws its own bar."""
+    dialog = SettingsDialog(theme_name="dark")
+    assert dialog.windowFlags() & Qt.WindowType.FramelessWindowHint
+    assert not dialog.title_bar.close_button.icon().isNull()
+    assert dialog.isVisible() is False
+    dialog.show()
+    dialog.title_bar.close_button.click()
+    assert not dialog.isVisible()
+
+
+def test_the_decoration_is_themed_with_the_rest(qapp):
+    dialog = SettingsDialog(theme_name="dark")
+    assert "#dialogTitleBar { background: #1b1c21;" in dialog.styleSheet()
+    dialog._theme_picker.setCurrentIndex(dialog._theme_picker.findData("light"))
+    assert "#dialogTitleBar { background: #fafafa;" in dialog.styleSheet()
+    # The window's corners are rounded by the widgets sitting in them, which
+    # only the frameless window has to do for itself.
+    assert "border-top-left-radius" in dialog.styleSheet()
+    assert "border-bottom-left-radius" in dialog.styleSheet()
+
+
+def test_resizing_keeps_the_grips_on_the_edges(qapp):
+    """Frameless windows lose native edge resizing; the grip strips that
+    replace it are overlaid, so nothing but this moves them."""
+    dialog = SettingsDialog(theme_name="dark")
+    # Shown first: a top-level window's resize only reaches the widget once it
+    # has a window to be resized.
+    dialog.show()
+    dialog.resize(900, 600)
+    edges = {grip.edge: grip.geometry() for grip in dialog._grips}
+    assert edges[Qt.Edge.LeftEdge].height() == 600
+    assert edges[Qt.Edge.BottomEdge].y() + edges[Qt.Edge.BottomEdge].height() == 600
+    assert edges[Qt.Edge.RightEdge].x() + edges[Qt.Edge.RightEdge].width() == 900
+
+
+def test_the_page_scrollbar_clears_the_resize_grip(qapp):
+    """The grips are overlaid on top of everything, so a scrollbar left
+    against the window's right edge would only be grabbable by the sliver the
+    grip does not cover."""
+    from PySide6.QtCore import QPoint
+
+    dialog = SettingsDialog(theme_name="dark")
+    dialog.show()
+    dialog.resize(860, 560)
+    bar = dialog._scroll.verticalScrollBar()
+    right = bar.mapTo(dialog, QPoint(bar.width(), 0)).x()
+    grip = next(g for g in dialog._grips if g.edge == Qt.Edge.RightEdge)
+    assert right <= grip.x()
+
+
+def test_a_short_page_is_not_sized_by_the_tallest_one(qapp, settle):
+    """A QStackedWidget reports the largest hint it holds, so General's two
+    lines used to scroll through Providers' height in empty space, past a
+    scrollbar that brought nothing into view."""
+    dialog = SettingsDialog(theme_name="dark")
+    dialog.show()
+    dialog.resize(860, 560)
+    settle()
+    assert dialog._pages.currentIndex() == 0
+    assert dialog._pages.height() == dialog._scroll.viewport().height()
+    assert dialog._scroll.verticalScrollBar().maximum() == 0
+    # The page that really is taller than the window still scrolls.
+    dialog._tree.setCurrentItem(dialog._tree.topLevelItem(3))
+    settle()
+    assert dialog._scroll.verticalScrollBar().maximum() > 0
 
 
 def test_categories_switch_pages(qapp):

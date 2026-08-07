@@ -139,7 +139,7 @@ def _sidebar_icon(color: str) -> QIcon:
     return QIcon(pixmap)
 
 
-def _window_icon(kind: str, color: str) -> QIcon:
+def window_icon(kind: str, color: str) -> QIcon:
     """Minimize / maximize / restore / close glyphs on a 12x12 canvas."""
     pixmap = QPixmap(24, 24)
     pixmap.setDevicePixelRatio(2.0)
@@ -286,7 +286,7 @@ class TitleBar(QWidget):
         self._maximized = maximized
         color = _ICON_COLORS[self._theme_name]
         kind = "restore" if maximized else "max"
-        self.buttons["Maximize"].setIcon(_window_icon(kind, color))
+        self.buttons["Maximize"].setIcon(window_icon(kind, color))
         self.buttons["Maximize"].setToolTip("Restore" if maximized else "Maximize")
 
     def _refresh(self) -> None:
@@ -470,6 +470,6 @@ class TitleBar(QWidget):
         color = _ICON_COLORS[name]
         self.branch_button.setIcon(_branch_icon(color))
         self.left_panel_toggle.setIcon(_sidebar_icon(color))
-        self.buttons["Minimize"].setIcon(_window_icon("min", color))
-        self.buttons["Close"].setIcon(_window_icon("close", color))
+        self.buttons["Minimize"].setIcon(window_icon("min", color))
+        self.buttons["Close"].setIcon(window_icon("close", color))
         self.set_maximized(self._maximized)
