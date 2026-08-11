@@ -32,14 +32,18 @@ that actually grows when Kraken leaks.
 
 from __future__ import annotations
 
+import ctypes
 import faulthandler
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+_DARWIN = sys.platform == "darwin"
 
 # Seconds between heartbeat samples. Frequent enough that an overnight run
 # still fits in a readable file (~1400 records/day), fine enough to turn slow
@@ -73,11 +77,91 @@ _last_action_at = 0.0  # monotonic time of the last action, for `idle=`
 
 # ---------------------------------------------------------------------------
 # Process metrics
+#
+# Linux reads all four numbers straight out of /proc. macOS has no /proc, so
+# each one has a darwin path below: memory comes from a single `ps` (cached for
+# the moment it takes to build one record, since a record wants two readings
+# from it), and the fd and thread counts from libproc, asked how large a buffer
+# it would need rather than for the buffer itself — the count is the answer,
+# and no struct has to be laid out in ctypes to get it.
 # ---------------------------------------------------------------------------
+
+_PROC_PIDLISTFDS = 1  # entries are struct proc_fdinfo: two 32-bit fields
+_PROC_PIDLISTTHREADS = 6  # entries are uint64 thread ids
+_PS_CACHE_SECONDS = 0.25
+_ps_cache: tuple[float, dict[int, tuple[int, int]]] = (0.0, {})
+_libproc: ctypes.CDLL | None = None
+_libproc_looked_up = False
+
+
+def _ps_table() -> dict[int, tuple[int, int]]:
+    """pid -> (ppid, rss in bytes) for every visible process, from one `ps`.
+
+    Cached for a fraction of a second so that a single log record — which wants
+    this process's RSS and the whole tree's — costs one subprocess, not two.
+    """
+    global _ps_cache
+    now = time.monotonic()
+    stamp, table = _ps_cache
+    if table and now - stamp < _PS_CACHE_SECONDS:
+        return table
+    table = {}
+    try:
+        # Popen rather than run() so the reader's own pid is known: ps is our
+        # child and lists itself, which would otherwise add a process and a
+        # couple of megabytes to every tree reading we take.
+        reader = subprocess.Popen(
+            ["/bin/ps", "-axo", "pid=,ppid=,rss="],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        out, _ = reader.communicate(timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return table
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) != 3:
+            continue
+        try:
+            pid, ppid, rss = (int(part) for part in parts)
+        except ValueError:
+            continue
+        if pid == reader.pid:
+            continue
+        table[pid] = (ppid, rss * 1024)
+    _ps_cache = (now, table)
+    return table
+
+
+def _proc_pidinfo_count(flavor: int, entry_size: int) -> int:
+    """How many entries proc_pidinfo would hand back for this process."""
+    global _libproc, _libproc_looked_up
+    if not _libproc_looked_up:
+        _libproc_looked_up = True
+        try:
+            lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+            lib.proc_pidinfo.restype = ctypes.c_int
+            lib.proc_pidinfo.argtypes = [
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_uint64,
+                ctypes.c_void_p,
+                ctypes.c_int,
+            ]
+            _libproc = lib
+        except (OSError, AttributeError):
+            _libproc = None
+    if _libproc is None:
+        return 0
+    size = _libproc.proc_pidinfo(os.getpid(), flavor, 0, None, 0)
+    return size // entry_size if size > 0 else 0
 
 
 def process_rss() -> int:
     """Resident set size of this process alone, in bytes."""
+    if _DARWIN:
+        return _ps_table().get(os.getpid(), (0, 0))[1]
     try:
         with open("/proc/self/status") as f:
             for line in f:
@@ -92,6 +176,8 @@ def tree_stats() -> tuple[int, int]:
     """Resident set size in bytes of this process and all its descendants
     (QtWebEngine renderers, terminal shells, agent processes), and how many
     processes that covers."""
+    if _DARWIN:
+        return _darwin_tree_stats()
     total = 0
     count = 0
     stack = [os.getpid()]
@@ -114,6 +200,31 @@ def tree_stats() -> tuple[int, int]:
     return total, count
 
 
+def _darwin_tree_stats() -> tuple[int, int]:
+    """tree_stats from the `ps` snapshot: descendants have to be found by
+    inverting the parent links, since nothing on macOS lists a process's
+    children directly."""
+    table = _ps_table()
+    children: dict[int, list[int]] = {}
+    for pid, (ppid, _) in table.items():
+        children.setdefault(ppid, []).append(pid)
+    total = 0
+    count = 0
+    stack = [os.getpid()]
+    seen = set()
+    while stack:
+        pid = stack.pop()
+        # A pid recycled into a cycle would otherwise hang the walk, and this
+        # runs inside crash diagnostics, where a hang is the worst outcome.
+        if pid in seen or pid not in table:
+            continue
+        seen.add(pid)
+        total += table[pid][1]
+        count += 1
+        stack.extend(children.get(pid, ()))
+    return total, count
+
+
 def process_tree_rss() -> int:
     """Resident set size in bytes of this process and all its descendants."""
     return tree_stats()[0]
@@ -123,6 +234,8 @@ def open_fds() -> int:
     """How many file descriptors this process holds. A steadily climbing count
     is its own kind of crash: PTYs, sockets and pipes all land here, and the
     app dies on EMFILE long after the leak started."""
+    if _DARWIN:
+        return _proc_pidinfo_count(_PROC_PIDLISTFDS, 8)
     try:
         return len(os.listdir("/proc/self/fd"))
     except OSError:
@@ -130,10 +243,30 @@ def open_fds() -> int:
 
 
 def thread_count() -> int:
+    if _DARWIN:
+        count = _proc_pidinfo_count(_PROC_PIDLISTTHREADS, 8)
+        return count or _darwin_thread_count_from_ps()
     try:
         return len(os.listdir("/proc/self/task"))
     except OSError:
         return 0
+
+
+def _darwin_thread_count_from_ps() -> int:
+    """Fallback for a libproc that would not answer: `ps -M` prints one line
+    per thread under a header. Slower than the libproc query, which is why it
+    is only the second choice, but it counts the native threads that
+    threading.active_count() cannot see."""
+    try:
+        out = subprocess.run(
+            ["/bin/ps", "-M", "-p", str(os.getpid())],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    return max(len(out.splitlines()) - 1, 0)
 
 
 def format_bytes(size: int) -> str:

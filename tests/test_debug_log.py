@@ -6,6 +6,7 @@ rather than sitting in a buffer, and that a clean exit is distinguishable from
 a crash — rather than about the exact wording of any record.
 """
 
+import os
 import subprocess
 import sys
 
@@ -267,3 +268,33 @@ def test_tree_rss_counts_a_child(log_path):
     finally:
         child.stdin.close()
         child.wait(timeout=10)
+
+
+@pytest.mark.skipif(not os.path.exists("/bin/ps"), reason="needs /bin/ps")
+def test_ps_tree_walk_matches_the_proc_one():
+    """macOS reads the same two numbers out of `ps` instead of /proc. The flags
+    are portable, so the walk can be exercised on the machine running the
+    tests — otherwise it would only ever be tried on a Mac, at the moment
+    someone was already debugging a crash."""
+    _, proc_count = debug.tree_stats()
+    debug._ps_cache = (0.0, {})
+    alone, alone_count = debug._darwin_tree_stats()
+    assert alone > 0
+    # Off the Mac this is the /proc walk's own answer, which is the check
+    # worth having: the reader `ps` is our child and lists itself, and
+    # counting it would inflate every reading by a process.
+    assert alone_count == proc_count
+
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import sys; sys.stdin.read()"],
+        stdin=subprocess.PIPE,
+    )
+    try:
+        debug._ps_cache = (0.0, {})
+        with_child, count = debug._darwin_tree_stats()
+        assert count == alone_count + 1
+        assert with_child > alone
+    finally:
+        child.stdin.close()
+        child.wait(timeout=10)
+    debug._ps_cache = (0.0, {})

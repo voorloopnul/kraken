@@ -14,6 +14,7 @@ import os
 import shutil
 import signal
 import struct
+import sys
 import termios
 import time
 from typing import TYPE_CHECKING
@@ -60,9 +61,15 @@ def _check(result: int, what: str) -> None:
 
 
 def _pick_term() -> str:
-    for d in ("/usr/share/terminfo/x", os.path.expanduser("~/.terminfo/x")):
-        if os.path.exists(os.path.join(d, "xterm-ghostty")):
-            return "xterm-ghostty"
+    # A terminfo entry lives in a directory named for the first character of
+    # its name: the letter itself on Linux, the character's hex byte on macOS
+    # ('x' -> 78). Only the directories ncurses itself searches are checked —
+    # claiming xterm-ghostty from a database the child shell cannot find would
+    # leave it with an unknown TERM.
+    for root in ("/usr/share/terminfo", os.path.expanduser("~/.terminfo")):
+        for first in ("x", "78"):
+            if os.path.exists(os.path.join(root, first, "xterm-ghostty")):
+                return "xterm-ghostty"
     return "xterm-256color"
 
 
@@ -260,7 +267,12 @@ class GhosttyTerminalWidget(QWidget):
             program = shutil.which("ssh") or "/usr/bin/ssh"
             local_cwd = None
         else:
-            program = os.environ.get("SHELL", "/bin/bash")
+            # An app opened from the macOS Dock inherits launchd's environment,
+            # which carries no SHELL, so the fallback there has to be the
+            # platform default rather than bash (still present, but nobody's
+            # login shell since Catalina).
+            default_shell = "/bin/zsh" if sys.platform == "darwin" else "/bin/bash"
+            program = os.environ.get("SHELL") or default_shell
             argv = [program]
             env["TERM"] = _pick_term()
             local_cwd = self._cwd

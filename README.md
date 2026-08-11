@@ -17,10 +17,10 @@ It is built on the [Pi coding agent](https://github.com/earendil-works/pi-coding
 
 ## Minimum Requirements
 
-- Linux ( tested mostly with Ubuntu )
+- Linux ( tested mostly with Ubuntu ), or macOS 12+ on Apple silicon
 
-The AppImage bundles its own Python, Qt, Node.js and the Pi agent, so nothing
-needs to be installed alongside it.
+Both bundles carry their own Python, Qt, Node.js and the Pi agent, so nothing
+needs to be installed alongside them.
 
 ## Quick start
 
@@ -36,6 +36,30 @@ and a built `libghostty-vt` (see Notes):
 
 ```bash
 packaging/appimage/build_appimage.sh
+```
+
+### macOS (Apple silicon)
+
+Run on the Mac itself — PySide6 ships Qt as prebuilt frameworks per platform,
+and the signing and icon tools are macOS-only. Needs `uv`, `curl`, and a
+`libghostty-vt.dylib`:
+
+```bash
+(cd vendor/ghostty && zig build -Demit-lib-vt)   # or cross-build it, below
+packaging/macos/build_app.sh                     # -> build/macos/Kraken.app
+```
+
+The bundle is signed ad-hoc, which is enough to launch it locally but makes
+macOS treat every rebuild as a new app — so it asks for microphone permission
+again after each one. Handing it to someone else means signing it with a
+Developer ID and notarising it.
+
+`libghostty-vt` is the one piece that does cross-compile, so a Linux box can
+produce the dylib for the Mac to bundle:
+
+```bash
+(cd vendor/ghostty && zig build -Demit-lib-vt -Dtarget=aarch64-macos)
+GHOSTTY_LIB=/path/to/libghostty-vt.dylib packaging/macos/build_app.sh
 ```
 
 ## Storage
@@ -89,5 +113,7 @@ isolation will happily pass with the bug still in it.
 
 ## Notes
 
-- The app is currently Linux-focused.
+- Linux is the platform the app is developed and tested on; the macOS bundle
+  is built from the same source and packaging is wired up for it, but it sees
+  far less use.
 - The terminal backend depends on vendored Ghostty sources and `libghostty-vt`.

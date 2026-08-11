@@ -1,0 +1,29 @@
+#!/bin/bash
+# Contents/MacOS/kraken: the bundle's entry point, run when Kraken.app is
+# opened. The macOS counterpart of the AppImage's AppRun — everything Kraken
+# needs (a private Python 3.14 + PySide6, a Node runtime, the Pi coding agent,
+# and libghostty-vt) lives under Contents/Resources, so this script only points
+# the app at those bundled copies and execs it.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+RES="$(cd "$HERE/../Resources" && pwd)"
+
+# An app opened from the Dock or Finder inherits launchd's PATH, not the one
+# from the user's shell: /usr/bin:/bin:/usr/sbin:/sbin and nothing else. The
+# Homebrew prefixes are where a Mac keeps the tools the agent shells out to
+# (git beyond Xcode's, ripgrep, language runtimes), so put them back.
+export PATH="$RES/node/bin:$RES/pi/node_modules/.bin:$PATH:/opt/homebrew/bin:/usr/local/bin"
+
+# The terminal backend loads this via ctypes; ghostty_vt.py honours the override.
+export KRAKEN_GHOSTTY_VT_LIB="$RES/lib/libghostty-vt.dylib"
+
+# Make `import kraken` resolve to the bundled source tree.
+export PYTHONPATH="$RES/share/kraken${PYTHONPATH:+:$PYTHONPATH}"
+
+# Cap Chromium at one shared renderer process. Unlike the AppImage, the sandbox
+# stays on: macOS's Chromium sandbox needs no setuid helper, so there is
+# nothing to disable.
+export QTWEBENGINE_CHROMIUM_FLAGS="--renderer-process-limit=1 ${QTWEBENGINE_CHROMIUM_FLAGS:-}"
+
+exec "$RES/python/bin/python3" "$RES/share/kraken/main.py" "$@"
