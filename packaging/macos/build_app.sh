@@ -1,17 +1,19 @@
 #!/bin/bash
-# Build build/macos/Kraken.app: a self-contained Apple silicon app bundle with
-# a private Python 3.14 + PySide6/Qt, a Node.js runtime, the Pi coding agent,
-# the libghostty-vt terminal core, and the kraken app source. The end user
-# drags it to /Applications — no system Python, Node, or uv needed.
+# Build Kraken-<version>.dmg: a self-contained Apple silicon app bundle with a
+# private Python 3.14 + PySide6/Qt, a Node.js runtime, the Pi coding agent,
+# the libghostty-vt terminal core, and the kraken app source, packed into a
+# compressed disk image. The end user opens the .dmg and drags Kraken.app to
+# /Applications — no system Python, Node, or uv needed. The uncompressed
+# build/macos/Kraken.app underneath is kept around too, for local runs.
 #
 # The AppImage script is the sibling of this one and the two stage the same
-# things; what differs is the container (a .app directory rather than a
+# things; what differs is the container (an app bundle + dmg rather than a
 # squashfs image), the Info.plist macOS needs to treat it as an app, and the
 # ad-hoc signature Apple silicon needs to run it at all.
 #
 # Must run ON an Apple silicon Mac: PySide6 ships Qt as prebuilt frameworks per
-# platform, and codesign/sips/iconutil are macOS-only. The one part that does
-# cross-compile is libghostty-vt — see GHOSTTY_LIB below.
+# platform, and codesign/sips/iconutil/clang are macOS-only. The one part that
+# does cross-compile is libghostty-vt — see GHOSTTY_LIB below.
 #
 #   packaging/macos/build_app.sh
 #
@@ -45,6 +47,7 @@ die() { printf '\033[1;31merror: %s\033[0m\n' "$*" >&2; exit 1; }
 [ "$(uname -m)" = "arm64" ] || die "Apple silicon only (got $(uname -m))."
 command -v uv >/dev/null || die "uv not found (https://docs.astral.sh/uv/)."
 command -v curl >/dev/null || die "curl not found."
+command -v clang >/dev/null || die "clang not found (install the Xcode Command Line Tools: xcode-select --install)."
 [ -e "$GHOSTTY_LIB" ] || die "libghostty-vt.dylib not found at $GHOSTTY_LIB. Run: (cd vendor/ghostty && zig build -Demit-lib-vt)"
 [ -n "$VERSION" ] || die "could not read version from pyproject.toml."
 
@@ -86,6 +89,27 @@ uv export --project "$REPO" --no-dev --no-emit-project \
   --format requirements-txt -o "$REQS" -q
 uv pip install --system --python "$APP_PY" -r "$REQS"
 
+# PyPI has no arm64-only macOS wheel for Qt, so PySide6 installs as universal2
+# (x86_64 + arm64) — every .dylib/.so/framework binary in it carries a whole
+# extra copy of itself compiled for x86_64, dead weight on the Apple-silicon-
+# only bundle this script produces (see the uname check above). Thinning them
+# to arm64 cuts PySide6 roughly in half; `file`/`perm -111` catches the
+# non-suffixed Mach-O binaries frameworks keep under Versions/A alongside the
+# .so/.dylib ones.
+log "Thinning universal2 binaries to arm64"
+THINNED=0
+while IFS= read -r -d '' f; do
+  arches="$(lipo -archs "$f" 2>/dev/null || true)"
+  # A single-arch file (or something lipo can't read at all) reports no space.
+  [[ "$arches" == *" "* ]] || continue
+  mode="$(stat -f '%A' "$f")"
+  lipo "$f" -thin arm64 -output "$f.thin"
+  mv "$f.thin" "$f"
+  chmod "$mode" "$f"
+  THINNED=$((THINNED + 1))
+done < <(find "$RES/python" -type f \( -name '*.so' -o -name '*.dylib' -o -perm -111 \) -print0)
+log "Thinned $THINNED universal2 binaries"
+
 # --------------------------------------------------------------------------
 # 2. Node.js runtime
 # --------------------------------------------------------------------------
@@ -119,8 +143,15 @@ cp -r "$REPO/kraken" "$RES/share/kraken/kraken"
 find "$RES/share/kraken/kraken" -name '__pycache__' -type d -prune -exec rm -rf {} +
 find "$RES/share/kraken/kraken" -name '*.py[co]' -delete
 cp "$REPO/main.py" "$RES/share/kraken/main.py"
-cp "$HERE/launcher" "$CONTENTS/MacOS/kraken"
-chmod +x "$CONTENTS/MacOS/kraken"
+cp "$HERE/launcher.sh" "$RES/launcher.sh"
+chmod +x "$RES/launcher.sh"
+# Contents/MacOS/kraken must be a real Mach-O binary, not launcher.sh itself:
+# LaunchServices decides whether an app is native by reading that file's
+# arch load commands, and a shell script has none — it reads as non-native
+# and macOS offers to install Rosetta before running something that, once
+# running, never executes an x86_64 instruction. This stub just execs
+# launcher.sh; see launcher.c.
+clang -O2 -arch arm64 -o "$CONTENTS/MacOS/kraken" "$HERE/launcher.c"
 
 # --------------------------------------------------------------------------
 # 5. Bundle metadata: Info.plist and the icon
@@ -162,6 +193,28 @@ codesign --force --sign "$SIGN_IDENTITY" "$RES/lib/libghostty-vt.dylib"
 codesign --force --sign "$SIGN_IDENTITY" "$APP"
 codesign --verify --verbose=2 "$APP"
 
+# --------------------------------------------------------------------------
+# 7. Pack into a compressed .dmg
+#    Kraken.app above is a plain directory — nothing on disk compresses it,
+#    so it reports its full uncompressed size. hdiutil's UDZO format is a
+#    zlib-compressed, read-only disk image: what actually ships. The
+#    Applications symlink alongside the app is what makes Finder show the
+#    drag-to-install arrow.
+# --------------------------------------------------------------------------
+log "Packing Kraken-$VERSION.dmg"
+DMG_STAGE="$BUILD/dmg"
+rm -rf "$DMG_STAGE"
+mkdir -p "$DMG_STAGE"
+cp -R "$APP" "$DMG_STAGE/"
+ln -s /Applications "$DMG_STAGE/Applications"
+DMG="$REPO/Kraken-$VERSION.dmg"
+rm -f "$DMG"
+hdiutil create -volname "Kraken" -srcfolder "$DMG_STAGE" -fs HFS+ \
+  -format UDZO -imagekey zlib-level=9 -ov -quiet "$DMG"
+rm -rf "$DMG_STAGE"
+
 log "Done"
 du -sh "$APP"
+du -sh "$DMG"
 printf 'open %s\n' "$APP"
+printf '%s\n' "$DMG"
