@@ -133,7 +133,7 @@ def _default_size() -> QSize:
     """Preferred opening size, clamped to the screen. The window is frameless,
     so one that opens larger than the display has no native decoration to drag
     it back by — only the edge grips, which would be off-screen too."""
-    preferred = QSize(1920, 1080)
+    preferred = QSize(1440, 900)
     screen = QGuiApplication.primaryScreen()
     if screen is None:
         return preferred
