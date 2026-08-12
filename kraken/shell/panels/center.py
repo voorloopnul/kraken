@@ -7,8 +7,9 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QScrollBar,
+    QSizePolicy,
+    QSpacerItem,
     QStackedWidget,
-    QStyle,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -50,11 +51,26 @@ class CenterPanel(Panel):
 
         self.conversation_stack = QStackedWidget()
         self.conversation_stack.setMaximumWidth(self.MAX_CONTENT_WIDTH)
+        # Both rows are built the same way: a gutter the width of the
+        # scrollbar on each side, and the column centred in what is left. The
+        # matching gutter on the left is what keeps the column centred on the
+        # panel rather than pushed off it — the bar is reserved whether or not
+        # it is showing (see retainSizeWhenHidden above), so reserving it on
+        # one side only left everything sitting a scrollbar's width to port.
+        #
+        # Spacing is zeroed for the same reason the two rows mirror each
+        # other: a default spacing lands between two *widgets* but not between
+        # a widget and a spacer, so the row holding the scrollbar would divide
+        # a different width from the row holding a spacer in its place.
+        self._gutters: list[QSpacerItem] = []
         top = QHBoxLayout()
+        top.setSpacing(0)
+        top.addItem(self._new_gutter())
         top.addStretch()
         top.addWidget(self.conversation_stack, stretch=1)
         top.addStretch()
         top.addWidget(self._scrollbar)
+        self._top_row = top
         self._layout.addLayout(top, stretch=1)
 
         bottom_content = QWidget()
@@ -88,13 +104,38 @@ class CenterPanel(Panel):
         column.addWidget(self.chat)
 
         bottom = QHBoxLayout()
+        bottom.setSpacing(0)
+        bottom.addItem(self._new_gutter())
         bottom.addStretch()
         bottom.addWidget(bottom_content, stretch=1)
         bottom.addStretch()
-        bottom.addSpacing(
-            self.style().pixelMetric(QStyle.PixelMetric.PM_ScrollBarExtent)
-        )
+        # Stands in for the scrollbar the row above ends with. Its width comes
+        # from that scrollbar rather than from the style's PM_ScrollBarExtent:
+        # the bar is styled to 10px and the platform metric says 14, so
+        # measuring it the second way left the input four pixels left of the
+        # transcript it is supposed to line up under.
+        bottom.addItem(self._new_gutter())
+        self._bottom_row = bottom
         self._layout.addLayout(bottom)
+        self._sync_gutter()
+
+    def _new_gutter(self) -> QSpacerItem:
+        """A spacer kept at the scrollbar's width by _sync_gutter."""
+        item = QSpacerItem(0, 0, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
+        self._gutters.append(item)
+        return item
+
+    def _sync_gutter(self) -> None:
+        """Hold every gutter to the width the scrollbar actually occupies.
+        Called again whenever the bar is restyled, since that is what sets its
+        width."""
+        width = self._scrollbar.sizeHint().width()
+        for item in self._gutters:
+            item.changeSize(
+                width, 0, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum
+            )
+        self._top_row.invalidate()
+        self._bottom_row.invalidate()
 
     def add_conversation(self, view: QWidget) -> None:
         if self.conversation_stack.indexOf(view) < 0:
@@ -188,6 +229,9 @@ class CenterPanel(Panel):
             " QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical"
             " { background: transparent; }"
         )
+        # The rule above is what gives the bar its width, so the gutter that
+        # mirrors it is re-measured here rather than only at construction.
+        self._sync_gutter()
         self._apply_busy_style()
 
     def set_font_size(self, size: int) -> None:
