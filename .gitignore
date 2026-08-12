@@ -13,6 +13,10 @@ wheels/
 Kraken-*.AppImage
 packaging/appimage/tools/
 
+# Build output of packaging/macos/build_app.sh, which writes the disk image
+# next to the AppImage's; the bundle it is packed from stays under build/
+Kraken-*.dmg
+
 # Vendored ghostty source (see README for build steps)
 vendor/ghostty/
 vendor/toolchain/
