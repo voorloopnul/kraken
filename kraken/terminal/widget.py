@@ -84,30 +84,47 @@ def _spawn_session(program: str, argv: list[str], env: dict, slave_path: str) ->
     AppImage — are compiled against a glibc too old for POSIX_SPAWN_SETSID, so
     that call raises NotImplementedError regardless of the runtime glibc. Fall
     back to an equivalent manual fork/setsid/exec.
+
+    macOS never takes the fast path. Linux hands a session leader the tty it
+    opens without O_NOCTTY, but BSD only ever does that on an explicit
+    TIOCSCTTY, and posix_spawn has no file action that asks for one — so the
+    shell came up with no controlling terminal at all. Nothing announces that:
+    the shell still reads and writes fd 0, but the pty has no foreground
+    process group, so the kernel has nobody to send SIGWINCH (or SIGINT) to.
+    The shell kept whatever $COLUMNS it started with, and since zsh's
+    end-of-line mark is padded out to that width, every prompt after a resize
+    overflowed the real grid and stranded an inverse '%' on its own line.
     """
-    try:
-        return os.posix_spawn(
-            program,
-            argv,
-            env,
-            file_actions=[
-                (os.POSIX_SPAWN_OPEN, 0, slave_path, os.O_RDWR, 0),
-                (os.POSIX_SPAWN_DUP2, 0, 1),
-                (os.POSIX_SPAWN_DUP2, 0, 2),
-            ],
-            setsid=True,
-        )
-    except NotImplementedError:
-        pass
+    if sys.platform != "darwin":
+        try:
+            return os.posix_spawn(
+                program,
+                argv,
+                env,
+                file_actions=[
+                    (os.POSIX_SPAWN_OPEN, 0, slave_path, os.O_RDWR, 0),
+                    (os.POSIX_SPAWN_DUP2, 0, 1),
+                    (os.POSIX_SPAWN_DUP2, 0, 2),
+                ],
+                setsid=True,
+            )
+        except NotImplementedError:
+            pass
 
     pid = os.fork()
     if pid != 0:
         return pid
     # --- child: give ourselves a new session, then adopt the pty slave as the
-    # controlling terminal by opening it (without O_NOCTTY) as fds 0/1/2.
+    # controlling terminal by opening it (without O_NOCTTY) as fds 0/1/2 and
+    # claiming it outright. The ioctl is what BSD requires and what Linux
+    # already granted on the open, where it is a no-op that reports success.
     try:
         os.setsid()
         fd = os.open(slave_path, os.O_RDWR)
+        try:
+            fcntl.ioctl(fd, termios.TIOCSCTTY, 0)
+        except OSError:
+            pass
         os.dup2(fd, 0)
         os.dup2(fd, 1)
         os.dup2(fd, 2)
@@ -178,10 +195,12 @@ class GhosttyTerminalWidget(QWidget):
         self._row_selection: list[tuple[int, int] | None] = []
         self._colors = g.RenderStateColors(size=ctypes.sizeof(g.RenderStateColors))
         self._cursor: tuple[int, int, int] | None = None
-        # Set by _spawn_shell; pre-seeded so teardown is safe even if the
-        # spawn itself fails.
+        # Set by _spawn_shell; pre-seeded so teardown is safe both if the spawn
+        # itself fails and before it has happened at all — a terminal built
+        # into a page nobody opens never starts a shell.
         self._master_fd = -1
         self._child_pid = -1
+        self._notifier: QSocketNotifier | None = None
         self._child_exited = False
         # Set once the shell's exit status has actually been collected. Distinct
         # from `_child_exited` (which only means "stop touching the pty"): a reap
@@ -237,7 +256,10 @@ class GhosttyTerminalWidget(QWidget):
         # it (see _disable_notifier).
         self.destroyed.connect(lambda _obj: self.shutdown())
 
-        self._spawn_shell()
+        # The shell starts on the first showEvent, not here. A widget under
+        # construction has no geometry yet, so a shell started now would print
+        # its first prompt against whatever grid the terminal was created with
+        # and then be told the real width — one prompt too late to lay out.
         self._sync_render_state()
 
     def _alive(self) -> bool:
@@ -253,6 +275,13 @@ class GhosttyTerminalWidget(QWidget):
     def _spawn_shell(self) -> None:
         self._master_fd, slave_fd = os.openpty()
         slave_path = os.ttyname(slave_fd)
+
+        # Size the pty before anything is born onto it. openpty() hands back a
+        # 0x0 terminal, and a shell that reads that falls back to terminfo's
+        # 80 columns — which it would then use for its first prompt, and only
+        # correct once a resize arrives, leaving that prompt laid out for a
+        # width the screen never had.
+        self._set_winsize()
 
         env = dict(os.environ)
         env["COLORTERM"] = "truecolor"
@@ -386,7 +415,10 @@ class GhosttyTerminalWidget(QWidget):
     def _disable_notifier(self) -> None:
         """Stop watching the pty. The notifier is a child of the widget, so a
         teardown that starts from the widget's own destruction finds it already
-        deleted — nothing left to disable."""
+        deleted — nothing left to disable. A terminal that was never shown has
+        no notifier at all, for want of a pty to watch."""
+        if self._notifier is None:
+            return
         try:
             self._notifier.setEnabled(False)
         except RuntimeError:
@@ -766,6 +798,28 @@ class GhosttyTerminalWidget(QWidget):
         super().showEvent(event)
         self._resize_timer.stop()
         self._apply_resize()
+        # First time up: the grid now matches the widget, so the shell can be
+        # born already knowing the width it will print into.
+        if self._master_fd < 0 and not self._child_exited and self._alive():
+            self._spawn_shell()
+
+    def _set_winsize(self) -> None:
+        """Tell the pty the grid's dimensions. Safe to call before the shell
+        exists (it is how the shell learns its size to begin with) and after it
+        is gone, where the ioctl simply fails on a dead fd."""
+        if self._master_fd < 0:
+            return
+        winsz = struct.pack(
+            "HHHH",
+            self._rows_count,
+            self._cols,
+            self._cols * self._cell_w,
+            self._rows_count * self._cell_h,
+        )
+        try:
+            fcntl.ioctl(self._master_fd, termios.TIOCSWINSZ, winsz)
+        except OSError:
+            pass
 
     def _apply_resize(self) -> None:
         # Never resize the PTY while hidden (e.g. in a background workspace):
@@ -784,13 +838,7 @@ class GhosttyTerminalWidget(QWidget):
             self._term, cols, rows, cols * self._cell_w, rows * self._cell_h
         )
         if not self._child_exited:
-            winsz = struct.pack(
-                "HHHH", rows, cols, cols * self._cell_w, rows * self._cell_h
-            )
-            try:
-                fcntl.ioctl(self._master_fd, termios.TIOCSWINSZ, winsz)
-            except OSError:
-                pass
+            self._set_winsize()
         self._force_full_rebuild = True
         if not self._render_timer.isActive():
             self._render_timer.start()
