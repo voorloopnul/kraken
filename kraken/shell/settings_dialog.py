@@ -22,10 +22,8 @@ assembled here (`settings_providers`); the short ones are built below.
 from __future__ import annotations
 
 from collections.abc import Callable
-from math import cos, radians, sin
 
-from PySide6.QtCore import QPointF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -53,6 +51,7 @@ from kraken.ui.chrome import (
     corner_style,
 )
 from kraken.ui.fonts import MONO_FAMILY, UI_SANS_FAMILY
+from kraken.ui.icons import icon
 from kraken.ui.themes import DEFAULT_THEME, THEMES
 
 # Width of the navbar. The control column's width lives with the rows, in
@@ -157,46 +156,6 @@ QToolButton#settingsBack { border: none; border-radius: 4px; padding: 2px; }
 QToolButton#settingsBack:hover { background: #e8e8ec; }
 """,
 }
-
-
-def _search_icon(color: str) -> QIcon:
-    """Magnifier for the navbar's search field, on a 16x16 canvas."""
-    pixmap = QPixmap(32, 32)
-    pixmap.setDevicePixelRatio(2.0)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    pen = QPen(QColor(color))
-    pen.setWidthF(1.4)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    painter.setPen(pen)
-    painter.drawEllipse(QPointF(6.8, 6.8), 4.2, 4.2)
-    painter.drawLine(QPointF(9.9, 9.9), QPointF(13.4, 13.4))
-    painter.end()
-    return QIcon(pixmap)
-
-
-def _back_icon(color: str) -> QIcon:
-    """Left arrow for the breadcrumb, on a 16x16 canvas."""
-    pixmap = QPixmap(32, 32)
-    pixmap.setDevicePixelRatio(2.0)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    pen = QPen(QColor(color))
-    pen.setWidthF(1.4)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-    painter.setPen(pen)
-    painter.drawLine(QPointF(3.0, 8.0), QPointF(13.0, 8.0))
-    for dy in (-1.0, 1.0):
-        angle = radians(30.0)
-        painter.drawLine(
-            QPointF(3.0, 8.0),
-            QPointF(3.0 + cos(angle) * 4.6, 8.0 + dy * sin(angle) * 9.2),
-        )
-    painter.end()
-    return QIcon(pixmap)
 
 
 class _PageStack(QStackedWidget):
@@ -511,9 +470,9 @@ class SettingsDialog(FramedDialog):
         # rather than re-added; a second addAction would stack two magnifiers.
         if self._search_action is None:
             self._search_action = self._search.addAction(
-                _search_icon(color), QLineEdit.ActionPosition.LeadingPosition
+                icon("search", color, 16), QLineEdit.ActionPosition.LeadingPosition
             )
         else:
-            self._search_action.setIcon(_search_icon(color))
-        self._back.setIcon(_back_icon(color))
+            self._search_action.setIcon(icon("search", color, 16))
+        self._back.setIcon(icon("arrow-left", color, 16))
         self._update_breadcrumb()

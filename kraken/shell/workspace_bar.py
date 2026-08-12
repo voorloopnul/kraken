@@ -9,8 +9,8 @@ import re
 from math import cos, radians, sin
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import (
     QButtonGroup,
     QMenu,
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from kraken.ui.chrome import corner_style
 from kraken.ui.fonts import UI_SANS_FAMILY
+from kraken.ui.icons import icon
 from kraken.ui.themes import DEFAULT_THEME
 
 
@@ -65,114 +66,6 @@ QToolButton::menu-indicator { image: none; }
 }
 
 _ICON_COLORS = {"dark": "#9a9da5", "light": "#5a5d65"}
-
-
-def _plus_icon(color: str) -> QIcon:
-    """Plus sign, drawn on an 18x18 canvas."""
-    pixmap = QPixmap(36, 36)
-    pixmap.setDevicePixelRatio(2.0)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    pen = QPen(QColor(color))
-    pen.setWidthF(1.6)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    painter.setPen(pen)
-    painter.drawLine(QPointF(9.0, 3.5), QPointF(9.0, 14.5))
-    painter.drawLine(QPointF(3.5, 9.0), QPointF(14.5, 9.0))
-    painter.end()
-    return QIcon(pixmap)
-
-
-def _power_icon(color: str) -> QIcon:
-    """Power symbol: a circle with a top gap and a vertical bar through it."""
-    pixmap = QPixmap(36, 36)
-    pixmap.setDevicePixelRatio(2.0)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    pen = QPen(QColor(color))
-    pen.setWidthF(1.6)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    painter.setPen(pen)
-    # Arc angles are in 1/16 deg, 0 at 3 o'clock, CCW; leave a gap at the top.
-    painter.drawArc(QRectF(3.5, 4.5, 11.0, 11.0), 120 * 16, 300 * 16)
-    painter.drawLine(QPointF(9.0, 2.5), QPointF(9.0, 8.5))
-    painter.end()
-    return QIcon(pixmap)
-
-
-def _sun_icon(color: str) -> QIcon:
-    """Sun: small circle with eight rays."""
-    pixmap = QPixmap(36, 36)
-    pixmap.setDevicePixelRatio(2.0)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    pen = QPen(QColor(color))
-    pen.setWidthF(1.6)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    painter.setPen(pen)
-    painter.drawEllipse(QPointF(9.0, 9.0), 3.2, 3.2)
-    for i in range(8):
-        dx = cos(radians(i * 45.0))
-        dy = sin(radians(i * 45.0))
-        painter.drawLine(
-            QPointF(9.0 + dx * 5.2, 9.0 + dy * 5.2),
-            QPointF(9.0 + dx * 7.2, 9.0 + dy * 7.2),
-        )
-    painter.end()
-    return QIcon(pixmap)
-
-
-def _gear_icon(color: str) -> QIcon:
-    """Gear: an eight-toothed outline around a hub. Drawn as one closed path so
-    the teeth and the rim share a stroke, rather than as spokes — which at this
-    size would be indistinguishable from the sun above it."""
-    pixmap = QPixmap(36, 36)
-    pixmap.setDevicePixelRatio(2.0)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    pen = QPen(QColor(color))
-    pen.setWidthF(1.4)
-    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-    painter.setPen(pen)
-    painter.setBrush(Qt.BrushStyle.NoBrush)
-    # Eight teeth: each contributes a pair of points on the outer radius and a
-    # pair on the inner one, walking the circle in increasing angle.
-    outer, inner = 7.0, 5.2
-    gear = QPainterPath()
-    for i in range(8):
-        base = i * 45.0
-        for offset, radius in ((-13.0, outer), (13.0, outer), (16.0, inner), (29.0, inner)):
-            angle = radians(base + offset)
-            point = QPointF(9.0 + cos(angle) * radius, 9.0 + sin(angle) * radius)
-            if gear.elementCount() == 0:
-                gear.moveTo(point)
-            else:
-                gear.lineTo(point)
-    gear.closeSubpath()
-    painter.drawPath(gear)
-    painter.drawEllipse(QPointF(9.0, 9.0), 2.4, 2.4)
-    painter.end()
-    return QIcon(pixmap)
-
-
-def _moon_icon(color: str) -> QIcon:
-    """Crescent moon, filled."""
-    pixmap = QPixmap(36, 36)
-    pixmap.setDevicePixelRatio(2.0)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    full = QPainterPath()
-    full.addEllipse(QRectF(3.5, 3.5, 11.0, 11.0))
-    bite = QPainterPath()
-    bite.addEllipse(QRectF(6.5, 1.5, 11.0, 11.0))
-    painter.fillPath(full.subtracted(bite), QColor(color))
-    painter.end()
-    return QIcon(pixmap)
 
 
 def abbreviation(folder_name: str) -> str:
@@ -383,9 +276,10 @@ class WorkspaceBar(QWidget):
         self._theme_name = name
         self._apply_style()
         color = _ICON_COLORS[name]
-        self.add_button.setIcon(_plus_icon(color))
-        self.buttons["Settings"].setIcon(_gear_icon(color))
-        self.buttons["Quit"].setIcon(_power_icon(color))
+        self.add_button.setIcon(icon("plus", color))
+        self.buttons["Settings"].setIcon(icon("settings", color))
+        self.buttons["Quit"].setIcon(icon("power", color))
         # Show the theme you'd switch to: sun in dark mode, moon in light.
-        toggle_factory = _sun_icon if name == "dark" else _moon_icon
-        self.buttons["Toggle Theme"].setIcon(toggle_factory(color))
+        self.buttons["Toggle Theme"].setIcon(
+            icon("sun" if name == "dark" else "moon", color)
+        )

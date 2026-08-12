@@ -4,19 +4,11 @@ Buttons are placeholders — connect to their `clicked` signals to add actions."
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt
-from PySide6.QtGui import (
-    QColor,
-    QIcon,
-    QPainter,
-    QPainterPath,
-    QPen,
-    QPixmap,
-    QPolygonF,
-)
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import QToolButton, QVBoxLayout, QWidget
 
 from kraken.ui.chrome import corner_style
+from kraken.ui.icons import icon
 from kraken.ui.themes import DEFAULT_THEME
 
 _STYLES = {
@@ -43,125 +35,14 @@ QToolButton:checked { background: #e0e0e5; color: #1b1d22; }
 _ICON_COLORS = {"dark": "#9a9da5", "light": "#5a5d65"}
 
 
-def _terminal_icon(color: str) -> QIcon:
-    """Terminal window outline with a ">_" prompt, drawn on an 18x18 canvas."""
-    pixmap = QPixmap(36, 36)
-    pixmap.setDevicePixelRatio(2.0)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    pen = QPen(QColor(color))
-    pen.setWidthF(1.6)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-    painter.setPen(pen)
-    painter.drawRoundedRect(QRectF(1.5, 2.5, 15.0, 13.0), 2.5, 2.5)
-    painter.drawPolyline(
-        QPolygonF([QPointF(4.5, 6.5), QPointF(7.5, 9.0), QPointF(4.5, 11.5)])
-    )
-    painter.drawLine(QPointF(9.5, 12.0), QPointF(13.5, 12.0))
-    painter.end()
-    return QIcon(pixmap)
-
-
-def _globe_icon(color: str) -> QIcon:
-    """Globe: circle with a meridian ellipse and an equator line."""
-    pixmap = QPixmap(36, 36)
-    pixmap.setDevicePixelRatio(2.0)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    pen = QPen(QColor(color))
-    pen.setWidthF(1.4)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    painter.setPen(pen)
-    painter.drawEllipse(QPointF(9.0, 9.0), 6.5, 6.5)
-    painter.drawEllipse(QPointF(9.0, 9.0), 3.0, 6.5)
-    painter.drawLine(QPointF(2.5, 9.0), QPointF(15.5, 9.0))
-    painter.end()
-    return QIcon(pixmap)
-
-
-def _git_icon(color: str) -> QIcon:
-    """Git branch: a trunk with top/bottom nodes and a branch node curving in."""
-    pixmap = QPixmap(36, 36)
-    pixmap.setDevicePixelRatio(2.0)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    pen = QPen(QColor(color))
-    pen.setWidthF(1.4)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    painter.setPen(pen)
-    painter.drawEllipse(QPointF(5.1, 4.3), 2.0, 2.0)
-    painter.drawEllipse(QPointF(5.1, 13.7), 2.0, 2.0)
-    painter.drawEllipse(QPointF(12.9, 7.0), 2.0, 2.0)
-    painter.drawLine(QPointF(5.1, 6.3), QPointF(5.1, 11.7))
-    path = QPainterPath(QPointF(5.1, 11.3))
-    path.cubicTo(QPointF(5.1, 9.0), QPointF(12.9, 10.7), QPointF(12.9, 9.0))
-    painter.drawPath(path)
-    painter.end()
-    return QIcon(pixmap)
-
-
-def _diff_icon(color: str) -> QIcon:
-    """Diff: an added line (marked "+") above a removed one (marked "−")."""
-    pixmap = QPixmap(36, 36)
-    pixmap.setDevicePixelRatio(2.0)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    pen = QPen(QColor(color))
-    pen.setWidthF(1.5)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    painter.setPen(pen)
-    # "+" and its line.
-    painter.drawLine(QPointF(2.5, 5.5), QPointF(6.5, 5.5))
-    painter.drawLine(QPointF(4.5, 3.5), QPointF(4.5, 7.5))
-    painter.drawLine(QPointF(9.0, 5.5), QPointF(15.5, 5.5))
-    # "−" and its line.
-    painter.drawLine(QPointF(2.5, 12.5), QPointF(6.5, 12.5))
-    painter.drawLine(QPointF(9.0, 12.5), QPointF(15.5, 12.5))
-    painter.end()
-    return QIcon(pixmap)
-
-
-def _camera_icon(color: str) -> QIcon:
-    """Camera: rounded body with a viewfinder bump and a lens circle."""
-    pixmap = QPixmap(36, 36)
-    pixmap.setDevicePixelRatio(2.0)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    pen = QPen(QColor(color))
-    pen.setWidthF(1.4)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-    painter.setPen(pen)
-    painter.drawRoundedRect(QRectF(2.0, 5.0, 14.0, 9.5), 2.0, 2.0)
-    painter.drawPolyline(
-        QPolygonF(
-            [
-                QPointF(6.5, 5.0),
-                QPointF(7.5, 3.0),
-                QPointF(10.5, 3.0),
-                QPointF(11.5, 5.0),
-            ]
-        )
-    )
-    painter.drawEllipse(QPointF(9.0, 9.75), 2.6, 2.6)
-    painter.end()
-    return QIcon(pixmap)
-
-
-# Buttons rendered with painted icons instead of text glyphs; the factory is
-# re-run on theme change to recolor the icon.
-_ICON_FACTORIES = {
-    "Terminal Panel": _terminal_icon,
-    "Browser Panel": _globe_icon,
-    "Diff Panel": _diff_icon,
-    "Git Panel": _git_icon,
-    "Screenshot": _camera_icon,
+# Buttons rendered with icons instead of text glyphs; each is re-rendered on
+# a theme change to recolor it.
+_ICONS = {
+    "Terminal Panel": "square-terminal",
+    "Browser Panel": "globe",
+    "Diff Panel": "diff",
+    "Git Panel": "git-branch",
+    "Screenshot": "camera",
 }
 
 _BOTTOM_ITEMS = (
@@ -221,5 +102,5 @@ class SideBar(QWidget):
     def set_theme(self, name: str) -> None:
         self._theme_name = name
         self._apply_style()
-        for button_name, factory in _ICON_FACTORIES.items():
-            self.buttons[button_name].setIcon(factory(_ICON_COLORS[name]))
+        for button_name, icon_name in _ICONS.items():
+            self.buttons[button_name].setIcon(icon(icon_name, _ICON_COLORS[name]))

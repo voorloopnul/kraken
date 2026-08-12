@@ -11,8 +11,8 @@ import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -26,6 +26,7 @@ from kraken import debug
 from kraken.debug import format_bytes, process_tree_rss
 from kraken.shell.async_run import run_async
 from kraken.ui.chrome import corner_style
+from kraken.ui.icons import icon
 from kraken.ui.themes import DEFAULT_THEME
 
 if TYPE_CHECKING:
@@ -99,72 +100,15 @@ def git_branch(path: str) -> str:
 # label and the log from disagreeing.
 
 
-def _branch_icon(color: str) -> QIcon:
-    """Git branch: a trunk with top/bottom nodes and a branch node curving in."""
-    pixmap = QPixmap(32, 32)
-    pixmap.setDevicePixelRatio(2.0)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    pen = QPen(QColor(color))
-    pen.setWidthF(1.3)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    painter.setPen(pen)
-    painter.drawEllipse(QPointF(4.5, 3.8), 1.8, 1.8)
-    painter.drawEllipse(QPointF(4.5, 12.2), 1.8, 1.8)
-    painter.drawEllipse(QPointF(11.5, 6.2), 1.8, 1.8)
-    painter.drawLine(QPointF(4.5, 5.6), QPointF(4.5, 10.4))
-    path = QPainterPath(QPointF(4.5, 10.0))
-    path.cubicTo(QPointF(4.5, 8.0), QPointF(11.5, 9.5), QPointF(11.5, 8.0))
-    painter.drawPath(path)
-    painter.end()
-    return QIcon(pixmap)
-
-
-def _sidebar_icon(color: str) -> QIcon:
-    """Window outline with a divided left column: the History panel toggle."""
-    pixmap = QPixmap(32, 32)
-    pixmap.setDevicePixelRatio(2.0)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    pen = QPen(QColor(color))
-    pen.setWidthF(1.2)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-    painter.setPen(pen)
-    painter.drawRoundedRect(QRectF(2.0, 3.0, 12.0, 10.0), 2.0, 2.0)
-    painter.drawLine(QPointF(6.5, 3.0), QPointF(6.5, 13.0))
-    painter.end()
-    return QIcon(pixmap)
+# The window's own buttons, whose glyphs are smaller than the rest of the
+# chrome's icons and are asked for by role rather than by name.
+_WINDOW_ICONS = {"min": "minus", "max": "square", "restore": "copy", "close": "x"}
+_WINDOW_ICON_SIZE = 12
 
 
 def window_icon(kind: str, color: str) -> QIcon:
-    """Minimize / maximize / restore / close glyphs on a 12x12 canvas."""
-    pixmap = QPixmap(24, 24)
-    pixmap.setDevicePixelRatio(2.0)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    pen = QPen(QColor(color))
-    pen.setWidthF(1.2)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-    painter.setPen(pen)
-    if kind == "min":
-        painter.drawLine(QPointF(2.5, 8.5), QPointF(9.5, 8.5))
-    elif kind == "max":
-        painter.drawRect(QRectF(2.5, 2.5, 7.0, 7.0))
-    elif kind == "restore":
-        painter.drawRect(QRectF(2.5, 4.5, 5.0, 5.0))
-        painter.drawPolyline(
-            [QPointF(4.5, 2.5), QPointF(9.5, 2.5), QPointF(9.5, 7.5)]
-        )
-    elif kind == "close":
-        painter.drawLine(QPointF(3.0, 3.0), QPointF(9.0, 9.0))
-        painter.drawLine(QPointF(9.0, 3.0), QPointF(3.0, 9.0))
-    painter.end()
-    return QIcon(pixmap)
+    """Minimize / maximize / restore / close glyph."""
+    return icon(_WINDOW_ICONS[kind], color, _WINDOW_ICON_SIZE)
 
 
 class TitleBar(QWidget):
@@ -468,8 +412,8 @@ class TitleBar(QWidget):
         self._theme_name = name
         self._apply_style()
         color = _ICON_COLORS[name]
-        self.branch_button.setIcon(_branch_icon(color))
-        self.left_panel_toggle.setIcon(_sidebar_icon(color))
+        self.branch_button.setIcon(icon("git-branch", color, 16))
+        self.left_panel_toggle.setIcon(icon("panel-left", color, 16))
         self.buttons["Minimize"].setIcon(window_icon("min", color))
         self.buttons["Close"].setIcon(window_icon("close", color))
         self.set_maximized(self._maximized)
