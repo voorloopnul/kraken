@@ -27,6 +27,20 @@ def _load():
             "nemo-parakeet-tdt-0.6b-v2",
             path=str(PARAKEET.directory),
             quantization="int8",
+            # CPU only, which on this machine is the fast path. Left to choose,
+            # onnxruntime puts CoreML first on a Mac, and CoreML cannot take an
+            # int8 graph whole: it claimed 1528 of the encoder's 3249 nodes and
+            # split what was left into 319 partitions, each boundary a copy
+            # back and forth. Measured on an M-series laptop, that made loading
+            # 3.02s against 0.64s and a six-second clip 0.29s against 0.14s —
+            # the accelerator costing twice the time it saved. It is also where
+            # every CoreML warning and "Context leak detected" line in the
+            # app's output came from; without it the log is quiet.
+            #
+            # Worth re-measuring if the model stops being quantized, or if the
+            # dependency ever moves off onnxruntime's CPU build (pyproject asks
+            # for onnx-asr[cpu]) — this list would then also exclude a GPU.
+            providers=["CPUExecutionProvider"],
         )
     return _model
 
