@@ -160,13 +160,22 @@ class Card(QFrame):
     effect makes Qt render the subtree through a cached pixmap, freezing
     Chromium's composited output — the page looks unresponsive even though
     input still reaches it. It matters again for a card that needs an effect of
-    its own (the diff viewer fades one), since a widget gets only one."""
+    its own (the diff viewer fades one), since a widget gets only one.
 
-    def __init__(self, parent: QWidget | None = None, shadow: bool = True):
+    `flat=True` makes it a surface instead: the same background, but no border,
+    no radius and no shadow, for a card that meets its neighbours edge to edge
+    and lets the divider between them draw the only line. It implies
+    `shadow=False` — an effect on a full-bleed surface has nowhere to fall.
+    """
+
+    def __init__(
+        self, parent: QWidget | None = None, shadow: bool = True, flat: bool = False
+    ):
         super().__init__(parent)
         self.setObjectName("card")
+        self._flat = flat
         self.set_colors("#%02X%02X%02X" % LIGHT.background, "#e0e0e0")
-        if shadow:
+        if shadow and not flat:
             effect = QGraphicsDropShadowEffect(self)
             effect.setBlurRadius(12)
             effect.setOffset(0, 2)
@@ -177,6 +186,9 @@ class Card(QFrame):
         self._layout.setContentsMargins(12, 12, 12, 12)
 
     def set_colors(self, background: str, border: str) -> None:
+        if self._flat:
+            self.setStyleSheet(f"#card {{ background: {background}; border: none; }}")
+            return
         self.setStyleSheet(
             "#card {"
             f" background: {background};"

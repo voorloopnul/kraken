@@ -19,7 +19,7 @@ class BrowserPanel(Panel):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        self._card = Card(shadow=False)
+        self._card = Card(flat=True)
         self._theme_name = DEFAULT_THEME
         self.browsers = None
         self._creating = False

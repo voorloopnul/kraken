@@ -80,17 +80,25 @@ DEFAULT_THEME = LIGHT.name
 
 # Application chrome per theme: window background, cards, and plain text.
 # Card backgrounds match the terminal backgrounds so the right panel blends.
+#
+# The sidebar is the exception to the card treatment: it is a surface rather
+# than an object on one, so it carries a background of its own and no border at
+# all — the line beside it belongs to the dock's divider. The offset runs the
+# same direction in both themes: a shade off the cards it sits beside, never
+# far enough to read as a separate window.
 UI_COLORS: dict[str, dict[str, str]] = {
     "dark": {
         "window": "#1f2127",
         "card": "#%02X%02X%02X" % DARK.background,
         "card_border": "#3a3f4a",
+        "sidebar": "#23252b",
         "text": "#c8cad0",
     },
     "light": {
         "window": "#faf6ec",
         "card": "#%02X%02X%02X" % LIGHT.background,
         "card_border": "#e0e0e0",
+        "sidebar": "#f5f4f1",
         "text": "#383a42",
     },
 }

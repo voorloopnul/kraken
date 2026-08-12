@@ -52,58 +52,68 @@ _HEADER_COLORS = {
     "dark": {"grip": "#5a5d65", "hover": "#2c2e35"},
     "light": {"grip": "#a9acb4", "hover": "#ececef"},
 }
-_GRIP_COLORS = {"dark": "#3a3d45", "light": "#c9c4b4"}
+# The divider between two panels is the border they no longer draw themselves,
+# so it is the same colour a card's border would have been. The handle carrying
+# it is wider than the line, and fills the rest with the panel surface so the
+# two panels read as one surface split by a border rather than as two with a
+# gutter between them.
+_GRIP_COLORS = {name: ui["card_border"] for name, ui in UI_COLORS.items()}
+_SURFACE_COLORS = {name: ui["card"] for name, ui in UI_COLORS.items()}
 # Drop indicator: a translucent fill with a solid accent border.
 _DROP_FILL = QColor(79, 131, 224, 60)
 _DROP_BORDER = QColor(79, 131, 224, 220)
 
 
 class _GripHandle(QSplitterHandle):
-    """A splitter handle that paints a short rounded grip bar; the stock dotted
-    handle nearly vanishes against the light theme's background."""
+    """A splitter handle that paints the divider between two panels: a single
+    hairline down its middle, in the same colour a panel would have used for a
+    border of its own.
 
-    _LENGTH = 36.0
-    _THICKNESS = 12.0
-    # The bar is a hint, not furniture: wide enough to grab, faint enough to
-    # read as part of the gap between the cards.
-    _OPACITY = 0.10
+    The handle is wider than the line it draws. A 1px handle is the honest
+    width for the look and far too small a target to grab, so the rest is
+    filled with the panel surface: the divider reads as a border between two
+    halves of one surface, not as a gutter of window colour with a line in
+    it."""
+
+    _LINE = 1.0
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setOpacity(self._OPACITY)
         painter.setPen(Qt.PenStyle.NoPen)
+        painter.fillRect(self.rect(), self.splitter().surface_color)
         painter.setBrush(self.splitter().grip_color)
         if self.orientation() == Qt.Orientation.Horizontal:
             rect = QRectF(
-                (self.width() - self._THICKNESS) / 2,
-                (self.height() - self._LENGTH) / 2,
-                self._THICKNESS,
-                self._LENGTH,
+                (self.width() - self._LINE) / 2, 0.0, self._LINE, float(self.height())
             )
         else:
             rect = QRectF(
-                (self.width() - self._LENGTH) / 2,
-                (self.height() - self._THICKNESS) / 2,
-                self._LENGTH,
-                self._THICKNESS,
+                0.0, (self.height() - self._LINE) / 2, float(self.width()), self._LINE
             )
-        painter.drawRoundedRect(rect, self._THICKNESS / 2, self._THICKNESS / 2)
+        painter.drawRect(rect)
 
 
 class _GripSplitter(QSplitter):
-    """Splitter whose handles paint a visible grip bar (see _GripHandle)."""
+    """Splitter whose handles paint the divider between panels (see
+    _GripHandle)."""
+
+    # Wide enough to grab, narrow enough that the hairline it carries still
+    # reads as a border rather than a gutter.
+    _HANDLE = 5
 
     def __init__(self, orientation: Qt.Orientation, parent: QWidget | None = None):
         super().__init__(orientation, parent)
         self.grip_color = QColor(_GRIP_COLORS[DEFAULT_THEME])
-        # The bar fills the handle exactly; the only gap to the panel cards is
-        # the 2px margin Panel keeps around its card.
-        self.setHandleWidth(12)
+        self.surface_color = QColor(_SURFACE_COLORS[DEFAULT_THEME])
+        self.setHandleWidth(self._HANDLE)
         self.setChildrenCollapsible(False)
 
-    def set_grip_color(self, color: str) -> None:
-        self.grip_color = QColor(color)
+    def set_grip_color(self, name: str) -> None:
+        """Recolor the dividers for a theme, by name — the handle needs both
+        the line and the surface it sits in, so it takes the theme rather than
+        a single colour."""
+        self.grip_color = QColor(_GRIP_COLORS[name])
+        self.surface_color = QColor(_SURFACE_COLORS[name])
         for i in range(1, self.count()):
             self.handle(i).update()
 
@@ -288,10 +298,10 @@ class DockArea(QWidget):
 
         self._splitter = _GripSplitter(Qt.Orientation.Horizontal)
         layout = QVBoxLayout(self)
-        # Clear the surrounding chrome (top bar, workspace bar, side bar): with
-        # Panel's own 2px margin this leaves 10px of breathing room all round,
-        # while panels inside the dock stay tight against their grips.
-        layout.setContentsMargins(8, 8, 8, 8)
+        # No inset anywhere: panels are surfaces that run to the window's edges
+        # and to each other, divided by the hairline their splitter handle
+        # paints rather than by a gutter of window colour.
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._splitter)
 
         self._overlay = _DropOverlay(self)
@@ -437,8 +447,8 @@ class DockArea(QWidget):
         for i, column in enumerate(columns):
             keys = [p.key for p in column.panels()]
             self._splitter.setStretchFactor(i, 1 if self._stretch_key in keys else 0)
-            column.set_grip_color(_GRIP_COLORS[self._theme_name])
-        self._splitter.set_grip_color(_GRIP_COLORS[self._theme_name])
+            column.set_grip_color(self._theme_name)
+        self._splitter.set_grip_color(self._theme_name)
 
         active = [c for c in columns if self._column_has_shown(c)]
         if not active:
@@ -614,9 +624,8 @@ class DockArea(QWidget):
             f"QSplitter {{ background: {ui['window']}; }}"
             f" QLabel {{ color: {ui['text']}; }}"
         )
-        grip = _GRIP_COLORS[name]
-        self._splitter.set_grip_color(grip)
+        self._splitter.set_grip_color(name)
         for column in self._columns():
-            column.set_grip_color(grip)
+            column.set_grip_color(name)
         for panel in self._panels.values():
             panel.set_theme(name)

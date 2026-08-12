@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
 )
 
 from kraken.shell.panels.base import Panel, _dot_icon
-from kraken.ui.chrome import Card
 from kraken.ui.fonts import UI_SANS_FAMILY
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 
@@ -173,7 +172,15 @@ class LeftPanel(Panel):
     def __init__(self, parent: QWidget | None = None, cwd: str | None = None):
         super().__init__(parent)
         self._cwd = cwd
-        self._card = Card()
+        # A surface, not a card: the panel paints its own background out to its
+        # edges, so it reads as part of the window rather than as something
+        # resting on it. The hairline separating it from the conversation is
+        # the dock's divider, the same one between any two panels — drawing a
+        # border here too would double it.
+        self.setObjectName("sidebar")
+        # QWidget subclasses ignore stylesheet backgrounds without this.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._layout.setContentsMargins(12, 12, 12, 12)
         # The History pane uses the proportional Roboto face rather than the
         # app-wide mono. The delegate paints rows from the list's own font, so
         # setting an explicit pixel size here (not just in the stylesheet) is
@@ -210,9 +217,8 @@ class LeftPanel(Panel):
         self._live: list[tuple[str, str, str | None, bool]] = []
         self._running_icon = _dot_icon("#e0a030")
         self._unseen_icon = _dot_icon("#2ea043")
-        self._card.add_widget(self._new_button)
-        self._card.add_widget(self._list, stretch=1)
-        self.add_widget(self._card, stretch=1)
+        self.add_widget(self._new_button)
+        self.add_widget(self._list, stretch=1)
         self.refresh()
 
     def refresh(self) -> None:
@@ -343,7 +349,7 @@ class LeftPanel(Panel):
 
     def set_theme(self, name: str) -> None:
         ui = UI_COLORS[name]
-        self._card.set_colors(ui["card"], ui["card_border"])
+        self.setStyleSheet(f"#sidebar {{ background: {ui['sidebar']}; }}")
         self._list.setStyleSheet(_HISTORY_STYLES[name])
         self._new_button.setStyleSheet(_NEW_SESSION_STYLES[name])
         # The delegate paints the row text, so it needs the new colors too;

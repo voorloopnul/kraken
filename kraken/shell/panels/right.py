@@ -26,7 +26,7 @@ class RightPanel(Panel):
         remote: "RemoteTarget | None" = None,
     ):
         super().__init__(parent)
-        self._card = Card()
+        self._card = Card(flat=True)
         self._theme_name = DEFAULT_THEME
         self._cwd = cwd
         self._remote = remote

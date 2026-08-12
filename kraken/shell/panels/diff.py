@@ -215,7 +215,7 @@ class DiffPanel(Panel):
         # (see _on_item_chosen), and until it lands there is no sheet to refuse
         # a second one.
         self._opening = False
-        self._card = Card()
+        self._card = Card(flat=True)
 
         # The refresh button lives in the dock's drag-grip row (see
         # WorkspaceView), which is mounted as the card's top header.

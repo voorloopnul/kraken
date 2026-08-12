@@ -29,7 +29,10 @@ class Panel(QWidget):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(2, 2, 2, 2)
+        # Panels meet each other and the window edges directly; the only line
+        # between two of them is the divider the dock's splitter paints, so a
+        # margin here would open a gap of window colour beside it.
+        self._layout.setContentsMargins(0, 0, 0, 0)
 
     def add_widget(self, widget: QWidget, stretch: int = 0) -> None:
         self._layout.addWidget(widget, stretch)

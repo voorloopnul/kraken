@@ -120,7 +120,7 @@ class GitPanel(Panel):
         # finished after a newer one started) is discarded rather than rendered.
         self._refresh_gen = 0
         self._theme_name = DEFAULT_THEME
-        self._card = Card()
+        self._card = Card(flat=True)
 
         # The refresh button lives in the dock's drag-grip row (see
         # WorkspaceView), which is mounted as the card's top header.
