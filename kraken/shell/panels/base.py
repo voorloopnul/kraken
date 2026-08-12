@@ -26,6 +26,13 @@ def _dot_icon(color: str) -> QIcon:
 class Panel(QWidget):
     """Base panel: a container with a vertical layout to add widgets to."""
 
+    # Which UI_COLORS key paints this panel's surface. The dock's dividers read
+    # it to fill themselves with the surfaces they actually sit between: a
+    # divider is a border shared by two panels, and one that assumed every
+    # panel were a card would show a stripe of card colour against any panel
+    # that is not one.
+    SURFACE_KEY = "card"
+
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._layout = QVBoxLayout(self)

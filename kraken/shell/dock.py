@@ -54,11 +54,29 @@ _HEADER_COLORS = {
 }
 # The divider between two panels is the border they no longer draw themselves,
 # so it is the same colour a card's border would have been. The handle carrying
-# it is wider than the line, and fills the rest with the panel surface so the
-# two panels read as one surface split by a border rather than as two with a
-# gutter between them.
+# it is wider than the line and fills the rest with the surfaces on either
+# side, so the two panels read as one surface split by a border rather than as
+# two with a gutter between them.
 _GRIP_COLORS = {name: ui["card_border"] for name, ui in UI_COLORS.items()}
-_SURFACE_COLORS = {name: ui["card"] for name, ui in UI_COLORS.items()}
+
+
+def _surface_key(widget: QWidget | None) -> str:
+    """Which UI_COLORS key paints the surface at `widget`'s edge.
+
+    A column is answered for by the topmost panel in it. Only one panel is not
+    a card, and it is a fixed anchor that never stacks, so the two can only
+    disagree in a layout the dock does not allow."""
+    if isinstance(widget, _DockColumn):
+        # isVisibleTo rather than isVisible: this is asked during theming too,
+        # before the window is first shown, and isVisible answers False for
+        # every widget in a window that is not on screen yet. What has to be
+        # skipped here is a panel the dock has hidden, which is the narrower
+        # question isVisibleTo answers.
+        shown = [panel for panel in widget.panels() if panel.isVisibleTo(widget)]
+        widget = shown[0] if shown else None
+    if isinstance(widget, DockPanel):
+        return getattr(widget.content, "SURFACE_KEY", "card")
+    return "card"
 # Drop indicator: a translucent fill with a solid accent border.
 _DROP_FILL = QColor(79, 131, 224, 60)
 _DROP_BORDER = QColor(79, 131, 224, 220)
@@ -72,25 +90,46 @@ class _GripHandle(QSplitterHandle):
     The handle is wider than the line it draws. A 1px handle is the honest
     width for the look and far too small a target to grab, so the rest is
     filled with the panel surface: the divider reads as a border between two
-    halves of one surface, not as a gutter of window colour with a line in
-    it."""
+    halves of one surface, not as a gutter of window colour with a line in it.
+
+    Each side is filled with its own neighbour's colour rather than with one
+    colour for both. The panels are not all the same surface — the history
+    sidebar is a shade off the cards — so a single fill put a stripe of card
+    colour against the sidebar, which is the gutter this was meant to remove.
+    """
 
     _LINE = 1.0
 
     def paintEvent(self, event) -> None:
+        splitter = self.splitter()
+        before, after = splitter.neighbours(self)
         painter = QPainter(self)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.fillRect(self.rect(), self.splitter().surface_color)
-        painter.setBrush(self.splitter().grip_color)
+        width, height = self.width(), self.height()
         if self.orientation() == Qt.Orientation.Horizontal:
-            rect = QRectF(
-                (self.width() - self._LINE) / 2, 0.0, self._LINE, float(self.height())
+            middle = width / 2
+            painter.fillRect(
+                QRectF(0.0, 0.0, middle, float(height)),
+                splitter.surface_color(before),
             )
+            painter.fillRect(
+                QRectF(middle, 0.0, width - middle, float(height)),
+                splitter.surface_color(after),
+            )
+            line = QRectF((width - self._LINE) / 2, 0.0, self._LINE, float(height))
         else:
-            rect = QRectF(
-                0.0, (self.height() - self._LINE) / 2, float(self.width()), self._LINE
+            middle = height / 2
+            painter.fillRect(
+                QRectF(0.0, 0.0, float(width), middle),
+                splitter.surface_color(before),
             )
-        painter.drawRect(rect)
+            painter.fillRect(
+                QRectF(0.0, middle, float(width), height - middle),
+                splitter.surface_color(after),
+            )
+            line = QRectF(0.0, (height - self._LINE) / 2, float(width), self._LINE)
+        painter.setBrush(splitter.grip_color)
+        painter.drawRect(line)
 
 
 class _GripSplitter(QSplitter):
@@ -103,19 +142,32 @@ class _GripSplitter(QSplitter):
 
     def __init__(self, orientation: Qt.Orientation, parent: QWidget | None = None):
         super().__init__(orientation, parent)
+        self._theme_name = DEFAULT_THEME
         self.grip_color = QColor(_GRIP_COLORS[DEFAULT_THEME])
-        self.surface_color = QColor(_SURFACE_COLORS[DEFAULT_THEME])
         self.setHandleWidth(self._HANDLE)
         self.setChildrenCollapsible(False)
 
     def set_grip_color(self, name: str) -> None:
-        """Recolor the dividers for a theme, by name — the handle needs both
-        the line and the surface it sits in, so it takes the theme rather than
-        a single colour."""
+        """Recolor the dividers for a theme, by name — a handle needs the line
+        and both the surfaces it sits between, so it takes the theme rather
+        than a single colour."""
+        self._theme_name = name
         self.grip_color = QColor(_GRIP_COLORS[name])
-        self.surface_color = QColor(_SURFACE_COLORS[name])
         for i in range(1, self.count()):
             self.handle(i).update()
+
+    def surface_color(self, widget: QWidget | None) -> QColor:
+        """The colour `widget` paints itself, for a divider to continue."""
+        return QColor(UI_COLORS[self._theme_name][_surface_key(widget)])
+
+    def neighbours(self, handle: QSplitterHandle) -> tuple[QWidget | None, QWidget | None]:
+        """The two widgets a handle sits between. QSplitter numbers handle `i`
+        as the one before widget `i` but gives a handle no way to ask its own
+        index, so it is found by identity."""
+        for i in range(1, self.count()):
+            if self.handle(i) is handle:
+                return self.widget(i - 1), self.widget(i)
+        return None, None
 
     def createHandle(self) -> QSplitterHandle:
         return _GripHandle(self.orientation(), self)

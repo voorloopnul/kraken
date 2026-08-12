@@ -169,6 +169,9 @@ class LeftPanel(Panel):
     new_session_requested = Signal()
     session_removed = Signal(str)  # a session's path was archived or deleted
 
+    # The one panel that is not a card; the divider beside it has to match.
+    SURFACE_KEY = "sidebar"
+
     def __init__(self, parent: QWidget | None = None, cwd: str | None = None):
         super().__init__(parent)
         self._cwd = cwd
