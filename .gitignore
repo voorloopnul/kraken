@@ -25,3 +25,6 @@ vendor/JetBrainsMono-*.zip
 # Debug logs. `--debug` writes to ~/.kraken/logs by default, but it takes a
 # path, and running from a checkout puts that path here (see DEBUG.md)
 *.log
+
+# macOS Finder metadata
+.DS_Store
