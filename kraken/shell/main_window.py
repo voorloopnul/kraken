@@ -223,7 +223,7 @@ class MainWindow(QMainWindow):
         self.workspace_bar.workspace_remove_requested.connect(self._remove_workspace)
         self.title_bar = TitleBar()
         self.title_bar.buttons["Minimize"].clicked.connect(self.showMinimized)
-        self.title_bar.buttons["Maximize"].clicked.connect(self._toggle_maximized)
+        self.title_bar.buttons["Maximize"].clicked.connect(self._toggle_fullscreen)
         self.title_bar.buttons["Close"].clicked.connect(self.close)
         self.title_bar.branch_changed.connect(self._on_branch_switched)
 
@@ -306,10 +306,10 @@ class MainWindow(QMainWindow):
         self.title_bar.left_panel_toggle.setVisible(on_workspace)
 
     def _corner_radius(self) -> int:
-        """The window's corner radius as things stand. A maximized window is
-        square: there is nothing beside it to round against, and a gap at the
-        screen's own corner reads as a glitch."""
-        return 0 if self.isMaximized() else WINDOW_RADIUS
+        """The window's corner radius as things stand. A window filling the
+        display is square: there is nothing beside it to round against, and a
+        gap at the screen's own corner reads as a glitch."""
+        return 0 if self._fills_screen() else WINDOW_RADIUS
 
     def _apply_corners(self) -> None:
         """Push the radius into the widgets that own the window's corners — each
@@ -685,11 +685,25 @@ class MainWindow(QMainWindow):
         if view.diff_panel.isVisible():
             view.diff_panel.refresh()
 
-    def _toggle_maximized(self) -> None:
-        if self.isMaximized():
+    def _fills_screen(self) -> bool:
+        """Whether the window is covering the display, by either route.
+
+        Zoom and full screen are different states to Qt — isMaximized() is
+        False in full screen — but everything that reacts to the window
+        filling the display wants them both."""
+        return self.isMaximized() or self.isFullScreen()
+
+    def _toggle_fullscreen(self) -> None:
+        """The zoom light: full screen, as the platform's own green button is.
+
+        Not showMaximized, which is the *other* thing that button can do:
+        zoom fits the window to the space left between the menu bar and the
+        dock, and leaves both of them on screen. Zoom is still reachable by
+        double-clicking the bar, which is where the platform keeps it too."""
+        if self.isFullScreen():
             self.showNormal()
         else:
-            self.showMaximized()
+            self.showFullScreen()
 
     def changeEvent(self, event) -> None:
         # Keep the title bar's maximize/restore glyph in sync however the
@@ -698,11 +712,16 @@ class MainWindow(QMainWindow):
         # maximized. State changes do arrive mid-__init__, so the guard names the
         # last of the three to be built rather than the first.
         if event.type() == QEvent.Type.WindowStateChange and hasattr(self, "_grips"):
-            debug.action("window.state", maximized=self.isMaximized())
-            self.title_bar.set_maximized(self.isMaximized())
+            filled = self._fills_screen()
+            debug.action(
+                "window.state",
+                maximized=self.isMaximized(),
+                fullscreen=self.isFullScreen(),
+            )
+            self.title_bar.set_maximized(filled)
             self._apply_corners()
             for grip in self._grips:
-                grip.setVisible(not self.isMaximized())
+                grip.setVisible(not filled)
         super().changeEvent(event)
 
     def resizeEvent(self, event) -> None:
