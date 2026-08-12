@@ -1,9 +1,9 @@
-"""Custom window decoration bar replacing the native title bar: workspace
-folder and a git branch switcher on the left, the focused conversation's
-title in the center, and memory usage plus the minimize/maximize/close
-buttons on the right. Dragging the bar moves the window; double-clicking
-toggles maximize. Shares the side bar's background so the chrome reads as
-one surface."""
+"""Custom window decoration bar replacing the native title bar: the window's
+close/minimize/zoom lights at the far left, then the History toggle, the
+workspace folder and a git branch switcher; the focused conversation's title
+in the center; memory usage on the right. Dragging the bar moves the window;
+double-clicking toggles maximize. Shares the side bar's background so the
+chrome reads as one surface."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -26,14 +26,15 @@ from kraken import debug
 from kraken.debug import format_bytes, process_tree_rss
 from kraken.shell.async_run import run_async
 from kraken.ui.chrome import corner_style
-from kraken.ui.icons import icon
+from kraken.ui.icons import icon, paint as paint_icon
 from kraken.ui.themes import DEFAULT_THEME
 
 if TYPE_CHECKING:
     from kraken.agent.remote import RemoteTarget
 
-# The bare QToolButton rules style the circular window buttons; the branch
-# switcher opts out via its id selector.
+# The bare QToolButton rules are a leftover of the window buttons having been
+# grey circles; the traffic lights that replaced them paint themselves, so they
+# opt out along with the branch switcher and the panel toggle.
 _STYLES = {
     "dark": """
 #titleBar { background: #1b1c21; border-bottom: 1px solid #33353c; }
@@ -48,6 +49,8 @@ QToolButton:hover { background: #3a3d45; }
 #panelButton { background: transparent; border-radius: 6px; }
 #panelButton:hover { background: #2c2e35; }
 #panelButton:checked { background: #26282e; }
+#trafficLight { background: transparent; border: none; border-radius: 0; }
+#trafficLight:hover { background: transparent; }
 """,
     "light": """
 #titleBar { background: #fafafa; border-bottom: 1px solid #e0e0e0; }
@@ -62,6 +65,8 @@ QToolButton:hover { background: #dcdce1; }
 #panelButton { background: transparent; border-radius: 6px; }
 #panelButton:hover { background: #e8e8ec; }
 #panelButton:checked { background: #e0e0e5; }
+#trafficLight { background: transparent; border: none; border-radius: 0; }
+#trafficLight:hover { background: transparent; }
 """,
 }
 
@@ -100,15 +105,58 @@ def git_branch(path: str) -> str:
 # label and the log from disagreeing.
 
 
-# The window's own buttons, whose glyphs are smaller than the rest of the
-# chrome's icons and are asked for by role rather than by name.
-_WINDOW_ICONS = {"min": "minus", "max": "square", "restore": "copy", "close": "x"}
-_WINDOW_ICON_SIZE = 12
+# The window's own buttons are the platform's traffic lights: a filled circle
+# each, carrying its glyph only while the pointer is over the group. The colours
+# are the same in both themes, as macOS's are — they are the one piece of chrome
+# that reads as the window rather than as the app.
+_TRAFFIC_SIZE = 12
+_TRAFFIC = {
+    "close": ("#ff5f57", "#6b0500", "x"),
+    "min": ("#febc2e", "#7d4900", "minus"),
+    "max": ("#28c840", "#0a5c14", "maximize-2"),
+    # The green light says what the click will do, so it inverts once the
+    # window is already filling the screen.
+    "restore": ("#28c840", "#0a5c14", "minimize-2"),
+}
+# The glyph sits inside the circle rather than filling it.
+_TRAFFIC_GLYPH_SCALE = 0.62
 
 
-def window_icon(kind: str, color: str) -> QIcon:
-    """Minimize / maximize / restore / close glyph."""
-    return icon(_WINDOW_ICONS[kind], color, _WINDOW_ICON_SIZE)
+def window_icon(kind: str, hovered: bool = False) -> QIcon:
+    """One traffic light: its circle, and its glyph when `hovered`."""
+    fill, glyph_color, glyph = _TRAFFIC[kind]
+    scale = 2.0
+    pixmap = QPixmap(int(_TRAFFIC_SIZE * scale), int(_TRAFFIC_SIZE * scale))
+    pixmap.setDevicePixelRatio(scale)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(fill))
+    painter.drawEllipse(QRectF(0, 0, _TRAFFIC_SIZE, _TRAFFIC_SIZE))
+    if hovered:
+        inner = _TRAFFIC_SIZE * _TRAFFIC_GLYPH_SCALE
+        offset = (_TRAFFIC_SIZE - inner) / 2
+        paint_icon(painter, QRectF(offset, offset, inner, inner), glyph, glyph_color)
+    painter.end()
+    return QIcon(pixmap)
+
+
+class _TrafficLight(QToolButton):
+    """A window button that reports the pointer entering and leaving it.
+
+    The three light up together, as the platform's do: hovering any one of
+    them shows the glyphs on all three, so the group reads as one control."""
+
+    hovered = Signal(bool)
+
+    def enterEvent(self, event) -> None:
+        super().enterEvent(event)
+        self.hovered.emit(True)
+
+    def leaveEvent(self, event) -> None:
+        super().leaveEvent(event)
+        self.hovered.emit(False)
 
 
 class TitleBar(QWidget):
@@ -168,18 +216,31 @@ class TitleBar(QWidget):
         self.memory_label = QLabel()
         self.memory_label.setObjectName("memoryLabel")
 
+        # Whether the pointer is over any of the three, which is what decides
+        # if the glyphs are showing.
+        self._traffic_hovered = False
         self.buttons: dict[str, QToolButton] = {}
-        for name in ("Minimize", "Maximize", "Close"):
-            btn = QToolButton()
+        for name in ("Close", "Minimize", "Maximize"):
+            btn = _TrafficLight()
+            btn.setObjectName("trafficLight")
             btn.setToolTip(name)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedSize(22, 22)
-            btn.setIconSize(QSize(12, 12))
+            btn.setFixedSize(_TRAFFIC_SIZE, _TRAFFIC_SIZE)
+            btn.setIconSize(QSize(_TRAFFIC_SIZE, _TRAFFIC_SIZE))
+            btn.hovered.connect(self._on_traffic_hover)
             self.buttons[name] = btn
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 0, 8, 0)
+        # The lights sit further from the left edge than the rest of the bar's
+        # contents: they are what the window's rounded corner curves around.
+        layout.setContentsMargins(14, 0, 8, 0)
         layout.setSpacing(6)
+        # Close, minimize, zoom — the platform's order, at the platform's
+        # spacing, which is wider than this bar's own.
+        for name in ("Close", "Minimize", "Maximize"):
+            layout.addWidget(self.buttons[name])
+            layout.addSpacing(2)
+        layout.addSpacing(8)
         layout.addWidget(self.left_panel_toggle)
         layout.addWidget(self.folder_label)
         layout.addSpacing(4)
@@ -188,9 +249,6 @@ class TitleBar(QWidget):
         layout.addWidget(self.conversation_label)
         layout.addStretch(1)
         layout.addWidget(self.memory_label)
-        layout.addSpacing(6)
-        for btn in self.buttons.values():
-            layout.addWidget(btn)
 
         # One slow tick keeps the live readouts fresh: memory always drifts,
         # and the branch can change under us (checkout in a terminal).
@@ -226,12 +284,27 @@ class TitleBar(QWidget):
         )
 
     def set_maximized(self, maximized: bool) -> None:
-        """Swap the maximize button's glyph to "restore" while maximized."""
+        """Swap the zoom light's glyph to "restore" while maximized."""
         self._maximized = maximized
-        color = _ICON_COLORS[self._theme_name]
-        kind = "restore" if maximized else "max"
-        self.buttons["Maximize"].setIcon(window_icon(kind, color))
+        self._refresh_traffic()
         self.buttons["Maximize"].setToolTip("Restore" if maximized else "Maximize")
+
+    def _on_traffic_hover(self, hovered: bool) -> None:
+        if hovered == self._traffic_hovered:
+            return
+        self._traffic_hovered = hovered
+        self._refresh_traffic()
+
+    def _refresh_traffic(self) -> None:
+        """Repaint all three lights. They show their glyphs together, so a
+        pointer entering any one of them redraws the group."""
+        kinds = {
+            "Close": "close",
+            "Minimize": "min",
+            "Maximize": "restore" if self._maximized else "max",
+        }
+        for name, kind in kinds.items():
+            self.buttons[name].setIcon(window_icon(kind, self._traffic_hovered))
 
     def _refresh(self) -> None:
         self.memory_label.setText(format_bytes(process_tree_rss()))
@@ -414,6 +487,6 @@ class TitleBar(QWidget):
         color = _ICON_COLORS[name]
         self.branch_button.setIcon(icon("git-branch", color, 16))
         self.left_panel_toggle.setIcon(icon("panel-left", color, 16))
-        self.buttons["Minimize"].setIcon(window_icon("min", color))
-        self.buttons["Close"].setIcon(window_icon("close", color))
+        # The lights carry no theme colour of their own, but the maximized
+        # state still has to be re-applied here.
         self.set_maximized(self._maximized)

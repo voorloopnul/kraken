@@ -27,8 +27,8 @@ from PySide6.QtWidgets import (
 )
 
 from kraken.shell.settings_page import label
-from kraken.shell.title_bar import window_icon
 from kraken.ui.chrome import WINDOW_RADIUS, corner_style, edge_grips, place_edge_grips
+from kraken.ui.icons import icon
 
 # Height of our title bar, matching the main window's so every window of the
 # app reads as the same piece of chrome.
@@ -214,9 +214,10 @@ class FramedDialog(QDialog):
         """Dress the window in `theme_name`, with the subclass's own rules
         appended so they can override the shared ones."""
         self.setStyleSheet(CHROME[theme_name] + FORM[theme_name] + SHAPE + extra)
-        self.title_bar.close_button.setIcon(
-            window_icon("close", ICON_COLORS[theme_name])
-        )
+        # A plain glyph, not one of the window's traffic lights: a dialog's
+        # close button is a tinted circle of its own (see #dialogClose), and a
+        # coloured light inside it would be a circle within a circle.
+        self.title_bar.close_button.setIcon(icon("x", ICON_COLORS[theme_name], 12))
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)

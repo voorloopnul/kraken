@@ -41,19 +41,35 @@ def _source(name: str) -> bytes:
 
 
 @lru_cache(maxsize=None)
+def _renderer(name: str, color: str) -> QSvgRenderer:
+    """A renderer for `name` in `color`. Cached with the parsed document, which
+    is the expensive half of drawing one of these."""
+    return QSvgRenderer(QByteArray(_source(name).replace(b"currentColor", color.encode())))
+
+
+def paint(painter: QPainter, rect: QRectF, name: str, color: str) -> None:
+    """Draw an icon into `rect` of a painter that is already going.
+
+    For an icon that lands on top of something else drawn here — the glyph
+    inside a window button, say. Going through a pixmap would rasterize the
+    glyph at its own small size and then scale that into place; this keeps it
+    vector all the way down, which at a handful of pixels across is the
+    difference between a glyph and a smudge."""
+    _renderer(name, color).render(painter, rect)
+
+
+@lru_cache(maxsize=None)
 def icon(name: str, color: str, size: int = 18) -> QIcon:
     """A Lucide icon in `color`, sized for a button that asks for `size`.
 
     Cached: a theme change rebuilds every icon in the window at once, and the
     same handful of (name, colour, size) triples come back each time."""
-    svg = _source(name).replace(b"currentColor", color.encode())
-    renderer = QSvgRenderer(QByteArray(svg))
     pixmap = QPixmap(int(size * _SCALE), int(size * _SCALE))
     pixmap.setDevicePixelRatio(_SCALE)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     # In logical coordinates: the pixmap's ratio already scales the painter.
-    renderer.render(painter, QRectF(0, 0, size, size))
+    paint(painter, QRectF(0, 0, size, size), name, color)
     painter.end()
     return QIcon(pixmap)
