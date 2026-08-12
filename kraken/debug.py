@@ -79,17 +79,26 @@ _last_action_at = 0.0  # monotonic time of the last action, for `idle=`
 # Process metrics
 #
 # Linux reads all four numbers straight out of /proc. macOS has no /proc, so
-# each one has a darwin path below: memory comes from a single `ps` (cached for
-# the moment it takes to build one record, since a record wants two readings
-# from it), and the fd and thread counts from libproc, asked how large a buffer
-# it would need rather than for the buffer itself — the count is the answer,
-# and no struct has to be laid out in ctypes to get it.
+# each one has a darwin path below. Three of the four come from libproc, which
+# answers about this process without leaving it: PROC_PIDTASKINFO carries both
+# the resident size and the thread count, and PROC_PIDLISTFDS the open
+# descriptors. Only the tree needs the whole process table, and only that
+# forks a `ps`.
+#
+# Both libproc calls are made with a real buffer. Asking with a null one
+# returns how much space the answer *could* need rather than how much it takes
+# — for the fd list that is the table's capacity plus slop, nearly double the
+# truth, and for threads it is not answered at all.
 # ---------------------------------------------------------------------------
 
 _PROC_PIDLISTFDS = 1  # entries are struct proc_fdinfo: two 32-bit fields
-_PROC_PIDLISTTHREADS = 6  # entries are uint64 thread ids
-_PS_CACHE_SECONDS = 0.25
-_ps_cache: tuple[float, dict[int, tuple[int, int]]] = (0.0, {})
+_PROC_FDINFO_SIZE = 8
+_PROC_PIDTASKINFO = 4  # one struct proc_taskinfo
+# Read out by offset rather than laid out in ctypes: the struct is 18 fields of
+# a stable public ABI, and exactly two of them are wanted here.
+_TASKINFO_SIZE = 96
+_TASKINFO_RSS = (8, 16)  # pti_resident_size, uint64
+_TASKINFO_THREADS = (84, 88)  # pti_threadnum, int32
 _libproc: ctypes.CDLL | None = None
 _libproc_looked_up = False
 
@@ -97,15 +106,14 @@ _libproc_looked_up = False
 def _ps_table() -> dict[int, tuple[int, int]]:
     """pid -> (ppid, rss in bytes) for every visible process, from one `ps`.
 
-    Cached for a fraction of a second so that a single log record — which wants
-    this process's RSS and the whole tree's — costs one subprocess, not two.
+    Read fresh each time. This was cached for a quarter second, back when one
+    record took two readings from it — but a cache outliving the gap between
+    two *records* made consecutive records report identical memory and a zero
+    delta, which is exactly the moment a spawn or a leak is what the log is
+    being read for. The readings a record wants no longer both come from here,
+    so there is one `ps` per record either way.
     """
-    global _ps_cache
-    now = time.monotonic()
-    stamp, table = _ps_cache
-    if table and now - stamp < _PS_CACHE_SECONDS:
-        return table
-    table = {}
+    table: dict[int, tuple[int, int]] = {}
     try:
         # Popen rather than run() so the reader's own pid is known: ps is our
         # child and lists itself, which would otherwise add a process and a
@@ -116,8 +124,20 @@ def _ps_table() -> dict[int, tuple[int, int]]:
             stderr=subprocess.DEVNULL,
             text=True,
         )
+    except OSError:
+        return table
+    try:
         out, _ = reader.communicate(timeout=5)
     except (OSError, subprocess.SubprocessError):
+        # Including TimeoutExpired, which leaves the child running: a `ps` that
+        # hung is still ours to kill and reap. Leaving it would leak the kind
+        # of process this module exists to notice, and the next reading would
+        # count it.
+        reader.kill()
+        try:
+            reader.communicate(timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            pass
         return table
     for line in out.splitlines():
         parts = line.split()
@@ -130,12 +150,11 @@ def _ps_table() -> dict[int, tuple[int, int]]:
         if pid == reader.pid:
             continue
         table[pid] = (ppid, rss * 1024)
-    _ps_cache = (now, table)
     return table
 
 
-def _proc_pidinfo_count(flavor: int, entry_size: int) -> int:
-    """How many entries proc_pidinfo would hand back for this process."""
+def _proc_pidinfo(flavor: int, buffer, size: int) -> int:
+    """Bytes proc_pidinfo wrote into `buffer` for this process."""
     global _libproc, _libproc_looked_up
     if not _libproc_looked_up:
         _libproc_looked_up = True
@@ -154,14 +173,31 @@ def _proc_pidinfo_count(flavor: int, entry_size: int) -> int:
             _libproc = None
     if _libproc is None:
         return 0
-    size = _libproc.proc_pidinfo(os.getpid(), flavor, 0, None, 0)
-    return size // entry_size if size > 0 else 0
+    return _libproc.proc_pidinfo(os.getpid(), flavor, 0, buffer, size)
+
+
+def _darwin_taskinfo() -> tuple[int, int]:
+    """(resident bytes, threads) for this process, in the one syscall that
+    carries both. Zeroes if libproc would not answer, which the callers read
+    as "ask something else"."""
+    buf = ctypes.create_string_buffer(_TASKINFO_SIZE)
+    if _proc_pidinfo(_PROC_PIDTASKINFO, buf, _TASKINFO_SIZE) < _TASKINFO_SIZE:
+        return 0, 0
+    raw = buf.raw
+    rss = int.from_bytes(raw[slice(*_TASKINFO_RSS)], sys.byteorder)
+    threads = int.from_bytes(
+        raw[slice(*_TASKINFO_THREADS)], sys.byteorder, signed=True
+    )
+    return rss, max(threads, 0)
 
 
 def process_rss() -> int:
     """Resident set size of this process alone, in bytes."""
     if _DARWIN:
-        return _ps_table().get(os.getpid(), (0, 0))[1]
+        # The `ps` table can answer this too, and did, but it costs a
+        # subprocess; libproc has the same number a syscall away. The table is
+        # still the fallback for a machine whose libproc would not load.
+        return _darwin_taskinfo()[0] or _ps_table().get(os.getpid(), (0, 0))[1]
     try:
         with open("/proc/self/status") as f:
             for line in f:
@@ -235,7 +271,17 @@ def open_fds() -> int:
     is its own kind of crash: PTYs, sockets and pipes all land here, and the
     app dies on EMFILE long after the leak started."""
     if _DARWIN:
-        return _proc_pidinfo_count(_PROC_PIDLISTFDS, 8)
+        # Sized, then filled. The sizing call reports the fd table's capacity
+        # plus slop rather than its occupancy — roughly double the truth, and
+        # growing in doubling steps, so a leak would sit invisible inside the
+        # slack until the table happened to grow. The bytes the second call
+        # writes are the descriptors that are actually open.
+        capacity = _proc_pidinfo(_PROC_PIDLISTFDS, None, 0)
+        if capacity <= 0:
+            return 0
+        buf = ctypes.create_string_buffer(capacity)
+        written = _proc_pidinfo(_PROC_PIDLISTFDS, buf, capacity)
+        return max(written, 0) // _PROC_FDINFO_SIZE
     try:
         return len(os.listdir("/proc/self/fd"))
     except OSError:
@@ -244,8 +290,7 @@ def open_fds() -> int:
 
 def thread_count() -> int:
     if _DARWIN:
-        count = _proc_pidinfo_count(_PROC_PIDLISTTHREADS, 8)
-        return count or _darwin_thread_count_from_ps()
+        return _darwin_taskinfo()[1] or _darwin_thread_count_from_ps()
     try:
         return len(os.listdir("/proc/self/task"))
     except OSError:
@@ -253,9 +298,9 @@ def thread_count() -> int:
 
 
 def _darwin_thread_count_from_ps() -> int:
-    """Fallback for a libproc that would not answer: `ps -M` prints one line
-    per thread under a header. Slower than the libproc query, which is why it
-    is only the second choice, but it counts the native threads that
+    """Fallback for a libproc that would not load: `ps -M` prints one line per
+    thread under a header. It costs a subprocess, which is why it is the
+    second choice — but it counts the native threads that
     threading.active_count() cannot see."""
     try:
         out = subprocess.run(
