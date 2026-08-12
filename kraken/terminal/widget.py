@@ -201,6 +201,10 @@ class GhosttyTerminalWidget(QWidget):
         self._master_fd = -1
         self._child_pid = -1
         self._notifier: QSocketNotifier | None = None
+        # Input written before the shell exists, replayed once it does. See
+        # _write_input for who manages to type into a terminal that has not
+        # started yet.
+        self._pending_input = b""
         self._child_exited = False
         # Set once the shell's exit status has actually been collected. Distinct
         # from `_child_exited` (which only means "stop touching the pty"): a reap
@@ -331,6 +335,12 @@ class GhosttyTerminalWidget(QWidget):
         self._notifier = QSocketNotifier(self._master_fd, QSocketNotifier.Type.Read, self)
         self._notifier.activated.connect(self._on_pty_readable)
 
+        # Anything typed while there was no shell to type into goes in now that
+        # there is one, in the order it arrived.
+        if self._pending_input:
+            pending, self._pending_input = self._pending_input, b""
+            self._write_input(pending)
+
     def _on_pty_readable(self) -> None:
         if not self._alive():
             return
@@ -361,6 +371,17 @@ class GhosttyTerminalWidget(QWidget):
 
     def _write_input(self, data: bytes) -> None:
         if self._child_exited or not data:
+            return
+        if self._master_fd < 0:
+            # No shell yet: it starts on the first showEvent, and a terminal
+            # can be built for a panel before that panel is revealed — which is
+            # exactly what the pi sign-in flow does, asking for the terminal
+            # first so that showing the panel does not open a second one. Held
+            # rather than written, because a write to fd -1 raises OSError and
+            # the handler below would swallow it, losing the keystrokes with
+            # nothing said anywhere.
+            self._pending_input += data
+            debug.action("terminal.input-deferred", bytes=len(data))
             return
         self._scroll(g.SCROLL_VIEWPORT_BOTTOM)
         try:
@@ -1006,7 +1027,8 @@ class GhosttyTerminalWidget(QWidget):
         The one way in from outside: the settings window uses it to start a
         pi login flow the RPC protocol cannot start. It goes through the same
         write as the keyboard, so a shell that has exited swallows it rather
-        than raising on a closed pty."""
+        than raising on a closed pty — and one that has not started yet holds
+        it until it has."""
         self._write_input(text.encode())
 
     def selection_text(self) -> str:
