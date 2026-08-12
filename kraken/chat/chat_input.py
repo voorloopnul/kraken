@@ -228,8 +228,8 @@ QToolButton:disabled { color: #b0b2b8; }
 #modelMenu QListWidget::item { padding: 3px 6px; border-radius: 4px; }
 #modelMenu QListWidget::item:selected { background: #e8e8ec; color: #1b1d22; }
 #modelMenu QScrollBar:vertical { background: transparent; border: none; width: 10px; margin: 0; }
-#modelMenu QScrollBar::handle:vertical { background: #c9c4b4; border-radius: 5px; min-height: 24px; }
-#modelMenu QScrollBar::handle:vertical:hover { background: #b3ae9e; }
+#modelMenu QScrollBar::handle:vertical { background: #c9c9ce; border-radius: 5px; min-height: 24px; }
+#modelMenu QScrollBar::handle:vertical:hover { background: #b3b4b9; }
 #modelMenu QScrollBar::add-line, #modelMenu QScrollBar::sub-line { width: 0; height: 0; }
 #modelMenu QScrollBar::add-page, #modelMenu QScrollBar::sub-page { background: transparent; }
 #sep { color: #d0d0d5; }

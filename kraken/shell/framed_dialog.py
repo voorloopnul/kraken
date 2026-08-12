@@ -60,7 +60,7 @@ QToolButton#dialogClose:hover { background: #3a3d45; }
 """,
     "light": """
 QDialog { background: transparent; }
-QWidget#dialogFrame { background: #faf6ec; }
+QWidget#dialogFrame { background: #fafafa; }
 QWidget#dialogTitleBar { background: #fafafa; border-bottom: 1px solid #e0e0e0; }
 QLabel { color: #383a42; }
 QLabel[role="windowTitle"] { color: #383a42; font-size: 12px; }
@@ -100,10 +100,10 @@ QPushButton:default { border-color: #4f83e0; }
 """,
     "light": """
 QComboBox, QSpinBox, QLineEdit[role="control"] {
-    background: #ffffff; border: 1px solid #d9d5c9; border-radius: 6px;
+    background: #ffffff; border: 1px solid #d8d8dd; border-radius: 6px;
     padding: 5px 8px; color: #383a42; font-size: 12px;
 }
-QComboBox:hover, QSpinBox:hover { border-color: #c2bdae; }
+QComboBox:hover, QSpinBox:hover { border-color: #c2c2c8; }
 QComboBox:focus, QSpinBox:focus,
 QLineEdit[role="control"]:focus { border-color: #4f83e0; }
 QComboBox::drop-down { border: none; width: 18px; }
@@ -111,15 +111,15 @@ QSpinBox::up-button, QSpinBox::down-button {
     background: transparent; border: none; width: 14px;
 }
 QComboBox QAbstractItemView {
-    background: #ffffff; border: 1px solid #d9d5c9;
+    background: #ffffff; border: 1px solid #d8d8dd;
     color: #383a42; selection-background-color: #e0e0e5;
 }
 QPushButton {
-    background: #ffffff; border: 1px solid #d9d5c9; border-radius: 6px;
+    background: #ffffff; border: 1px solid #d8d8dd; border-radius: 6px;
     padding: 5px 10px; color: #383a42; font-size: 12px;
 }
-QPushButton:hover { background: #f2eee2; }
-QPushButton:pressed { background: #e8e4d8; }
+QPushButton:hover { background: #ececef; }
+QPushButton:pressed { background: #e0e0e5; }
 QPushButton:default { border-color: #4f83e0; }
 """,
 }

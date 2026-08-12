@@ -59,8 +59,8 @@ QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: t
 QTextBrowser { background: transparent; border: none; color: #1a1c21;
                font-family: 'JetBrains Mono'; font-size: 13px; padding: 4px; }
 QScrollBar:horizontal { background: transparent; border: none; height: 10px; margin: 0; }
-QScrollBar::handle:horizontal { background: #c9c4b4; border-radius: 5px; min-width: 24px; }
-QScrollBar::handle:horizontal:hover { background: #b3ae9e; }
+QScrollBar::handle:horizontal { background: #c9c9ce; border-radius: 5px; min-width: 24px; }
+QScrollBar::handle:horizontal:hover { background: #b3b4b9; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
 """,
@@ -79,10 +79,10 @@ _PALETTE = {
     },
     "light": {
         "text": "#1a1c21", "dim": "#5f6269", "error": "#a8232e",
-        "code_bg": "#f0ebdc", "code_border": "#d8d3c4",
+        "code_bg": "#f4f4f5", "code_border": "#e0e0e0",
         "user_bg": "#dfe0e4", "user_border": "#c9cbd2",
         "link": "#02669c",
-        "inline_bg": "#f0ebdc", "inline_text": "#8a5c00",
+        "inline_bg": "#f4f4f5", "inline_text": "#8a5c00",
     },
 }
 
@@ -101,9 +101,9 @@ QToolButton { background: #17181d; border: none; border-radius: 4px;
 QToolButton:hover { background: #2c2e35; color: #ffffff; }
 """,
     "light": """
-QToolButton { background: #f0ebdc; border: none; border-radius: 4px;
+QToolButton { background: #f4f4f5; border: none; border-radius: 4px;
               color: #85887f; font-size: 11px; padding: 2px 8px; }
-QToolButton:hover { background: #efeadb; color: #1b1d22; }
+QToolButton:hover { background: #e6e6ea; color: #1b1d22; }
 """,
 }
 

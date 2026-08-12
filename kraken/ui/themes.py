@@ -92,13 +92,23 @@ UI_COLORS: dict[str, dict[str, str]] = {
         "card": "#%02X%02X%02X" % DARK.background,
         "card_border": "#3a3f4a",
         "sidebar": "#23252b",
+        "home": "#1f2127",
         "text": "#c8cad0",
     },
     "light": {
-        "window": "#faf6ec",
+        # The same value as the cards, and written the same way so the two
+        # cannot drift: with the panels running edge to edge there is no gutter
+        # left for a window colour to show in, and anywhere it still surfaces
+        # (behind the conversation, under a hidden panel) it should read as
+        # more of the same surface rather than as a second one.
+        "window": "#%02X%02X%02X" % LIGHT.background,
         "card": "#%02X%02X%02X" % LIGHT.background,
         "card_border": "#e0e0e0",
         "sidebar": "#f5f4f1",
+        # The home screen keeps the cream the rest of the app used to be
+        # painted in: it is one logo on an empty window rather than a working
+        # surface, and it is the one place the warmth was worth keeping.
+        "home": "#faf6ec",
         "text": "#383a42",
     },
 }

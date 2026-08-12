@@ -25,7 +25,12 @@ from kraken.chat.typography import DEFAULT_SIZE, clamp
 from kraken.shell.remote_dialog import RemoteWorkspaceDialog
 from kraken.shell.settings_dialog import SettingsDialog
 from kraken.shell.side_bar import SideBar
-from kraken.ui.chrome import WINDOW_RADIUS, edge_grips, place_edge_grips
+from kraken.ui.chrome import (
+    WINDOW_RADIUS,
+    corner_style,
+    edge_grips,
+    place_edge_grips,
+)
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 from kraken.shell.title_bar import TitleBar
 from kraken.shell.workspace_bar import WorkspaceBar, abbreviation
@@ -62,12 +67,21 @@ def _asset_pixmap(name: str) -> QPixmap:
 
 
 class _HomeScreen(QWidget):
-    """The logo shown when no workspace is open. It paints no background of its
-    own: it fills the stack, which reaches the window's rounded bottom-right
-    corner, and the window frame behind it already carries the window color."""
+    """The logo shown when no workspace is open, on a background of its own.
+
+    That background is the reason it has to round its own bottom-right corner:
+    it fills the stack, and on the home screen the side bar that would
+    otherwise sit in that corner is hidden, so the corner is this widget's.
+    Painting it opaque without the radius squares the window off there."""
 
     def __init__(self):
         super().__init__()
+        self.setObjectName("homeScreen")
+        # QWidget subclasses ignore stylesheet backgrounds without this.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._theme_name = DEFAULT_THEME
+        # Set by MainWindow, which owns the window's shape.
+        self._corner_radius = 0
         self._logo = QLabel()
         self._logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._logo.setScaledContents(False)
@@ -81,8 +95,22 @@ class _HomeScreen(QWidget):
         layout.addStretch(1)
 
     def set_theme(self, name: str) -> None:
+        self._theme_name = name
         self._pixmap = _asset_pixmap(name)
+        self._apply_style()
         self._update_logo()
+
+    def set_corner_radius(self, radius: int) -> None:
+        """Round the window's bottom-right corner, which is the home screen's
+        own whenever it is showing."""
+        self._corner_radius = radius
+        self._apply_style()
+
+    def _apply_style(self) -> None:
+        self.setStyleSheet(
+            f"#homeScreen {{ background: {UI_COLORS[self._theme_name]['home']}; }}"
+            + corner_style("#homeScreen", ("bottom-right",), self._corner_radius)
+        )
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -299,6 +327,7 @@ class MainWindow(QMainWindow):
         self.title_bar.set_corner_radius(radius)
         self.workspace_bar.set_corner_radius(radius)
         self.side_bar.set_corner_radius(radius)
+        self._home_screen.set_corner_radius(radius)
         self._apply_frame()
 
     def _apply_frame(self) -> None:

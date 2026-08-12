@@ -175,7 +175,7 @@ class CenterPanel(Panel):
         )
         self.chat.set_theme(name)
         handle, handle_hover = (
-            ("#3a3d45", "#4a4e58") if name == "dark" else ("#c9c4b4", "#b3ae9e")
+            ("#3a3d45", "#4a4e58") if name == "dark" else ("#c9c9ce", "#b3b4b9")
         )
         self._scrollbar.setStyleSheet(
             "QScrollBar:vertical { background: transparent; border: none;"

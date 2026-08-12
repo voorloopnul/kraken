@@ -47,8 +47,8 @@ QListWidget::item { padding: 6px 8px; border-radius: 6px; }
 QListWidget::item:hover { background: #e8e8ec; }
 QListWidget::item:selected { background: #dce8fb; }
 QScrollBar:vertical { background: transparent; border: none; width: 10px; margin: 0; }
-QScrollBar::handle:vertical { background: #c9c4b4; border-radius: 5px; min-height: 24px; }
-QScrollBar::handle:vertical:hover { background: #b3ae9e; }
+QScrollBar::handle:vertical { background: #c9c9ce; border-radius: 5px; min-height: 24px; }
+QScrollBar::handle:vertical:hover { background: #b3b4b9; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 """,

@@ -121,7 +121,7 @@ QToolButton#settingsBack:disabled { opacity: 0.4; }
     "light": """
 QWidget#settingsNav { background: #fafafa; border-right: 1px solid #e0e0e0; }
 QLineEdit#settingsSearch {
-    background: #ffffff; border: 1px solid #d9d5c9; border-radius: 6px;
+    background: #ffffff; border: 1px solid #d8d8dd; border-radius: 6px;
     padding: 5px 22px 5px 26px; color: #383a42;
 }
 QLineEdit#settingsSearch:focus { border-color: #4f83e0; }
@@ -136,14 +136,14 @@ QStackedWidget#settingsPages { background: transparent; }
 QTreeWidget#settingsTree::item:hover { background: #e8e8ec; color: #1b1d22; }
 QTreeWidget#settingsTree::item:selected { background: #e0e0e5; color: #1b1d22; }
 QTreeWidget#modelTree {
-    background: #ffffff; border: 1px solid #d9d5c9; border-radius: 6px;
+    background: #ffffff; border: 1px solid #d8d8dd; border-radius: 6px;
     outline: none; color: #383a42; font-size: 12px; padding: 4px;
 }
 QTreeWidget#modelTree::item { padding: 3px 4px; border-radius: 4px; }
-QTreeWidget#modelTree::item:hover { background: #f2eee2; }
+QTreeWidget#modelTree::item:hover { background: #ececef; }
 QTreeWidget#modelTree::item:has-children { color: #7a7d85; }
 QLabel[role="keycap"] {
-    background: #ffffff; border: 1px solid #d9d5c9; border-radius: 4px;
+    background: #ffffff; border: 1px solid #d8d8dd; border-radius: 4px;
     padding: 1px 5px; color: #5a5d65; font-size: 11px;
 }
 QLabel[role="hint"] { color: #8a8d95; font-size: 11px; }

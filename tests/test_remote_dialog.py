@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel
 
 from kraken.agent import remote
+from kraken.shell.framed_dialog import CHROME
 from kraken.shell.remote_dialog import RemoteWorkspaceDialog
 
 
@@ -35,7 +36,9 @@ def test_the_theme_reaches_the_form_as_well_as_the_frame(qapp, no_hosts):
     desktop's palette however the app was themed."""
     dialog = RemoteWorkspaceDialog(theme_name="light")
     style = dialog.styleSheet()
-    assert "#dialogFrame { background: #faf6ec; }" in style
+    # Compared against the shared chrome rather than a hex of its own, so a
+    # palette change lands in one place instead of failing here.
+    assert CHROME["light"].strip() in style
     assert 'QLineEdit[role="control"]' in style
     # The fields have to claim that role for the rule to reach them.
     assert dialog._hostname.property("role") == "control"
