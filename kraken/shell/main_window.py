@@ -1,3 +1,4 @@
+import sys
 from importlib.resources import files
 from pathlib import Path
 
@@ -253,9 +254,24 @@ class MainWindow(QMainWindow):
         # QWebEngineView) to a window whose native handle already exists
         # makes Qt destroy and recreate that handle, so the compositor
         # unmaps and remaps the window — a visible flash that can also
-        # move it. This 1px GL widget, clipped outside the viewport,
-        # makes the window GL-composited from first creation instead.
-        self._gl_warmup = QOpenGLWidget(central)
+        # move it. A 1px one of those, clipped outside the viewport, has the
+        # window composited that way from first creation instead.
+        #
+        # Which widget, though, depends on what the web view will composite
+        # with, and that is not the same everywhere: Qt goes through OpenGL on
+        # Linux and Metal on macOS. A QOpenGLWidget only pre-empts the
+        # recreation on the platform that then keeps using OpenGL — on macOS
+        # the window is put on GL and the web view moves it to Metal, which
+        # recreates the handle after all, which is measurable as winId()
+        # changing across the first browser open. QQuickWidget takes whichever
+        # backend the platform itself picked, so it matches either.
+        self._gl_warmup: QWidget
+        if sys.platform == "darwin":
+            from PySide6.QtQuickWidgets import QQuickWidget
+
+            self._gl_warmup = QQuickWidget(central)
+        else:
+            self._gl_warmup = QOpenGLWidget(central)
         self._gl_warmup.setFixedSize(1, 1)
         self._gl_warmup.move(-2, -2)
 
