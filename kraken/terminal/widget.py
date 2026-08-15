@@ -73,6 +73,43 @@ def _pick_term() -> str:
     return "xterm-256color"
 
 
+# What this process's own Python interpreter is described by. A shell opened in
+# a workspace must not inherit any of it: the app runs inside a virtualenv (a
+# checkout) or a bundled runtime (the .app), and either way these name Kraken's
+# Python rather than the one the workspace wants.
+_OWN_PYTHON_VARS = ("VIRTUAL_ENV", "PYTHONHOME", "PYTHONPATH")
+
+
+def _shell_env() -> dict[str, str]:
+    """The environment for a shell in a workspace: this process's, less the
+    parts that describe the Python it is itself running on.
+
+    Left in, they follow the user into their own project — `uv` and `pip`
+    resolve against Kraken's virtualenv from any directory (VIRTUAL_ENV takes
+    precedence over the .venv beside them), `python` finds Kraken's source
+    importable (PYTHONPATH), and `python3` is Kraken's interpreter rather than
+    theirs, because the virtualenv's bin leads PATH.
+
+    The rest of the environment stays as it is. In particular the launcher's
+    additions to PATH are deliberate — a bundle opened from the Dock inherits
+    launchd's bare PATH, and the Homebrew prefixes and the bundled `pi` are put
+    back on it for the terminal's benefit as much as the agent's.
+    """
+    env = dict(os.environ)
+    venv = env.get("VIRTUAL_ENV")
+    for name in _OWN_PYTHON_VARS:
+        env.pop(name, None)
+    if venv:
+        # Unsetting VIRTUAL_ENV is not enough on its own: activation also puts
+        # the virtualenv's bin first on PATH, and that is what a bare `python`
+        # resolves through.
+        bin_dir = os.path.join(venv, "bin")
+        env["PATH"] = os.pathsep.join(
+            p for p in env.get("PATH", "").split(os.pathsep) if p != bin_dir
+        )
+    return env
+
+
 def _spawn_session(program: str, argv: list[str], env: dict, slave_path: str) -> int:
     """Start `program` (with `argv`) in a new session with `slave_path` as its
     controlling terminal, returning the child pid. For a local terminal this is
@@ -287,7 +324,7 @@ class GhosttyTerminalWidget(QWidget):
         # width the screen never had.
         self._set_winsize()
 
-        env = dict(os.environ)
+        env = _shell_env()
         env["COLORTERM"] = "truecolor"
 
         if self._remote is not None:
