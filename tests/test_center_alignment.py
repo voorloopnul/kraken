@@ -52,6 +52,12 @@ def test_the_column_is_centred_on_the_panel(panel):
     assert left == panel.width() - right
 
 
+def test_the_input_has_space_below_it(panel):
+    """The rounded input must not sit directly on the panel's bottom edge."""
+    bottom = panel.chat.mapTo(panel, panel.chat.rect().bottomLeft()).y()
+    assert panel.height() - 1 - bottom == panel.COMPOSER_BOTTOM_MARGIN
+
+
 def test_the_gutters_match_the_scrollbar_that_is_actually_drawn(panel):
     """Every gutter is the bar's own width, not the platform metric — which
     says something else entirely, and was what the input used to be indented

@@ -34,6 +34,7 @@ class CenterPanel(Panel):
     the transcript row's."""
 
     MAX_CONTENT_WIDTH = 1000
+    COMPOSER_BOTTOM_MARGIN = 12
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -117,6 +118,10 @@ class CenterPanel(Panel):
         bottom.addItem(self._new_gutter())
         self._bottom_row = bottom
         self._layout.addLayout(bottom)
+        # Keep the rounded composer clear of the panel/window edge. This gap
+        # belongs outside ChatInput so its footer and text-field padding stay
+        # balanced within the border.
+        self._layout.addSpacing(self.COMPOSER_BOTTOM_MARGIN)
         self._sync_gutter()
 
     def _new_gutter(self) -> QSpacerItem:
