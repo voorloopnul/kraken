@@ -210,9 +210,11 @@ class CenterPanel(Panel):
     def set_theme(self, name: str) -> None:
         self._theme_name = name
         # The transcripts paint transparent, so the stack that hosts them must
-        # carry the window background; the SessionControllers theme the text.
+        # carry the working-surface color. That is the same card color used by
+        # the terminal (and the exact terminal background in dark mode), which
+        # keeps the two primary work panes on one visual ground.
         self.conversation_stack.setStyleSheet(
-            f"QStackedWidget {{ background: {UI_COLORS[name]['window']}; }}"
+            f"QStackedWidget {{ background: {UI_COLORS[name]['card']}; }}"
         )
         self.chat.set_theme(name)
         handle, handle_hover = (

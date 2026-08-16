@@ -106,7 +106,10 @@ DEFAULT_THEME = LIGHT.name
 # theme that has to be lighter than the fill, which is why the two differ.
 UI_COLORS: dict[str, dict[str, str]] = {
     "dark": {
-        "window": "#1f2127",
+        # Match the terminal/card working surface. The conversation column is
+        # width-capped and centered, so its surrounding application gutters
+        # must carry this same color or they show as darker vertical bands.
+        "window": "#%02X%02X%02X" % DARK.background,
         "card": "#%02X%02X%02X" % DARK.background,
         "card_border": "#3a3f4a",
         "sidebar": "#23252b",
