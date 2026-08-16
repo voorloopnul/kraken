@@ -323,18 +323,30 @@ class LeftPanel(Panel):
         delete_action = menu.addAction("Delete")
         chosen = menu.exec(self._list.viewport().mapToGlobal(pos))
         if chosen is archive_action:
-            self._archive(path, session_id)
+            self.archive(path, session_id)
         elif chosen is delete_action:
-            self._delete(path)
+            self.delete(path)
 
-    def _archive(self, path: str, session_id: str) -> None:
+    def session_id_for(self, path: str) -> str | None:
+        """The id recorded for the session file `path`, or None when it isn't
+        one of this workspace's persisted sessions. The title bar's session
+        menu acts on whatever is focused rather than on a clicked row, so it
+        has a path and needs the id archiving takes."""
+        from kraken.agent.pi_sessions import sessions_for
+
+        for session in sessions_for(self._cwd) if self._cwd else []:
+            if str(session.path) == path:
+                return session.session_id
+        return None
+
+    def archive(self, path: str, session_id: str) -> None:
         from kraken.agent.pi_sessions import archive_session
 
         archive_session(session_id)
         self.refresh()
         self.session_removed.emit(path)
 
-    def _delete(self, path: str) -> None:
+    def delete(self, path: str) -> None:
         from kraken.agent.pi_sessions import delete_session
 
         if (

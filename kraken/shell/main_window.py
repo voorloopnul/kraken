@@ -227,6 +227,7 @@ class MainWindow(QMainWindow):
         self.title_bar.buttons["Maximize"].clicked.connect(self._toggle_fullscreen)
         self.title_bar.buttons["Close"].clicked.connect(self.close)
         self.title_bar.branch_changed.connect(self._on_branch_switched)
+        self.title_bar.session_menu.aboutToShow.connect(self._populate_session_menu)
 
         content = QWidget()
         content_layout = QHBoxLayout(content)
@@ -320,6 +321,7 @@ class MainWindow(QMainWindow):
         on_workspace = self.current_view is not None
         self.side_bar.setVisible(on_workspace)
         self.title_bar.left_panel_toggle.setVisible(on_workspace)
+        self.title_bar.session_button.setVisible(on_workspace)
 
     def _corner_radius(self) -> int:
         """The window's corner radius as things stand. A window filling the
@@ -689,6 +691,23 @@ class MainWindow(QMainWindow):
             return
         view.center_panel.chat.attach_image(pixmap)
         QToolTip.showText(pos, "Screenshot attached to the message", button)
+
+    def _populate_session_menu(self) -> None:
+        """Fill the title bar's session menu as it opens: the actions History
+        offers on a row, aimed at whatever is focused instead. Only a session pi
+        has already written to disk has something to act on — one still in its
+        first turn has no file and no id yet."""
+        menu = self.title_bar.session_menu
+        menu.clear()
+        view = self.current_view
+        controller = view.focused if view is not None else None
+        path = controller.session_path if controller is not None else None
+        session_id = view.left_panel.session_id_for(path) if path else None
+        if not session_id:
+            menu.addAction("No saved session").setEnabled(False)
+            return
+        menu.addAction("Archive", lambda: view.left_panel.archive(path, session_id))
+        menu.addAction("Delete", lambda: view.left_panel.delete(path))
 
     def _on_branch_switched(self) -> None:
         """A title-bar branch switch moved HEAD; redraw the visible git and diff

@@ -1,9 +1,10 @@
 """Custom window decoration bar replacing the native title bar: the window's
-close/minimize/zoom lights at the far left, then the History toggle, the
-workspace folder and a git branch switcher; the focused conversation's title
-in the center; memory usage on the right. Dragging the bar moves the window;
-double-clicking toggles maximize. Shares the side bar's background so the
-chrome reads as one surface."""
+close/minimize/zoom lights at the far left, then the History toggle, and then
+two stacked lines naming what is open — the focused conversation's title, with
+a menu of the actions that apply to it, over the workspace folder and a git
+branch switcher. Memory usage sits at the right. Dragging the bar moves the
+window; double-clicking toggles maximize. Shares the side bar's background so
+the chrome reads as one surface."""
 
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -26,51 +28,70 @@ from kraken import debug
 from kraken.debug import format_bytes, process_tree_rss
 from kraken.shell.async_run import run_async
 from kraken.ui.chrome import corner_style
-from kraken.ui.icons import icon, paint as paint_icon
-from kraken.ui.themes import DEFAULT_THEME
+from kraken.ui.icons import icon, paint as paint_icon, toggle_icon
+from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 
 if TYPE_CHECKING:
     from kraken.agent.remote import RemoteTarget
 
-# The bare QToolButton rules are a leftover of the window buttons having been
-# grey circles; the traffic lights that replaced them paint themselves, so they
-# opt out along with the branch switcher and the panel toggle.
-_STYLES = {
-    "dark": """
-#titleBar { background: #1b1c21; border-bottom: 1px solid #33353c; }
-#folderLabel { color: #c8cad0; font-weight: 600; }
-#memoryLabel, #conversationLabel { color: #9a9da5; }
-QToolButton { background: #2c2e35; border: none; border-radius: 11px; }
-QToolButton:hover { background: #3a3d45; }
-#branchButton { background: transparent; border-radius: 6px;
-                color: #9a9da5; padding: 2px 8px 2px 6px; }
-#branchButton:hover { background: #2c2e35; }
-#branchButton::menu-indicator { image: none; }
-#panelButton { background: transparent; border-radius: 6px; }
-#panelButton:hover { background: #2c2e35; }
-#panelButton:checked { background: #26282e; }
-#trafficLight { background: transparent; border: none; border-radius: 0; }
-#trafficLight:hover { background: transparent; }
-""",
-    "light": """
-#titleBar { background: #fafafa; border-bottom: 1px solid #e0e0e0; }
-#folderLabel { color: #383a42; font-weight: 600; }
-#memoryLabel, #conversationLabel { color: #5a5d65; }
-QToolButton { background: #ebebee; border: none; border-radius: 11px; }
-QToolButton:hover { background: #dcdce1; }
-#branchButton { background: transparent; border-radius: 6px;
-                color: #5a5d65; padding: 2px 8px 2px 6px; }
-#branchButton:hover { background: #e8e8ec; }
-#branchButton::menu-indicator { image: none; }
-#panelButton { background: transparent; border-radius: 6px; }
-#panelButton:hover { background: #e8e8ec; }
-#panelButton:checked { background: #e0e0e5; }
-#trafficLight { background: transparent; border: none; border-radius: 0; }
-#trafficLight:hover { background: transparent; }
-""",
+_ICON_COLORS = {"dark": "#9a9da5", "light": "#5a5d65"}
+# The idle fill for the bar's own round buttons.
+_BUTTON_COLORS = {
+    "dark": {"idle": "#2c2e35", "hover": "#3a3d45"},
+    "light": {"idle": "#eeece8", "hover": "#e2e0db"},
 }
 
-_ICON_COLORS = {"dark": "#9a9da5", "light": "#5a5d65"}
+
+def _style(theme: str) -> str:
+    """The bar's surface, its two lines of text, and the controls on it.
+
+    The bar sits on the base surface rather than on the shade the panel headers
+    and the side strips wear: those run along one edge of the content and frame
+    it, while this spans the whole window above all of it. The hairline along
+    its bottom is what separates the two.
+
+    The bare QToolButton rules are a leftover of the window buttons having been
+    grey circles; the traffic lights that replaced them paint themselves, so
+    they opt out along with the branch switcher and the panel toggle."""
+    ui = UI_COLORS[theme]
+    c = _BUTTON_COLORS[theme]
+    return f"""
+#titleBar {{ background: {ui['window']}; border-bottom: 1px solid {ui['card_border']}; }}
+#conversationLabel {{ color: {ui['text']}; font-weight: 600; }}
+#folderLabel, #memoryLabel {{ color: {_ICON_COLORS[theme]}; font-size: 11px; }}
+QToolButton {{ background: {c['idle']}; border: none; border-radius: 11px; }}
+QToolButton:hover {{ background: {c['hover']}; }}
+#branchButton {{ background: transparent; border-radius: 5px; font-size: 11px;
+                color: {_ICON_COLORS[theme]}; padding: 1px 6px 1px 4px; }}
+#branchButton:hover {{ background: {ui['hover']}; }}
+#branchButton::menu-indicator {{ image: none; }}
+#panelButton, #sessionButton {{ background: transparent; border-radius: 6px; }}
+#panelButton:hover, #sessionButton:hover {{ background: {ui['hover']}; }}
+/* The History panel's toggle answers the same question the side strip's
+   buttons do, so it is marked in the same blue — softened, because it sits
+   among text rather than in a strip of its own. */
+#panelButton:checked {{ background: {ui['accent_soft']}; }}
+#sessionButton::menu-indicator {{ image: none; }}
+#trafficLight {{ background: transparent; border: none; border-radius: 0; }}
+#trafficLight:hover {{ background: transparent; }}
+"""
+
+# Stands in for the focused conversation's title before one is chosen, so the
+# bar's first line always names something rather than opening a hole above the
+# folder it belongs to.
+_NO_SESSION = "No session selected"
+
+
+def home_relative(path: str) -> str:
+    """`path` with the user's home folder written as `~`. The folder is a
+    subtitle here, under the conversation's own name, and the half of an
+    absolute path that is the same for every folder is the half worth losing."""
+    home = str(Path.home())
+    if path == home:
+        return "~"
+    if path.startswith(home + "/"):
+        return "~" + path[len(home):]
+    return path
 
 
 def git_branch(path: str) -> str:
@@ -168,7 +189,8 @@ class TitleBar(QWidget):
         self.setObjectName("titleBar")
         # QWidget subclasses ignore stylesheet backgrounds without this.
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setFixedHeight(36)
+        # Two lines of text, so taller than the one-line bar it replaced.
+        self.setFixedHeight(44)
         self._theme_name = DEFAULT_THEME
         # Set by MainWindow, which owns the window's shape.
         self._corner_radius = 0
@@ -204,7 +226,7 @@ class TitleBar(QWidget):
         self.branch_button.setToolButtonStyle(
             Qt.ToolButtonStyle.ToolButtonTextBesideIcon
         )
-        self.branch_button.setIconSize(QSize(16, 16))
+        self.branch_button.setIconSize(QSize(14, 14))
         self.branch_button.setPopupMode(
             QToolButton.ToolButtonPopupMode.InstantPopup
         )
@@ -213,6 +235,19 @@ class TitleBar(QWidget):
         self.branch_button.setMenu(self._branch_menu)
         self.conversation_label = QLabel()
         self.conversation_label.setObjectName("conversationLabel")
+        # The actions that apply to the conversation named beside it. The menu
+        # is filled by whoever knows what is open (MainWindow) as it opens.
+        self.session_button = QToolButton()
+        self.session_button.setObjectName("sessionButton")
+        self.session_button.setToolTip("Session actions")
+        self.session_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.session_button.setFixedSize(20, 20)
+        self.session_button.setIconSize(QSize(14, 14))
+        self.session_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        self.session_menu = QMenu(self.session_button)
+        self.session_button.setMenu(self.session_menu)
         self.memory_label = QLabel()
         self.memory_label.setObjectName("memoryLabel")
 
@@ -230,6 +265,31 @@ class TitleBar(QWidget):
             btn.hovered.connect(self._on_traffic_hover)
             self.buttons[name] = btn
 
+        # What is open, on two lines: its name, then where it lives. The rows
+        # are laid out in a column of their own so both start at the same left
+        # edge, just past the History toggle.
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(4)
+        title_row.addWidget(self.conversation_label)
+        title_row.addWidget(self.session_button)
+        title_row.addStretch(1)
+
+        folder_row = QHBoxLayout()
+        folder_row.setContentsMargins(0, 0, 0, 0)
+        folder_row.setSpacing(4)
+        folder_row.addWidget(self.folder_label)
+        folder_row.addWidget(self.branch_button)
+        folder_row.addStretch(1)
+
+        column = QVBoxLayout()
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(0)
+        column.addStretch(1)
+        column.addLayout(title_row)
+        column.addLayout(folder_row)
+        column.addStretch(1)
+
         layout = QHBoxLayout(self)
         # The lights sit further from the left edge than the rest of the bar's
         # contents: they are what the window's rounded corner curves around.
@@ -242,12 +302,8 @@ class TitleBar(QWidget):
             layout.addSpacing(2)
         layout.addSpacing(8)
         layout.addWidget(self.left_panel_toggle)
-        layout.addWidget(self.folder_label)
-        layout.addSpacing(4)
-        layout.addWidget(self.branch_button)
-        layout.addStretch(1)
-        layout.addWidget(self.conversation_label)
-        layout.addStretch(1)
+        layout.addSpacing(2)
+        layout.addLayout(column, stretch=1)
         layout.addWidget(self.memory_label)
 
         # One slow tick keeps the live readouts fresh: memory always drifts,
@@ -272,15 +328,20 @@ class TitleBar(QWidget):
         self._remote_branch = ""
         self._remote_branch_list = []
         if remote is not None:
-            self.folder_label.setText(f"{remote.host.destination}:{remote.path}")
+            folder = f"{remote.host.destination}:{remote.path}"
         else:
-            self.folder_label.setText(path if path else "Kraken")
+            folder = home_relative(path) if path else "Kraken"
+        fm = self.folder_label.fontMetrics()
+        self.folder_label.setText(
+            fm.elidedText(folder, Qt.TextElideMode.ElideMiddle, 420)
+        )
+        self.folder_label.setToolTip(folder)
         self._refresh_branch()
 
     def set_conversation(self, title: str) -> None:
         fm = self.conversation_label.fontMetrics()
         self.conversation_label.setText(
-            fm.elidedText(title, Qt.TextElideMode.ElideRight, 420)
+            fm.elidedText(title or _NO_SESSION, Qt.TextElideMode.ElideRight, 420)
         )
 
     def set_maximized(self, maximized: bool) -> None:
@@ -475,7 +536,7 @@ class TitleBar(QWidget):
 
     def _apply_style(self) -> None:
         self.setStyleSheet(
-            _STYLES[self._theme_name]
+            _style(self._theme_name)
             + corner_style(
                 "#titleBar", ("top-left", "top-right"), self._corner_radius
             )
@@ -485,8 +546,13 @@ class TitleBar(QWidget):
         self._theme_name = name
         self._apply_style()
         color = _ICON_COLORS[name]
-        self.branch_button.setIcon(icon("git-branch", color, 16))
-        self.left_panel_toggle.setIcon(icon("panel-left", color, 16))
+        self.branch_button.setIcon(icon("git-branch", color, 14))
+        # Blue on the accent tint once the History panel is showing, to match
+        # the strip on the other side of the window.
+        self.left_panel_toggle.setIcon(
+            toggle_icon("panel-left", color, UI_COLORS[name]["accent_text"], 16)
+        )
+        self.session_button.setIcon(icon("ellipsis", color, 14))
         # The lights carry no theme colour of their own, but the maximized
         # state still has to be re-applied here.
         self.set_maximized(self._maximized)
