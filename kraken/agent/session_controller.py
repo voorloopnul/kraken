@@ -385,6 +385,8 @@ class SessionController(QObject):
             delta = event.get("assistantMessageEvent") or {}
             if delta.get("type") == "text_delta":
                 conversation.append_assistant_delta(delta.get("delta", ""))
+            elif delta.get("type") == "thinking_delta":
+                conversation.append_thinking_delta(delta.get("delta", ""))
             elif delta.get("type") == "error":
                 self._turn_had_error = True
                 reason = delta.get("reason", "error")

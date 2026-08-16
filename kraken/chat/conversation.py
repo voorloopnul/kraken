@@ -22,6 +22,7 @@ from PySide6.QtGui import (
     QTextBlockFormat,
     QTextCharFormat,
     QTextCursor,
+    QTextDocument,
     QTextFormat,
 )
 from PySide6.QtWidgets import QApplication, QTextBrowser, QToolButton, QWidget
@@ -72,6 +73,9 @@ QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: t
 _PALETTE = {
     "dark": {
         "text": "#d6d8dd", "dim": "#7a7d85", "error": "#e06c75",
+        "thinking_label": "#9a9da5", "thinking_text": "#7a7d85",
+        "tool_detail": "#9a9da5", "tool_bg": "#17181d",
+        "tool_border": "#2c2e35",
         "code_bg": "#17181d", "code_border": "#2c2e35",
         "user_bg": "#26282e", "user_border": "#33353c",
         "link": "#61afef",
@@ -79,8 +83,11 @@ _PALETTE = {
     },
     "light": {
         "text": "#1a1c21", "dim": "#5f6269", "error": "#a8232e",
+        "thinking_label": "#8e8b86", "thinking_text": "#b6b3ae",
+        "tool_detail": "#8e8b86", "tool_bg": "#f5f3ef",
+        "tool_border": "#e1ded8",
         "code_bg": "#f4f4f5", "code_border": "#e0e0e0",
-        "user_bg": "#dfe0e4", "user_border": "#c9cbd2",
+        "user_bg": "#f1efea", "user_border": "#e1ded8",
         "link": "#02669c",
         "inline_bg": "#f4f4f5", "inline_text": "#8a5c00",
     },
@@ -90,6 +97,20 @@ _PALETTE = {
 # markdown code span, but it is not code in the transcript's sense and must
 # not pick up the inline-code chip, so the pass below skips it by this flag.
 _TOOL_DETAIL_PROPERTY = QTextFormat.Property.UserProperty + 1
+
+# Expanded tool arguments and output sit in one full-width card. The block
+# margins reserve the card's outer gap plus its interior padding; paintEvent
+# supplies the rounded fill and border behind the text.
+_TOOL_CARD_RADIUS = 8.0
+_TOOL_CARD_GAP = 6.0
+_TOOL_CARD_PAD_X = 12.0
+_TOOL_CARD_PAD_Y = 10.0
+_TOOL_BLOCK_MARGIN = _TOOL_CARD_GAP + _TOOL_CARD_PAD_Y
+
+# Compact vertical rhythm between collapsed Thinking/tool activity rows. A
+# fixed margin is steadier than inserting a whole empty text line, whose height
+# grows with the configurable conversation font size.
+_ACTIVITY_GAP = 8.0
 
 # The button is borderless; its background matches the code card (_PALETTE
 # code_bg) so it reads as flat against the card yet still hides the first code
@@ -182,6 +203,9 @@ class ConversationView(QTextBrowser):
         # Document position where the trailing assistant block's markdown
         # starts; None when the last block isn't assistant.
         self._assistant_start: int | None = None
+        # Boundary for a trailing streamed reasoning block. It renders as one
+        # muted activity row and can be expanded to show the full reasoning.
+        self._thinking_start: int | None = None
         # Streaming deltas accumulate in the block model but repaint at most
         # once per interval: re-rendering the whole assistant block on every
         # token is O(message) per token, i.e. quadratic over a long reply.
@@ -196,6 +220,8 @@ class ConversationView(QTextBrowser):
         # (first, last) text-block numbers of each user message, for the
         # bubbles painted behind them in paintEvent.
         self._user_ranges: list[tuple[int, int]] = []
+        # Text-block ranges occupied by expanded tool arguments/output.
+        self._tool_detail_ranges: list[tuple[int, int]] = []
         self._copy_buttons: list[QToolButton] = []
         # Sticky bottom: the transcript follows new content while the reader is
         # already at the end, and stays put once they scroll up to read.
@@ -322,7 +348,9 @@ class ConversationView(QTextBrowser):
             self._apply_frame_margins()
             self._last_kind = None
             self._assistant_start = None
+            self._thinking_start = None
             self._user_ranges = []
+            self._tool_detail_ranges = []
             for kind, payload in self._blocks:
                 self._paint(kind, payload)
             self._sync_code_ui()
@@ -344,16 +372,20 @@ class ConversationView(QTextBrowser):
     # ---- Writing ---------------------------------------------------------
 
     def _separator(self, cursor: QTextCursor, kind: str) -> None:
-        """Blocks of different kinds get a blank line between them,
-        consecutive tool/info lines just a newline. Consecutive user
-        messages also get the full break: without it they'd land in the
-        same text block and render as one merged bubble. Inserted with
-        default formats so markdown block styles (lists, headings) don't
-        leak."""
+        """Separate semantic blocks without leaking the previous format.
+
+        Thinking and tool activity rows share one regular rhythm: every row
+        gets one blank line, even when several tool calls are consecutive.
+        User messages also need the full break or their bubbles merge."""
         if self._last_kind is None:
             return
         block_fmt, char_fmt = QTextBlockFormat(), QTextCharFormat()
-        if kind != self._last_kind or kind == "user":
+        activity = {"thinking", "tool"}
+        if kind in activity and self._last_kind in activity:
+            compact = QTextBlockFormat()
+            compact.setTopMargin(_ACTIVITY_GAP)
+            cursor.insertBlock(compact, char_fmt)
+        elif kind != self._last_kind or kind == "user":
             cursor.insertBlock(block_fmt, char_fmt)
             cursor.insertBlock(block_fmt, char_fmt)
         elif kind in ("tool", "info"):
@@ -365,7 +397,18 @@ class ConversationView(QTextBrowser):
         # Everything before this document position survives the paint, so
         # code styling only needs re-applying from here on.
         changed_from = cursor.position()
-        if kind == "assistant" and self._assistant_start is not None:
+        if kind == "thinking" and self._thinking_start is not None:
+            changed_from = self._thinking_start
+            cursor.setPosition(self._thinking_start)
+            cursor.movePosition(
+                QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor
+            )
+            cursor.removeSelectedText()
+            # Keep the block's compact activity top margin while its streamed
+            # preview is replaced.
+            cursor.setCharFormat(QTextCharFormat())
+            self._paint_thinking(cursor, payload)
+        elif kind == "assistant" and self._assistant_start is not None:
             changed_from = self._assistant_start
             # Streaming continuation: re-render the whole trailing assistant
             # block so markdown split across deltas parses correctly.
@@ -383,21 +426,86 @@ class ConversationView(QTextBrowser):
         else:
             self._separator(cursor, kind)
             if kind == "assistant":
+                self._thinking_start = None
                 self._assistant_start = cursor.position()
                 cursor.insertMarkdown("".join(payload))
+            elif kind == "thinking":
+                self._assistant_start = None
+                self._thinking_start = cursor.position()
+                self._paint_thinking(cursor, payload)
             elif kind == "tool":
                 self._assistant_start = None
+                self._thinking_start = None
                 self._paint_tool(cursor, payload)
             elif kind == "user":
                 self._assistant_start = None
+                self._thinking_start = None
                 self._paint_user(cursor, payload)
             else:
                 self._assistant_start = None
+                self._thinking_start = None
                 for text, role, bold, italic in payload:
                     cursor.insertText(text, self._format(role, bold, italic))
         self._last_kind = kind
         self._sync_code_ui(changed_from)
         self._follow_bottom()
+
+    def _paint_thinking(self, cursor: QTextCursor, payload: dict) -> None:
+        """Paint a muted, collapsible reasoning row like the mock."""
+        arrow = "▾" if payload["expanded"] else "›"
+        href = f"thinking:{payload['index']}"
+        label = self._format("thinking_label", False, False)
+        label.setAnchor(True)
+        label.setAnchorHref(href)
+        label_color = QColor(self._colors["thinking_label"])
+        label.setForeground(label_color)
+        label_start = cursor.position()
+        cursor.insertText(f"{arrow} ✧ Thinking", label)
+        # QTextDocument resolves its anchor color while inserting, after the
+        # supplied format. Merge our role color once the anchored span exists.
+        self._retint_span(label_start, cursor.position(), label_color)
+        text = payload["text"].strip()
+        if not text:
+            return
+        if payload["expanded"]:
+            # Reasoning content is markdown. Insert it as such so emphasis and
+            # lists render normally instead of exposing their source markers,
+            # then tint the result without replacing markdown's bold/italic
+            # formats. Only the header needs to remain the collapse target.
+            cursor.insertBlock(QTextBlockFormat(), QTextCharFormat())
+            start = cursor.position()
+            cursor.insertMarkdown(text)
+            end = cursor.position()
+            tint = QTextCharFormat()
+            tint.setForeground(QColor(self._colors["thinking_text"]))
+            styled = QTextCursor(self.document())
+            styled.setPosition(start)
+            styled.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+            styled.mergeCharFormat(tint)
+        else:
+            detail = self._format("thinking_text", False, False)
+            detail.setAnchor(True)
+            detail.setAnchorHref(href)
+            detail_color = QColor(self._colors["thinking_text"])
+            detail.setForeground(detail_color)
+            # The collapsed preview is plain text derived from the same
+            # markdown, so emphasis markers never leak into the compact row.
+            preview = QTextDocument()
+            preview.setMarkdown(text)
+            summary = " ".join(preview.toPlainText().split())
+            if len(summary) > 100:
+                summary = summary[:99].rstrip() + "…"
+            detail_start = cursor.position()
+            cursor.insertText("  " + summary, detail)
+            self._retint_span(detail_start, cursor.position(), detail_color)
+
+    def _retint_span(self, start: int, end: int, color: QColor) -> None:
+        tint = QTextCharFormat()
+        tint.setForeground(color)
+        span = QTextCursor(self.document())
+        span.setPosition(start)
+        span.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+        span.mergeCharFormat(tint)
 
     def _paint_tool(self, cursor: QTextCursor, payload: dict) -> None:
         """One collapsible line: a clickable '▸/▾ ⚒ tool  summary' header;
@@ -408,12 +516,29 @@ class ConversationView(QTextBrowser):
         header.setAnchorHref(f"tool:{payload['index']}")
         cursor.insertText(f"{arrow} {payload['line']}", header)
         if payload["expanded"] and payload["detail"]:
-            detail = self._format("dim", False, False)
+            # Keep the header outside the card, then reserve a padded block for
+            # both the JSON arguments and the tool output.
+            cursor.insertBlock(QTextBlockFormat(), QTextCharFormat())
+            first = cursor.blockNumber()
+            detail = self._format("tool_detail", False, False)
             detail.setFontFamilies([MONO_FAMILY, "monospace"])
             detail.setFontFixedPitch(True)
             detail.setFontPointSize(detail_points(self._font_size))
             detail.setProperty(_TOOL_DETAIL_PROPERTY, True)
-            cursor.insertText("\n" + payload["detail"], detail)
+            cursor.insertText(payload["detail"], detail)
+            last = cursor.blockNumber()
+            block = self.document().findBlockByNumber(first)
+            while block.isValid() and block.blockNumber() <= last:
+                edges = QTextBlockFormat()
+                edges.setLeftMargin(_TOOL_CARD_PAD_X)
+                edges.setRightMargin(_TOOL_CARD_PAD_X)
+                if block.blockNumber() == first:
+                    edges.setTopMargin(_TOOL_BLOCK_MARGIN)
+                if block.blockNumber() == last:
+                    edges.setBottomMargin(_TOOL_BLOCK_MARGIN)
+                QTextCursor(block).mergeBlockFormat(edges)
+                block = block.next()
+            self._tool_detail_ranges.append((first, last))
 
     def _paint_user(self, cursor: QTextCursor, payload: list) -> None:
         """Right-aligned message in a bubble. The side margins inset the text
@@ -442,6 +567,12 @@ class ConversationView(QTextBrowser):
         if target.startswith("tool:"):
             index = int(target.split(":", 1)[1])
             if 0 <= index < len(self._blocks) and self._blocks[index][0] == "tool":
+                payload = self._blocks[index][1]
+                payload["expanded"] = not payload["expanded"]
+                self._repaint_all()
+        elif target.startswith("thinking:"):
+            index = int(target.split(":", 1)[1])
+            if 0 <= index < len(self._blocks) and self._blocks[index][0] == "thinking":
                 payload = self._blocks[index][1]
                 payload["expanded"] = not payload["expanded"]
                 self._repaint_all()
@@ -497,6 +628,21 @@ class ConversationView(QTextBrowser):
             self._pending_assistant = ""
         self._write("assistant", [delta])
 
+    def append_thinking_delta(self, delta: str) -> None:
+        """Stream model reasoning into one collapsible activity row."""
+        if self._blocks and self._blocks[-1][0] == "thinking":
+            payload = self._blocks[-1][1]
+            payload["text"] += delta
+            self._paint("thinking", payload)
+            return
+        payload = {
+            "text": delta,
+            "expanded": False,
+            "index": len(self._blocks),
+        }
+        self._blocks.append(("thinking", payload))
+        self._paint("thinking", payload)
+
     def add_tool(self, name: str, summary: str, detail: str = "") -> int:
         """Add a collapsible tool line; returns its block index so callers
         can append the result once the tool finishes."""
@@ -539,8 +685,10 @@ class ConversationView(QTextBrowser):
         self._blocks = []
         self._last_kind = None
         self._assistant_start = None
+        self._thinking_start = None
         self._pending_assistant = ""
         self._user_ranges = []
+        self._tool_detail_ranges = []
         # A fresh or newly loaded transcript opens at its end.
         self._stick_to_bottom = True
         self._sync_code_ui()
@@ -728,7 +876,7 @@ class ConversationView(QTextBrowser):
             fmt = fragment.charFormat()
             if (
                 fmt.isAnchor()
-                and not (fmt.anchorHref() or "").startswith("tool:")
+                and not (fmt.anchorHref() or "").startswith(("tool:", "thinking:"))
                 and fmt.foreground().color() != link
             ):
                 spans.append((fragment.position(), fragment.length()))
@@ -851,9 +999,52 @@ class ConversationView(QTextBrowser):
         # underneath.
         if self._code_ranges:
             self._paint_code_cards()
+        if self._tool_detail_ranges:
+            self._paint_tool_detail_cards()
         if self._user_ranges:
             self._paint_user_bubbles()
         super().paintEvent(event)
+
+    def _paint_tool_detail_cards(self) -> None:
+        """Paint the rounded surface behind expanded tool arguments/output."""
+        document = self.document()
+        layout = document.documentLayout()
+        viewport = self.viewport()
+        scroll = self.verticalScrollBar().value()
+        margin = document.documentMargin()
+        left = margin
+        right = viewport.width() - margin
+        painter = QPainter(viewport)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor(self._colors["tool_border"]))
+        pen.setWidthF(1.0)
+        painter.setPen(pen)
+        painter.setBrush(QColor(self._colors["tool_bg"]))
+        for first, last in self._tool_detail_ranges:
+            top_block = document.findBlockByNumber(first)
+            bottom_block = document.findBlockByNumber(last)
+            if not top_block.isValid() or not bottom_block.isValid():
+                continue
+            top = (
+                layout.blockBoundingRect(top_block).top()
+                - scroll
+                - _TOOL_CARD_PAD_Y
+            )
+            bottom = (
+                layout.blockBoundingRect(bottom_block).bottom()
+                - scroll
+                + _TOOL_CARD_PAD_Y
+            )
+            if bottom < 0 or top > viewport.height():
+                continue
+            rect = QRectF(
+                left + 0.5,
+                top + 0.5,
+                (right - left) - 1.0,
+                (bottom - top) - 1.0,
+            )
+            painter.drawRoundedRect(rect, _TOOL_CARD_RADIUS, _TOOL_CARD_RADIUS)
+        painter.end()
 
     def _paint_code_cards(self) -> None:
         """Paint a rounded, bordered card behind each code block. Qt's text
@@ -955,6 +1146,8 @@ class ConversationView(QTextBrowser):
                         continue
                     if part.get("type") == "text" and part.get("text"):
                         self.append_assistant_delta(part["text"])
+                    elif part.get("type") == "thinking" and part.get("thinking"):
+                        self.append_thinking_delta(part["thinking"])
                     elif part.get("type") == "toolCall":
                         index = self.add_tool(
                             part.get("name", "?"),
