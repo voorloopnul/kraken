@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from kraken import debug
+from kraken.ui.chrome import PANEL_HEADER_HEIGHT, header_style
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 
 # Preferred column widths per panel key, used to size a column when the dock
@@ -228,20 +229,30 @@ class PanelGrip(QLabel):
 
 
 class _PanelHeader(QWidget):
-    """A slim row of its own for the grip, used by panels that have no strip of
-    their own for it to ride in. Trailing controls (e.g. git's refresh button)
-    sit at its far right."""
+    """The top strip for a panel with no tab row of its own to put the grip in:
+    the same surface and hairline a tab strip wears (see chrome.header_style),
+    with the grip at its head and trailing controls (e.g. git's refresh button)
+    at its far right."""
 
     def __init__(self, grip: PanelGrip, parent: QWidget | None = None):
         super().__init__(parent)
-        self.setFixedHeight(24)
-        # The card already pads its edges, so the row only needs a little
-        # breathing room of its own.
+        self.setObjectName("panelHeader")
+        # QWidget subclasses ignore stylesheet backgrounds without this.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setFixedHeight(PANEL_HEADER_HEIGHT)
+        # The strip runs the panel's full width, so it carries the inset the
+        # card's padding used to give it — the same one the tab strips use.
         self._layout = QHBoxLayout(self)
-        self._layout.setContentsMargins(2, 0, 2, 0)
+        self._layout.setContentsMargins(8, 0, 8, 0)
         self._layout.setSpacing(6)
         self._layout.addWidget(grip)
         self._layout.addStretch(1)
+        # The strip paints a surface, so it starts on one rather than sitting
+        # transparent until the first theme is pushed through the dock.
+        self.set_theme(DEFAULT_THEME)
+
+    def set_theme(self, name: str) -> None:
+        self.setStyleSheet(header_style("#panelHeader", name))
 
     def add_trailing(self, widget: QWidget) -> None:
         """Add a control (e.g. a refresh button) at the far right of the grip
@@ -280,6 +291,8 @@ class DockPanel(QWidget):
     def set_theme(self, name: str) -> None:
         if self.grip is not None:
             self.grip.set_theme(name)
+        if self.header is not None:
+            self.header.set_theme(name)
 
 
 class _DockColumn(_GripSplitter):

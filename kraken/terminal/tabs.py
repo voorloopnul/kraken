@@ -16,69 +16,15 @@ from PySide6.QtWidgets import (
 )
 
 from kraken.terminal.widget import GhosttyTerminalWidget
+from kraken.ui.chrome import PANEL_HEADER_HEIGHT, tab_strip_style
 from kraken.ui.themes import DEFAULT_THEME
 
 if TYPE_CHECKING:
     from kraken.agent.remote import RemoteTarget
 
-_TAB_ROW_STYLES = {
-    "dark": """
-#tabRow { background: transparent; }
-QTabBar { background: transparent; }
-QTabBar::tab {
-    background: #26282e;
-    color: #c8cad0;
-    border: 1px solid #33353c;
-    border-radius: 6px;
-    font-size: 13px;
-    /* Tight on the right: the ✕ button supplies the trailing space. */
-    padding: 3px 0 3px 8px;
-    margin: 2px 4px 2px 0;
-}
-QTabBar::tab:selected {
-    background: #1c2f50;
-    color: #ffffff;
-    border: 1px solid #4f83e0;
-}
-QToolButton {
-    background: transparent;
-    color: #9a9da5;
-    border: none;
-    border-radius: 4px;
-    font-size: 14px;
-    padding: 2px 6px;
-}
-QToolButton:hover { background: #2c2e35; color: #ffffff; }
-""",
-    "light": """
-#tabRow { background: transparent; }
-QTabBar { background: transparent; }
-QTabBar::tab {
-    background: #f5f5f6;
-    color: #4a4d55;
-    border: 1px solid #d8d8dd;
-    border-radius: 6px;
-    font-size: 13px;
-    /* Tight on the right: the ✕ button supplies the trailing space. */
-    padding: 3px 0 3px 8px;
-    margin: 2px 4px 2px 0;
-}
-QTabBar::tab:selected {
-    background: #dce8fb;
-    color: #1b1d22;
-    border: 1px solid #4f83e0;
-}
-QToolButton {
-    background: transparent;
-    color: #6a6d75;
-    border: none;
-    border-radius: 4px;
-    font-size: 14px;
-    padding: 2px 6px;
-}
-QToolButton:hover { background: #dedee2; color: #1b1d22; }
-""",
-}
+# What the card used to pad around the whole pane. The strip runs full width
+# now, so the padding belongs to what is under it instead.
+_CONTENT_PADDING = 12
 
 
 class TerminalTabs(QWidget):
@@ -114,11 +60,15 @@ class TerminalTabs(QWidget):
 
         tab_row = QWidget()
         tab_row.setObjectName("tabRow")
-        tab_row.setStyleSheet(_TAB_ROW_STYLES[self._theme_name])
+        # QWidget subclasses ignore stylesheet backgrounds without this; the
+        # strip has one of its own now (see chrome.header_style).
+        tab_row.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        tab_row.setFixedHeight(PANEL_HEADER_HEIGHT)
+        tab_row.setStyleSheet(tab_strip_style(self._theme_name))
         self._tab_row = tab_row
         row_layout = QHBoxLayout(tab_row)
         self._row_layout = row_layout
-        row_layout.setContentsMargins(6, 4, 6, 4)
+        row_layout.setContentsMargins(8, 0, 8, 0)
         row_layout.setSpacing(0)
         row_layout.addWidget(self._tab_bar)
         row_layout.addWidget(plus)
@@ -130,7 +80,14 @@ class TerminalTabs(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(tab_row)
-        layout.addWidget(self._stack, stretch=1)
+        # The strip is full-bleed and the terminals under it are inset, so the
+        # padding sits here rather than around the pane as a whole.
+        body = QVBoxLayout()
+        body.setContentsMargins(
+            _CONTENT_PADDING, _CONTENT_PADDING, _CONTENT_PADDING, _CONTENT_PADDING
+        )
+        body.addWidget(self._stack)
+        layout.addLayout(body, stretch=1)
 
         self.add_terminal()
 
@@ -161,13 +118,13 @@ class TerminalTabs(QWidget):
         index = self._tab_bar.addTab(label)
 
         close = QToolButton()
+        # Styled by the strip (#tabClose) rather than here, so it follows a
+        # theme change like everything else in the row.
+        close.setObjectName("tabClose")
         close.setText("✕")
         close.setToolTip("Close terminal")
         close.setCursor(Qt.CursorShape.PointingHandCursor)
         close.setFixedSize(16, 16)
-        close.setStyleSheet(
-            "QToolButton { font-size: 10px; padding: 0; border-radius: 8px; }"
-        )
         close.clicked.connect(lambda: self._close_terminal(term))
         # Wrapper keeps the button inside the pill: the tab bar positions
         # side-buttons relative to the tab rect, which includes the pill's
@@ -218,7 +175,7 @@ class TerminalTabs(QWidget):
 
     def set_theme(self, name: str) -> None:
         self._theme_name = name
-        self._tab_row.setStyleSheet(_TAB_ROW_STYLES[name])
+        self._tab_row.setStyleSheet(tab_strip_style(name))
         for term in self.terminals():
             term.set_theme(name)
 

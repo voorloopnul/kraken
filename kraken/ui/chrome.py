@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from kraken.ui.themes import LIGHT
+from kraken.ui.themes import UI_COLORS
 
 # Corner rounding for the frameless window. There is no decoration to round, so
 # the corner pixels belong to whichever widget sits in them — the title bar
@@ -124,6 +124,85 @@ def corner_style(selector: str, corners: tuple[str, ...], radius: int) -> str:
     return f"{selector} {{{rules} }}"
 
 
+# Every panel wears the same strip along its top, whatever it puts in it: the
+# terminal's and the browser's tab rows, and the plain row the drag grip rides
+# in on the panels with no tabs of their own. The strip is a surface a shade off
+# the panel below it, closed with the hairline a card border would have drawn,
+# so a panel reads as content under a header rather than as one flat sheet. It
+# runs the panel's full width — the card's padding starts underneath it.
+PANEL_HEADER_HEIGHT = 32
+
+
+def header_style(selector: str, theme: str) -> str:
+    """The strip's own surface and its closing hairline, for a widget that is
+    one. Append a widget's own rules to it."""
+    ui = UI_COLORS[theme]
+    return (
+        f"{selector} {{ background: {ui['header']};"
+        f" border-bottom: 1px solid {ui['card_border']}; }}"
+    )
+
+
+# The pills in a tab strip. Selected is the accent tint the app uses for a
+# current thing throughout — the same blue the side strip fills an open panel's
+# button with, softened, because a tab is one of several rather than the answer
+# to the strip's whole question. The rest of the strip is quiet: an unselected
+# tab is text on the strip itself, and the ✕ and + are quieter still, since
+# neither is where the eye should land.
+_TAB_COLORS = {
+    "dark": {"idle": "#9a9da5", "close": "#7a7d85"},
+    "light": {"idle": "#6a6d75", "close": "#a9a7a3"},
+}
+
+
+def _tab_colors(theme: str) -> dict[str, str]:
+    ui = UI_COLORS[theme]
+    return {
+        **_TAB_COLORS[theme],
+        "hover": ui["hover"],
+        "selected": ui["accent_soft"],
+        "accent": ui["accent_text"],
+    }
+
+
+def tab_strip_style(theme: str) -> str:
+    """Stylesheet for a panel's tab strip: the header surface it rides on, the
+    pills in it, and the ✕ and + buttons beside them.
+
+    Shared verbatim by the terminal and the browser, which are the same strip
+    twice — the two had drifted apart once already while they were two copies.
+    """
+    c = _tab_colors(theme)
+    return header_style("#tabRow", theme) + f"""
+QTabBar {{ background: transparent; }}
+QTabBar::tab {{
+    background: transparent;
+    color: {c['idle']};
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    /* Tight on the right: the ✕ button supplies the trailing space. */
+    padding: 5px 0 5px 10px;
+    margin: 0 4px 0 0;
+}}
+QTabBar::tab:hover {{ background: {c['hover']}; }}
+/* After :hover, so hovering the current tab does not tint it grey. */
+QTabBar::tab:selected {{ background: {c['selected']}; color: {c['accent']}; }}
+QToolButton {{
+    background: transparent;
+    color: {c['idle']};
+    border: none;
+    border-radius: 4px;
+    font-size: 14px;
+    padding: 2px 6px;
+}}
+QToolButton:hover {{ background: {c['hover']}; }}
+#tabClose {{ color: {c['close']}; font-size: 10px; padding: 0;
+             border-radius: 8px; }}
+#tabClose:hover {{ background: {c['hover']}; color: {c['accent']}; }}
+"""
+
+
 # Scrollbars for the app's scroll areas, matching the conversation panel's
 # external one: a bare rounded handle on a transparent track, no stepper
 # buttons. Append to a widget's own stylesheet.
@@ -166,15 +245,24 @@ class Card(QFrame):
     no radius and no shadow, for a card that meets its neighbours edge to edge
     and lets the divider between them draw the only line. It implies
     `shadow=False` — an effect on a full-bleed surface has nowhere to fall.
+
+    A header added with `add_header` sits outside the padding rather than in it:
+    a panel's top strip is a surface of its own and runs the full width, while
+    everything below it stays inset. `padding=0` is for a card whose content
+    brings its own (the tab strips, which pad only what is under the strip).
     """
 
     def __init__(
-        self, parent: QWidget | None = None, shadow: bool = True, flat: bool = False
+        self,
+        parent: QWidget | None = None,
+        shadow: bool = True,
+        flat: bool = False,
+        padding: int = 12,
     ):
         super().__init__(parent)
         self.setObjectName("card")
         self._flat = flat
-        self.set_colors("#%02X%02X%02X" % LIGHT.background, "#e0e0e0")
+        self.set_colors(UI_COLORS["light"]["card"], UI_COLORS["light"]["card_border"])
         if shadow and not flat:
             effect = QGraphicsDropShadowEffect(self)
             effect.setBlurRadius(12)
@@ -182,8 +270,15 @@ class Card(QFrame):
             effect.setColor(QColor(0, 0, 0, 40))
             self.setGraphicsEffect(effect)
 
-        self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(12, 12, 12, 12)
+        # Two layers: headers go in the outer one, which has no padding of its
+        # own, and everything else in the inner one, which carries all of it.
+        self._outer = QVBoxLayout(self)
+        self._outer.setContentsMargins(0, 0, 0, 0)
+        self._outer.setSpacing(0)
+        self._layout = QVBoxLayout()
+        self._layout.setContentsMargins(padding, padding, padding, padding)
+        self._outer.addLayout(self._layout, stretch=1)
+        self._headers = 0
 
     def set_colors(self, background: str, border: str) -> None:
         if self._flat:
@@ -201,5 +296,7 @@ class Card(QFrame):
         self._layout.addWidget(widget, stretch)
 
     def add_header(self, widget: QWidget) -> None:
-        """Place a widget as the card's top row (above whatever was added)."""
-        self._layout.insertWidget(0, widget)
+        """Place a widget as the card's top strip: above the content and
+        outside its padding, so it runs the card's full width."""
+        self._outer.insertWidget(self._headers, widget)
+        self._headers += 1

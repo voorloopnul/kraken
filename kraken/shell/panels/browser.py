@@ -19,7 +19,9 @@ class BrowserPanel(Panel):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        self._card = Card(flat=True)
+        # No padding of its own: the tab strip inside runs the panel's full
+        # width and pads the pages under it instead.
+        self._card = Card(flat=True, padding=0)
         self._theme_name = DEFAULT_THEME
         self.browsers = None
         self._creating = False

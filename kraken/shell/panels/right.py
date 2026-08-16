@@ -26,7 +26,9 @@ class RightPanel(Panel):
         remote: "RemoteTarget | None" = None,
     ):
         super().__init__(parent)
-        self._card = Card(flat=True)
+        # No padding of its own: the tab strip inside runs the panel's full
+        # width and pads the terminals under it instead.
+        self._card = Card(flat=True, padding=0)
         self._theme_name = DEFAULT_THEME
         self._cwd = cwd
         self._remote = remote
