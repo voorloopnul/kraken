@@ -11,7 +11,7 @@ and still paints.
 import pytest
 
 from kraken.shell import main_window as main_window_module
-from kraken.shell.title_bar import TitleBar, home_relative
+from kraken.shell.title_bar import TitleBar, _external_app_argv, home_relative
 
 
 @pytest.fixture
@@ -59,6 +59,57 @@ def test_the_session_menu_opens_beside_the_title(bar):
 
 def test_the_memory_readout_stays_at_the_far_right(bar):
     assert bar.memory_label.geometry().left() > bar.session_button.geometry().right()
+
+
+def test_the_external_launcher_sits_immediately_before_memory(bar):
+    launcher = bar.external_open_button.geometry()
+    memory = bar.memory_label.geometry()
+
+    assert launcher.right() < memory.left()
+    assert launcher.left() > bar.session_button.geometry().right()
+
+
+def test_the_external_launcher_offers_the_first_three_apps(bar):
+    assert [a.text() for a in bar.external_open_menu.actions()] == [
+        "Ghostty",
+        "Terminal",
+        "Zed",
+    ]
+
+
+def test_external_apps_receive_the_workspace_path_on_macos(monkeypatch):
+    monkeypatch.setattr("kraken.shell.title_bar.sys.platform", "darwin")
+    path = "/Users/x/Workspace/a project"
+
+    assert _external_app_argv("Ghostty", path) == [
+        "/usr/bin/open",
+        "-na",
+        "Ghostty.app",
+        "--args",
+        f"--working-directory={path}",
+    ]
+    assert _external_app_argv("Terminal", path) == [
+        "/usr/bin/open",
+        "-a",
+        "Terminal",
+        path,
+    ]
+    assert _external_app_argv("Zed", path) == [
+        "/usr/bin/open",
+        "-a",
+        "Zed",
+        path,
+    ]
+
+
+def test_the_external_launcher_is_hidden_without_a_workspace(qapp):
+    bar = TitleBar()
+    try:
+        bar.set_workspace(None)
+        assert bar.external_open_button.isHidden()
+    finally:
+        bar.close()
+        bar.deleteLater()
 
 
 def test_the_memory_readout_requests_the_process_modal(bar):

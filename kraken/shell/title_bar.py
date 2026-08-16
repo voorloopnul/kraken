@@ -9,11 +9,12 @@ the chrome reads as one surface."""
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -72,6 +73,13 @@ QToolButton:hover {{ background: {c['hover']}; }}
    among text rather than in a strip of its own. */
 #panelButton:checked {{ background: {ui['accent_soft']}; }}
 #sessionButton::menu-indicator {{ image: none; }}
+#externalOpenButton {{ background: transparent; border: 1px solid {ui['card_border']};
+                       border-radius: 7px; padding: 3px 25px 3px 7px; }}
+#externalOpenButton:hover {{ background: {ui['hover']}; }}
+#externalOpenButton:disabled {{ border-color: transparent; }}
+#externalOpenButton::menu-indicator {{ subcontrol-origin: padding;
+                                      subcontrol-position: right center;
+                                      width: 22px; height: 20px; image: none; }}
 #memoryLabel {{ background: transparent; border-radius: 5px; padding: 3px 6px; }}
 #memoryLabel:hover {{ background: {ui['hover']}; }}
 #trafficLight {{ background: transparent; border: none; border-radius: 0; }}
@@ -82,6 +90,68 @@ QToolButton:hover {{ background: {c['hover']}; }}
 # bar's first line always names something rather than opening a hole above the
 # folder it belongs to.
 _NO_SESSION = "No session selected"
+
+# The first external-workspace targets. These names are both what the menu
+# says and the keys accepted by _external_app_argv, which keeps the visible
+# order and the launch behavior in one small, explicit list.
+_EXTERNAL_APPS = ("Ghostty", "Terminal", "Zed")
+
+_MACOS_APP_BUNDLES = {
+    "Ghostty": ("/Applications/Ghostty.app", "~/Applications/Ghostty.app"),
+    "Terminal": ("/System/Applications/Utilities/Terminal.app",),
+    "Zed": ("/Applications/Zed.app", "~/Applications/Zed.app"),
+}
+
+
+def _macos_app_icon(application: str) -> QIcon:
+    """The installed app's native icon, or a null icon when it isn't found."""
+    if sys.platform != "darwin":
+        return QIcon()
+    for candidate in _MACOS_APP_BUNDLES.get(application, ()):
+        icon_path = (
+            Path(candidate).expanduser()
+            / "Contents"
+            / "Resources"
+            / f"{application}.icns"
+        )
+        if icon_path.exists():
+            return QIcon(str(icon_path))
+    return QIcon()
+
+
+def _external_app_argv(application: str, path: str) -> list[str]:
+    """Command that opens local workspace ``path`` in ``application``.
+
+    macOS applications are launched through ``open`` so this also works from a
+    bundled Kraken, whose PATH does not necessarily contain an app's optional
+    CLI helper. Ghostty is the exception to the usual folder-as-document
+    convention: its own CLI directs macOS callers to pass configuration values
+    through ``open --args``.
+
+    The non-macOS forms keep the same menu useful in development builds. A
+    generic Linux terminal inherits ``path`` as its process cwd in
+    _run_external_app, so it needs no terminal-specific directory flag.
+    """
+    if sys.platform == "darwin":
+        if application == "Ghostty":
+            return [
+                "/usr/bin/open",
+                "-na",
+                "Ghostty.app",
+                "--args",
+                f"--working-directory={path}",
+            ]
+        if application in ("Terminal", "Zed"):
+            return ["/usr/bin/open", "-a", application, path]
+    else:
+        commands = {
+            "Ghostty": ["ghostty", f"--working-directory={path}"],
+            "Terminal": ["x-terminal-emulator"],
+            "Zed": ["zed", path],
+        }
+        if application in commands:
+            return commands[application]
+    raise ValueError(f"Unknown external application: {application}")
 
 
 def home_relative(path: str) -> str:
@@ -182,6 +252,50 @@ class _TrafficLight(QToolButton):
         self.hovered.emit(False)
 
 
+class _ExternalOpenButton(QToolButton):
+    """The app icon and chevron as a real two-segment control.
+
+    Qt's native menu indicator changes shape and alignment by platform, and is
+    lost entirely by some styles once its segment is given a border. Painting
+    the tiny divider and chevron here keeps this piece of title-bar chrome
+    stable while QToolButton still handles its icon, menu, hover, and clicks.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._chrome_color = QColor(_ICON_COLORS[DEFAULT_THEME])
+        self._divider_color = QColor(UI_COLORS[DEFAULT_THEME]["card_border"])
+
+    def set_chrome_colors(self, foreground: str, divider: str) -> None:
+        self._chrome_color = QColor(foreground)
+        self._divider_color = QColor(divider)
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        divider_x = self.width() - 23.5
+        painter.setPen(QPen(self._divider_color, 1))
+        painter.drawLine(
+            QPointF(divider_x, 4), QPointF(divider_x, self.height() - 4)
+        )
+
+        center_x = self.width() - 11.5
+        center_y = self.height() / 2
+        painter.setPen(QPen(self._chrome_color, 1.5))
+        painter.drawLine(
+            QPointF(center_x - 3.5, center_y - 1.5),
+            QPointF(center_x, center_y + 2),
+        )
+        painter.drawLine(
+            QPointF(center_x, center_y + 2),
+            QPointF(center_x + 3.5, center_y - 1.5),
+        )
+        painter.end()
+
+
 class TitleBar(QWidget):
     # HEAD moved via the branch dropdown; lets the window refresh git views.
     branch_changed = Signal()
@@ -258,6 +372,33 @@ class TitleBar(QWidget):
         self.memory_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.memory_label.clicked.connect(self.memory_requested.emit)
 
+        # A compact split-looking launcher immediately before memory, matching
+        # the familiar "open in" control: its icon names the action and the
+        # chevron opens the available applications. The menu is deliberately
+        # local-only; a remote workspace's path does not exist on this Mac and
+        # opening its anchor directory would be a convincing but wrong result.
+        self.external_open_button = _ExternalOpenButton()
+        self.external_open_button.setObjectName("externalOpenButton")
+        self.external_open_button.setToolTip(
+            "Open workspace in another application"
+        )
+        self.external_open_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.external_open_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.external_open_button.setFixedSize(62, 28)
+        self.external_open_button.setIconSize(QSize(19, 19))
+        self.external_open_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        self.external_open_menu = QMenu(self.external_open_button)
+        self._external_open_actions = {}
+        for application in _EXTERNAL_APPS:
+            action = self.external_open_menu.addAction(application)
+            action.triggered.connect(
+                lambda _=False, app=application: self._open_external_app(app)
+            )
+            self._external_open_actions[application] = action
+        self.external_open_button.setMenu(self.external_open_menu)
+
         # Whether the pointer is over any of the three, which is what decides
         # if the glyphs are showing.
         self._traffic_hovered = False
@@ -311,6 +452,7 @@ class TitleBar(QWidget):
         layout.addWidget(self.left_panel_toggle)
         layout.addSpacing(2)
         layout.addLayout(column, stretch=1)
+        layout.addWidget(self.external_open_button)
         layout.addWidget(self.memory_label)
 
         # One slow tick keeps the live readouts fresh: memory always drifts,
@@ -343,7 +485,60 @@ class TitleBar(QWidget):
             fm.elidedText(folder, Qt.TextElideMode.ElideMiddle, 420)
         )
         self.folder_label.setToolTip(folder)
+        self.external_open_button.setVisible(bool(path))
+        self.external_open_button.setEnabled(bool(path) and remote is None)
+        self.external_open_button.setToolTip(
+            "Open workspace in another application"
+            if remote is None
+            else "External applications are unavailable for remote workspaces"
+        )
         self._refresh_branch()
+
+    # ---- External applications --------------------------------------------
+
+    def _open_external_app(self, application: str) -> None:
+        """Launch the current local workspace without holding up the UI."""
+        if not self._workspace_path or self._remote is not None:
+            return
+        path = self._workspace_path
+        debug.action("workspace.open-external", application=application, path=path)
+        run_async(
+            lambda: self._run_external_app(application, path),
+            lambda result, app=application: self._after_external_open(app, result),
+            self,
+        )
+
+    @staticmethod
+    def _run_external_app(application: str, path: str):
+        """Run the platform launcher. Worker-thread safe (no Qt calls)."""
+        try:
+            return subprocess.run(
+                _external_app_argv(application, path),
+                cwd=path,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+            return exc
+
+    def _after_external_open(self, application: str, result) -> None:
+        if isinstance(result, (OSError, subprocess.TimeoutExpired, ValueError)):
+            detail = str(result)
+        elif result is None:
+            detail = "The application launcher did not return a result."
+        elif result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip()
+            detail = detail or f"The launcher exited with status {result.returncode}."
+        else:
+            return
+        debug.error(
+            "workspace.open-external failed",
+            application=application,
+            detail=detail,
+        )
+        QMessageBox.warning(self, f"Could not open {application}", detail)
 
     def set_conversation(self, title: str) -> None:
         fm = self.conversation_label.fontMetrics()
@@ -553,6 +748,9 @@ class TitleBar(QWidget):
         self._theme_name = name
         self._apply_style()
         color = _ICON_COLORS[name]
+        self.external_open_button.set_chrome_colors(
+            color, UI_COLORS[name]["card_border"]
+        )
         self.branch_button.setIcon(icon("git-branch", color, 14))
         # Blue on the accent tint once the History panel is showing, to match
         # the strip on the other side of the window.
@@ -560,6 +758,14 @@ class TitleBar(QWidget):
             toggle_icon("panel-left", color, UI_COLORS[name]["accent_text"], 16)
         )
         self.session_button.setIcon(icon("ellipsis", color, 14))
+        fallback = icon("square-terminal", color, 19)
+        zed_icon = _macos_app_icon("Zed")
+        self.external_open_button.setIcon(
+            zed_icon if not zed_icon.isNull() else fallback
+        )
+        for application, action in self._external_open_actions.items():
+            app_icon = _macos_app_icon(application)
+            action.setIcon(app_icon if not app_icon.isNull() else fallback)
         # The lights carry no theme colour of their own, but the maximized
         # state still has to be re-applied here.
         self.set_maximized(self._maximized)
