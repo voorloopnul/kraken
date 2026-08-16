@@ -33,6 +33,7 @@ from PySide6.QtWidgets import QWidget
 
 from kraken import debug
 from kraken.terminal import ghostty_vt as g
+from kraken.terminal.typography import DEFAULT_SIZE, clamp
 from kraken.terminal.keymap import QT_KEY_MAP, UNSHIFTED
 from kraken.ui.themes import DEFAULT_THEME, THEMES
 
@@ -180,6 +181,7 @@ class GhosttyTerminalWidget(QWidget):
         parent: QWidget | None = None,
         cwd: str | None = None,
         remote: "RemoteTarget | None" = None,
+        font_size: int = DEFAULT_SIZE,
     ):
         super().__init__(parent)
         self._cwd = cwd
@@ -192,7 +194,8 @@ class GhosttyTerminalWidget(QWidget):
         self.setCursor(Qt.CursorShape.IBeamCursor)
 
         font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
-        font.setPointSizeF(10.5)
+        self._font_size = clamp(font_size)
+        font.setPointSizeF(float(self._font_size))
         self.setFont(font)
         self._update_font_metrics()
 
@@ -722,6 +725,20 @@ class GhosttyTerminalWidget(QWidget):
         self._cell_w = max(1, round(fm.horizontalAdvance("M")))
         self._cell_h = max(1, round(fm.height()))
         self._ascent = round(fm.ascent())
+
+    def set_font_size(self, size: int) -> None:
+        """Resize the terminal grid font and tell a visible PTY its new grid."""
+        size = clamp(size)
+        if size == self._font_size:
+            return
+        self._font_size = size
+        font = self.font()
+        font.setPointSizeF(float(size))
+        self.setFont(font)
+        self._update_font_metrics()
+        self.updateGeometry()
+        self._apply_resize()
+        self.update()
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)

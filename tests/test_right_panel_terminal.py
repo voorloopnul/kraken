@@ -26,8 +26,9 @@ class FakeTabs(QWidget):
     """The tab strip's contract as this panel uses it: it opens a tab of its
     own on construction, hands out the current one, and adds more on request."""
 
-    def __init__(self, parent=None, cwd=None, remote=None):
+    def __init__(self, parent=None, cwd=None, remote=None, font_size=13):
         super().__init__(parent)
+        self.font_size = font_size
         self.tabs: list[FakeTerminal] = []
         self.add_terminal()
 
@@ -41,6 +42,9 @@ class FakeTabs(QWidget):
 
     def set_theme(self, name: str) -> None:
         pass
+
+    def set_font_size(self, size: int) -> None:
+        self.font_size = size
 
     def mount_grip(self, grip) -> None:
         pass
@@ -78,3 +82,10 @@ def test_a_pane_already_on_screen_is_not_taken_over(panel):
     terminal = panel.open_terminal()
     assert terminal is not panel.terminals.tabs[0]
     assert len(panel.terminals.tabs) == 2
+
+
+def test_font_size_is_kept_for_lazy_terminal_creation(panel):
+    panel.set_font_size(17)
+    panel.open_terminal()
+
+    assert panel.terminals.font_size == 17

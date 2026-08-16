@@ -26,6 +26,7 @@ from kraken.shell.panels import (
 from kraken.agent.session_controller import SessionController
 from kraken.chat.typography import DEFAULT_SIZE, clamp
 from kraken.ui.themes import DEFAULT_THEME
+from kraken.terminal.typography import DEFAULT_SIZE as DEFAULT_TERMINAL_SIZE, clamp as clamp_terminal
 
 if TYPE_CHECKING:
     from kraken.agent.remote import RemoteTarget
@@ -70,6 +71,7 @@ class WorkspaceView(QWidget):
         self.path = path
         self._theme_name = DEFAULT_THEME
         self._font_size = DEFAULT_SIZE
+        self._terminal_font_size = DEFAULT_TERMINAL_SIZE
         # When set, this workspace lives on a remote host: `path` is the local
         # anchor folder (where pi runs and stores sessions), while the agent,
         # terminal, and the git and diff panels all operate on the remote over
@@ -90,7 +92,9 @@ class WorkspaceView(QWidget):
         self.diff_panel.setMinimumWidth(300)
         self.git_panel = GitPanel(cwd=path, remote=remote)
         self.git_panel.setMinimumWidth(320)
-        self.right_panel = RightPanel(cwd=path, remote=remote)
+        self.right_panel = RightPanel(
+            cwd=path, remote=remote, font_size=self._terminal_font_size
+        )
         # The terminal panel never shrinks below a usable width; the splitter
         # stops the drag here rather than letting it collapse to a sliver.
         self.right_panel.setMinimumWidth(380)
@@ -466,6 +470,11 @@ class WorkspaceView(QWidget):
         self.center_panel.set_font_size(self._font_size)
         for controller in self.controllers:
             controller.set_font_size(self._font_size)
+
+    def set_terminal_font_size(self, size: int) -> None:
+        """Apply the terminal size now and to tabs opened later."""
+        self._terminal_font_size = clamp_terminal(size)
+        self.right_panel.set_font_size(self._terminal_font_size)
 
     def shutdown(self) -> None:
         # Reap every agent process even if one teardown misbehaves: a raised

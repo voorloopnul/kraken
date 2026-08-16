@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QWidget
 from kraken.shell.panels.base import Panel
 from kraken.ui.chrome import Card
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
+from kraken.terminal.typography import DEFAULT_SIZE, clamp
 
 if TYPE_CHECKING:
     from kraken.agent.remote import RemoteTarget
@@ -24,6 +25,7 @@ class RightPanel(Panel):
         parent: QWidget | None = None,
         cwd: str | None = None,
         remote: "RemoteTarget | None" = None,
+        font_size: int = DEFAULT_SIZE,
     ):
         super().__init__(parent)
         # No padding of its own: the tab strip inside runs the panel's full
@@ -32,6 +34,7 @@ class RightPanel(Panel):
         self._theme_name = DEFAULT_THEME
         self._cwd = cwd
         self._remote = remote
+        self._font_size = clamp(font_size)
         self.terminals = None
         self._creating = False
         # Held (unparented, so nothing paints) until the tab strip it rides in
@@ -60,7 +63,12 @@ class RightPanel(Panel):
         try:
             from kraken.terminal.tabs import TerminalTabs
 
-            terminals = TerminalTabs(self, cwd=self._cwd, remote=self._remote)
+            terminals = TerminalTabs(
+                self,
+                cwd=self._cwd,
+                remote=self._remote,
+                font_size=self._font_size,
+            )
             terminals.set_theme(self._theme_name)
             if self._grip is not None:
                 terminals.mount_grip(self._grip)
@@ -98,6 +106,11 @@ class RightPanel(Panel):
         self._card.set_colors(ui["card"], ui["card_border"])
         if self.terminals is not None:
             self.terminals.set_theme(name)
+
+    def set_font_size(self, size: int) -> None:
+        self._font_size = clamp(size)
+        if self.terminals is not None:
+            self.terminals.set_font_size(self._font_size)
 
     def shutdown(self) -> None:
         if self.terminals is not None:

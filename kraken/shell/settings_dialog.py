@@ -40,6 +40,12 @@ from PySide6.QtWidgets import (
 from shiboken6 import isValid
 
 from kraken.chat.typography import DEFAULT_SIZE, MAX_SIZE, MIN_SIZE, clamp
+from kraken.terminal.typography import (
+    DEFAULT_SIZE as DEFAULT_TERMINAL_SIZE,
+    MAX_SIZE as MAX_TERMINAL_SIZE,
+    MIN_SIZE as MIN_TERMINAL_SIZE,
+    clamp as clamp_terminal,
+)
 from kraken.shell.framed_dialog import FramedDialog, ICON_COLORS
 from kraken.shell.settings_models import ModelsPage
 from kraken.shell.settings_page import Page, label, stepper
@@ -194,6 +200,7 @@ class SettingsDialog(FramedDialog):
 
     theme_selected = Signal(str)
     font_size_selected = Signal(int)
+    terminal_font_size_selected = Signal(int)
     codex_signin_requested = Signal()
 
     def __init__(
@@ -201,11 +208,13 @@ class SettingsDialog(FramedDialog):
         parent: QWidget | None = None,
         theme_name: str = DEFAULT_THEME,
         font_size: int = DEFAULT_SIZE,
+        terminal_font_size: int = DEFAULT_TERMINAL_SIZE,
         fetch_models: Callable[[Callable[[list], None]], None] | None = None,
     ):
         super().__init__("Settings", parent)
         self._theme_name = theme_name
         self._font_size = clamp(font_size)
+        self._terminal_font_size = clamp_terminal(terminal_font_size)
         # How the Models page gets pi's catalogue. The window supplies it,
         # since only it knows which session is on screen to ask.
         self._fetch_models = fetch_models
@@ -390,6 +399,7 @@ class SettingsDialog(FramedDialog):
         page.add_section("Appearance")
         self._theme_picker = QComboBox()
         self._font_picker = QSpinBox()
+        self._terminal_font_picker = QSpinBox()
         for name in THEMES:
             self._theme_picker.addItem(name.capitalize(), name)
         self._theme_picker.setCurrentIndex(
@@ -414,6 +424,18 @@ class SettingsDialog(FramedDialog):
             "of the pane — headings, code, the composer, tool detail — is "
             "sized from it. Applies to open transcripts as well as new ones.",
             stepper(self._font_picker),
+        )
+        self._terminal_font_picker.setRange(MIN_TERMINAL_SIZE, MAX_TERMINAL_SIZE)
+        self._terminal_font_picker.setSuffix(" pt")
+        self._terminal_font_picker.setValue(self._terminal_font_size)
+        self._terminal_font_picker.valueChanged.connect(
+            self._on_terminal_font_size_picked
+        )
+        page.add_row(
+            "Terminal Font Size",
+            "Point size for terminal text. Applies immediately to every open "
+            "terminal and to new terminal tabs.",
+            stepper(self._terminal_font_picker),
         )
         return page
 
@@ -451,6 +473,12 @@ class SettingsDialog(FramedDialog):
             return
         self._font_size = size
         self.font_size_selected.emit(size)
+
+    def _on_terminal_font_size_picked(self, size: int) -> None:
+        if size == self._terminal_font_size:
+            return
+        self._terminal_font_size = size
+        self.terminal_font_size_selected.emit(size)
 
     def _on_theme_picked(self, name: str | None) -> None:
         if not name or name == self._theme_name:

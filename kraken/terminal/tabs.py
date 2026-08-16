@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from kraken.terminal.widget import GhosttyTerminalWidget
+from kraken.terminal.typography import DEFAULT_SIZE, clamp
 from kraken.ui.chrome import PANEL_HEADER_HEIGHT, tab_strip_style
 from kraken.ui.themes import DEFAULT_THEME
 
@@ -35,12 +36,14 @@ class TerminalTabs(QWidget):
         parent: QWidget | None = None,
         cwd: str | None = None,
         remote: "RemoteTarget | None" = None,
+        font_size: int = DEFAULT_SIZE,
     ):
         super().__init__(parent)
         self._theme_name = DEFAULT_THEME
         self._counter = 0
         self._cwd = cwd
         self._remote = remote
+        self._font_size = clamp(font_size)
 
         self._tab_bar = QTabBar()
         self._tab_bar.setExpanding(False)
@@ -108,7 +111,12 @@ class TerminalTabs(QWidget):
         return [self._stack.widget(i) for i in range(self._stack.count())]
 
     def add_terminal(self) -> GhosttyTerminalWidget:
-        term = GhosttyTerminalWidget(self, cwd=self._cwd, remote=self._remote)
+        term = GhosttyTerminalWidget(
+            self,
+            cwd=self._cwd,
+            remote=self._remote,
+            font_size=self._font_size,
+        )
         if self._theme_name != DEFAULT_THEME:
             term.set_theme(self._theme_name)
         self._stack.addWidget(term)
@@ -178,6 +186,11 @@ class TerminalTabs(QWidget):
         self._tab_row.setStyleSheet(tab_strip_style(name))
         for term in self.terminals():
             term.set_theme(name)
+
+    def set_font_size(self, size: int) -> None:
+        self._font_size = clamp(size)
+        for term in self.terminals():
+            term.set_font_size(self._font_size)
 
     def shutdown_all(self) -> None:
         for term in self.terminals():

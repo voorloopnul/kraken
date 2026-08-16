@@ -5,6 +5,7 @@ choice that reaches the rest of the app as it is picked rather than on close."""
 from PySide6.QtCore import Qt
 
 from kraken.chat.typography import MAX_SIZE, MIN_SIZE
+from kraken.terminal.typography import MAX_SIZE as TERMINAL_MAX_SIZE
 from kraken.shell.settings_dialog import SettingsDialog
 from kraken.shell.workspace_bar import WorkspaceBar
 
@@ -168,6 +169,26 @@ def test_font_size_is_bounded_by_what_the_chat_supports(qapp):
     assert dialog._font_picker.value() == MAX_SIZE
     assert dialog._font_picker.minimum() == MIN_SIZE
     assert dialog._font_picker.maximum() == MAX_SIZE
+
+
+def test_terminal_font_size_starts_current_and_emits_live(qapp):
+    dialog = SettingsDialog(theme_name="dark", terminal_font_size=15)
+    picked = []
+    dialog.terminal_font_size_selected.connect(picked.append)
+
+    assert dialog._terminal_font_picker.value() == 15
+    assert dialog._terminal_font_picker.suffix() == " pt"
+    dialog._terminal_font_picker.setValue(17)
+
+    assert picked == [17]
+
+
+def test_terminal_font_size_is_bounded(qapp):
+    dialog = SettingsDialog(
+        theme_name="dark", terminal_font_size=TERMINAL_MAX_SIZE + 10
+    )
+
+    assert dialog._terminal_font_picker.value() == TERMINAL_MAX_SIZE
 
 
 def test_a_late_model_list_does_not_reach_a_closed_dialog(qapp):

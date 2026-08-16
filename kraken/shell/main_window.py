@@ -23,6 +23,10 @@ from kraken.agent import remote as remote_mod
 from kraken.agent.config import load_state, save_state
 from kraken.agent.pi_catalogue import ModelQuery, deliver_once
 from kraken.chat.typography import DEFAULT_SIZE, clamp
+from kraken.terminal.typography import (
+    DEFAULT_SIZE as DEFAULT_TERMINAL_SIZE,
+    clamp as clamp_terminal,
+)
 from kraken.shell.remote_dialog import RemoteWorkspaceDialog
 from kraken.shell.settings_dialog import SettingsDialog
 from kraken.shell.side_bar import SideBar
@@ -187,6 +191,11 @@ class MainWindow(QMainWindow):
         # workspace view is handed it as it is created, so a size chosen once
         # survives both new workspaces and new sessions.
         self._font_size = clamp(load_state().get("chat_font_size", DEFAULT_SIZE))
+        # Terminal text is independent of chat text: terminals use points and
+        # a fixed-pitch system face, and every existing/new tab follows this.
+        self._terminal_font_size = clamp_terminal(
+            load_state().get("terminal_font_size", DEFAULT_TERMINAL_SIZE)
+        )
         # Coalesces a run of sizes from the picker into one apply; see
         # set_chat_font_size.
         self._font_apply = QTimer(self)
@@ -372,15 +381,22 @@ class MainWindow(QMainWindow):
         self.title_bar.set_theme(name)
 
     def _open_settings(self) -> None:
-        debug.action("settings.open", theme=self._theme_name, font=self._font_size)
+        debug.action(
+            "settings.open",
+            theme=self._theme_name,
+            font=self._font_size,
+            terminal_font=self._terminal_font_size,
+        )
         dialog = SettingsDialog(
             self,
             theme_name=self._theme_name,
             font_size=self._font_size,
+            terminal_font_size=self._terminal_font_size,
             fetch_models=self._fetch_models,
         )
         dialog.theme_selected.connect(self.set_theme)
         dialog.font_size_selected.connect(self.set_chat_font_size)
+        dialog.terminal_font_size_selected.connect(self.set_terminal_font_size)
         dialog.codex_signin_requested.connect(self._start_codex_signin)
         dialog.exec()
         self.flush_font_size()
@@ -489,6 +505,17 @@ class MainWindow(QMainWindow):
         for view in self.views.values():
             view.set_chat_font_size(size)
 
+    def set_terminal_font_size(self, size: int) -> None:
+        """Apply and persist the terminal point size for all workspaces."""
+        size = clamp_terminal(size)
+        if size == self._terminal_font_size:
+            return
+        self._terminal_font_size = size
+        debug.action("terminal.font-size", size=size, views=len(self.views))
+        save_state(terminal_font_size=size)
+        for view in self.views.values():
+            view.set_terminal_font_size(size)
+
     def _add_workspace(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Add Workspace")
         debug.action("workspace.add", path=path or "(cancelled)")
@@ -580,6 +607,7 @@ class MainWindow(QMainWindow):
             view = WorkspaceView(path, remote=target)
             view.set_theme(self._theme_name)
             view.set_chat_font_size(self._font_size)
+            view.set_terminal_font_size(self._terminal_font_size)
             # A clicked transcript link opens the browser panel through the
             # same action used by its side-bar toggle.
             view.browser_requested.connect(
