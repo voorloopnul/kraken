@@ -46,11 +46,13 @@ _EDGE_BAND = 0.28
 # Pixels the header must travel before a click turns into a drag.
 _DRAG_THRESHOLD = 6
 
-# The grip sits inside the panel's card, so it paints transparent over the
-# card and carries nothing but the glyph itself.
+# The grip sits inside the panel's top strip, so it paints transparent over it
+# and carries nothing but the glyph itself.
 _HEADER_COLORS = {
-    "dark": {"grip": "#5a5d65", "hover": "#2c2e35"},
-    "light": {"grip": "#a9acb4", "hover": "#ececef"},
+    "dark": {"grip": "#5a5d65", "hover": UI_COLORS["dark"]["hover"]},
+    # Both read against the header surface the grip rides on, which is a shade
+    # off the card — a hover tint mixed for the card is invisible here.
+    "light": {"grip": "#b0aeaa", "hover": UI_COLORS["light"]["hover"]},
 }
 # The divider between two panels is the border they no longer draw themselves,
 # so it is the same colour a card's border would have been. The handle carrying
@@ -77,9 +79,13 @@ def _surface_key(widget: QWidget | None) -> str:
     if isinstance(widget, DockPanel):
         return getattr(widget.content, "SURFACE_KEY", "card")
     return "card"
-# Drop indicator: a translucent fill with a solid accent border.
-_DROP_FILL = QColor(79, 131, 224, 60)
-_DROP_BORDER = QColor(79, 131, 224, 220)
+# Drop indicator: a translucent fill with a solid accent border. One colour for
+# both themes — it is painted over whichever panels the drag is passing across,
+# so it answers to those rather than to the theme, and the accent is legible on
+# either. The two alphas are the same colour twice, so they are mixed from it.
+_ACCENT = QColor(UI_COLORS["light"]["accent"])
+_DROP_FILL = QColor(_ACCENT.red(), _ACCENT.green(), _ACCENT.blue(), 60)
+_DROP_BORDER = QColor(_ACCENT.red(), _ACCENT.green(), _ACCENT.blue(), 220)
 
 
 class _GripHandle(QSplitterHandle):

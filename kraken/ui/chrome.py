@@ -141,11 +141,11 @@ QAbstractScrollArea::corner { background: transparent; border: none; }
 """,
     "light": """
 QScrollBar:horizontal { background: transparent; border: none; height: 10px; margin: 0; }
-QScrollBar::handle:horizontal { background: #c9c9ce; border-radius: 5px; min-width: 24px; }
-QScrollBar::handle:horizontal:hover { background: #b3b4b9; }
+QScrollBar::handle:horizontal { background: #ccc9c3; border-radius: 5px; min-width: 24px; }
+QScrollBar::handle:horizontal:hover { background: #b6b3ac; }
 QScrollBar:vertical { background: transparent; border: none; width: 10px; margin: 0; }
-QScrollBar::handle:vertical { background: #c9c9ce; border-radius: 5px; min-height: 24px; }
-QScrollBar::handle:vertical:hover { background: #b3b4b9; }
+QScrollBar::handle:vertical { background: #ccc9c3; border-radius: 5px; min-height: 24px; }
+QScrollBar::handle:vertical:hover { background: #b6b3ac; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 QAbstractScrollArea::corner { background: transparent; border: none; }

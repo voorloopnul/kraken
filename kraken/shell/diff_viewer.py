@@ -72,8 +72,8 @@ _COLORS = {
         "del": "#c93c36",
         "add_bg": "#e9f6e9",
         "del_bg": "#fdeceb",
-        "hunk_bg": "#eeeef2",
-        "gutter": "#a9acb4",
+        "hunk_bg": "#f2f0ec",
+        "gutter": "#aeaba4",
         "scrim": QColor(24, 22, 18, 130),
     },
 }

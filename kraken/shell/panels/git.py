@@ -39,7 +39,7 @@ QListWidget::item:hover { background: #2c2e35; }
 QListWidget { background: transparent; border: none; color: #4a4d55;
               font-family: 'JetBrains Mono', monospace; font-size: 11px; }
 QListWidget::item { padding: 2px 4px; border-radius: 4px; }
-QListWidget::item:hover { background: #e8e8ec; }
+QListWidget::item:hover { background: #f1efeb; }
 """,
 }
 
@@ -383,7 +383,7 @@ class GitPanel(Panel):
         if changed and self.isVisible():
             self.refresh()
         dim, hover = (
-            ("#7a7d85", "#2c2e35") if name == "dark" else ("#5f6269", "#e8e8ec")
+            ("#7a7d85", "#2c2e35") if name == "dark" else ("#5f6269", "#f1efeb")
         )
         self.refresh_button.setStyleSheet(
             f"QToolButton {{ background: transparent; border: none;"

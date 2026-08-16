@@ -27,6 +27,8 @@ from PySide6.QtCore import QByteArray, QRectF, Qt
 from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
+__all__ = ["icon", "paint", "toggle_icon"]
+
 # Rendered at twice the logical size, as the hand-drawn icons were: the pixmap
 # carries the ratio, so Qt paints it at the right size on either kind of
 # display and it stays sharp on the scaled one.
@@ -59,11 +61,10 @@ def paint(painter: QPainter, rect: QRectF, name: str, color: str) -> None:
 
 
 @lru_cache(maxsize=None)
-def icon(name: str, color: str, size: int = 18) -> QIcon:
-    """A Lucide icon in `color`, sized for a button that asks for `size`.
-
-    Cached: a theme change rebuilds every icon in the window at once, and the
-    same handful of (name, colour, size) triples come back each time."""
+def _pixmap(name: str, color: str, size: int) -> QPixmap:
+    """The rendered glyph, at twice `size` and carrying the ratio that says so.
+    Kept apart from `icon` because a toggle needs two of these in one QIcon, and
+    QIcon.pixmap() would hand back a copy that has lost the ratio."""
     pixmap = QPixmap(int(size * _SCALE), int(size * _SCALE))
     pixmap.setDevicePixelRatio(_SCALE)
     pixmap.fill(Qt.GlobalColor.transparent)
@@ -72,4 +73,27 @@ def icon(name: str, color: str, size: int = 18) -> QIcon:
     # In logical coordinates: the pixmap's ratio already scales the painter.
     paint(painter, QRectF(0, 0, size, size), name, color)
     painter.end()
-    return QIcon(pixmap)
+    return pixmap
+
+
+@lru_cache(maxsize=None)
+def icon(name: str, color: str, size: int = 18) -> QIcon:
+    """A Lucide icon in `color`, sized for a button that asks for `size`.
+
+    Cached: a theme change rebuilds every icon in the window at once, and the
+    same handful of (name, colour, size) triples come back each time."""
+    return QIcon(_pixmap(name, color, size))
+
+
+@lru_cache(maxsize=None)
+def toggle_icon(name: str, off: str, on: str, size: int = 18) -> QIcon:
+    """A Lucide icon for a checkable button: `off` while it is unchecked, `on`
+    once it is.
+
+    The two are one QIcon rather than two swapped by hand — a checked button
+    reads State.On off the icon it already carries, so nothing has to notice the
+    toggle and repaint it. A checked tool button in this app is filled with the
+    accent, and a glyph in the idle grey does not survive that background."""
+    both = QIcon(_pixmap(name, off, size))
+    both.addPixmap(_pixmap(name, on, size), QIcon.Mode.Normal, QIcon.State.On)
+    return both

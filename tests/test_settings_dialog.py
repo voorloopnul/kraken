@@ -44,7 +44,7 @@ def test_the_decoration_is_themed_with_the_rest(qapp):
     dialog = SettingsDialog(theme_name="dark")
     assert "#dialogTitleBar { background: #1b1c21;" in dialog.styleSheet()
     dialog._theme_picker.setCurrentIndex(dialog._theme_picker.findData("light"))
-    assert "#dialogTitleBar { background: #fafafa;" in dialog.styleSheet()
+    assert "#dialogTitleBar { background: #faf9f7;" in dialog.styleSheet()
     # The window's corners are rounded by the widgets sitting in them, which
     # only the frameless window has to do for itself.
     assert "border-top-left-radius" in dialog.styleSheet()

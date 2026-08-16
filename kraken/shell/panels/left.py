@@ -34,7 +34,7 @@ _HISTORY_STYLES = {
 QListWidget { background: transparent; border: none; font-family: 'Roboto'; font-size: 13px; }
 QListWidget::item { padding: 6px 8px; border-radius: 6px; }
 QListWidget::item:hover { background: #2c2e35; }
-QListWidget::item:selected { background: #1c2f50; }
+QListWidget::item:selected { background: #26365e; }
 QScrollBar:vertical { background: transparent; border: none; width: 10px; margin: 0; }
 QScrollBar::handle:vertical { background: #3a3d45; border-radius: 5px; min-height: 24px; }
 QScrollBar::handle:vertical:hover { background: #4a4e58; }
@@ -44,11 +44,11 @@ QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
     "light": """
 QListWidget { background: transparent; border: none; font-family: 'Roboto'; font-size: 13px; }
 QListWidget::item { padding: 6px 8px; border-radius: 6px; }
-QListWidget::item:hover { background: #e8e8ec; }
-QListWidget::item:selected { background: #dce8fb; }
+QListWidget::item:hover { background: #f1efeb; }
+QListWidget::item:selected { background: #dfe6f8; }
 QScrollBar:vertical { background: transparent; border: none; width: 10px; margin: 0; }
-QScrollBar::handle:vertical { background: #c9c9ce; border-radius: 5px; min-height: 24px; }
-QScrollBar::handle:vertical:hover { background: #b3b4b9; }
+QScrollBar::handle:vertical { background: #ccc9c3; border-radius: 5px; min-height: 24px; }
+QScrollBar::handle:vertical:hover { background: #b6b3ac; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 """,
@@ -68,9 +68,9 @@ QPushButton { background: #26282e; border: 1px solid #33353c; border-radius: 6px
 QPushButton:hover { background: #2c2e35; color: #ffffff; }
 """,
     "light": """
-QPushButton { background: #f5f5f6; border: 1px solid #d8d8dd; border-radius: 6px;
+QPushButton { background: #f7f6f3; border: 1px solid #dedbd6; border-radius: 6px;
               color: #4a4d55; font-size: 12px; padding: 5px 8px; }
-QPushButton:hover { background: #e8e8ec; color: #1b1d22; }
+QPushButton:hover { background: #f1efeb; color: #1b1d22; }
 """,
 }
 

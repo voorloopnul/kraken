@@ -8,31 +8,32 @@ from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import QToolButton, QVBoxLayout, QWidget
 
 from kraken.ui.chrome import corner_style
-from kraken.ui.icons import icon
-from kraken.ui.themes import DEFAULT_THEME
+from kraken.ui.icons import toggle_icon
+from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 
-_STYLES = {
-    "dark": """
-#sideBar { background: #1b1c21; border-left: 1px solid #33353c; }
-QToolButton {
-    background: transparent; border: none; border-radius: 6px;
-    color: #9a9da5; font-size: 15px; padding: 4px;
-}
-QToolButton:hover { background: #2c2e35; color: #ffffff; }
-QToolButton:checked { background: #26282e; color: #ffffff; }
-""",
-    "light": """
-#sideBar { background: #fafafa; border-left: 1px solid #e0e0e0; }
-QToolButton {
-    background: transparent; border: none; border-radius: 6px;
-    color: #5a5d65; font-size: 15px; padding: 4px;
-}
-QToolButton:hover { background: #e8e8ec; color: #1b1d22; }
-QToolButton:checked { background: #e0e0e5; color: #1b1d22; }
-""",
-}
 
 _ICON_COLORS = {"dark": "#9a9da5", "light": "#5a5d65"}
+
+
+def _style(theme: str) -> str:
+    """The strip's surface and the buttons on it.
+
+    A button whose panel is open is filled with the accent and carries a white
+    glyph — the one thing in this strip that is not grey, because "which panels
+    are open" is the only question the strip answers. It used to be marked with
+    a grey a shade off the strip itself, which said the same thing so quietly
+    that the checked button and its neighbours read as one block."""
+    ui = UI_COLORS[theme]
+    return f"""
+#sideBar {{ background: {ui['sidebar']}; border-left: 1px solid {ui['card_border']}; }}
+QToolButton {{
+    background: transparent; border: none; border-radius: 6px;
+    color: {_ICON_COLORS[theme]}; font-size: 15px; padding: 4px;
+}}
+QToolButton:hover {{ background: {ui['hover']}; color: {ui['text']}; }}
+/* After :hover, so hovering an open panel's button does not grey it out. */
+QToolButton:checked {{ background: {ui['accent']}; color: {ui['accent_on']}; }}
+"""
 
 
 # Buttons rendered with icons instead of text glyphs; each is re-rendered on
@@ -95,12 +96,20 @@ class SideBar(QWidget):
 
     def _apply_style(self) -> None:
         self.setStyleSheet(
-            _STYLES[self._theme_name]
+            _style(self._theme_name)
             + corner_style("#sideBar", ("bottom-right",), self._corner_radius)
         )
 
     def set_theme(self, name: str) -> None:
         self._theme_name = name
         self._apply_style()
+        ui = UI_COLORS[name]
         for button_name, icon_name in _ICONS.items():
-            self.buttons[button_name].setIcon(icon(icon_name, _ICON_COLORS[name]))
+            # Every button gets both glyphs, including the ones that are not
+            # checkable: the strip is themed once at construction and again
+            # once MainWindow has wired it up, and only the second of those
+            # happens after the panel toggles have been made checkable. A
+            # button that never checks simply never reaches the second glyph.
+            self.buttons[button_name].setIcon(
+                toggle_icon(icon_name, _ICON_COLORS[name], ui["accent_on"])
+            )

@@ -45,14 +45,14 @@ QTreeWidget { background: transparent; border: none; color: #c8cad0;
               font-family: 'JetBrains Mono', monospace; font-size: 11px; }
 QTreeWidget::item { padding: 2px 0; }
 QTreeWidget::item:hover { background: #2c2e35; }
-QTreeWidget::item:selected { background: #333640; color: #e8eaf0; }
+QTreeWidget::item:selected { background: #26365e; color: #e8eaf0; }
 """,
     "light": """
 QTreeWidget { background: transparent; border: none; color: #4a4d55;
               font-family: 'JetBrains Mono', monospace; font-size: 11px; }
 QTreeWidget::item { padding: 2px 0; }
-QTreeWidget::item:hover { background: #e8e8ec; }
-QTreeWidget::item:selected { background: #dfe3ea; color: #21232a; }
+QTreeWidget::item:hover { background: #f1efeb; }
+QTreeWidget::item:selected { background: #dfe6f8; color: #21232a; }
 """,
 }
 
@@ -734,7 +734,7 @@ class DiffPanel(Panel):
         if changed and self.isVisible():
             self.refresh()
         dim, hover = (
-            ("#7a7d85", "#2c2e35") if name == "dark" else ("#5f6269", "#e8e8ec")
+            ("#7a7d85", "#2c2e35") if name == "dark" else ("#5f6269", "#f1efeb")
         )
         self.refresh_button.setStyleSheet(
             f"QToolButton {{ background: transparent; border: none;"

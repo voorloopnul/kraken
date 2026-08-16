@@ -84,7 +84,7 @@ QLineEdit#settingsSearch {
     background: #26282e; border: 1px solid #33353c; border-radius: 6px;
     padding: 5px 22px 5px 26px; color: #c8cad0;
 }
-QLineEdit#settingsSearch:focus { border-color: #4f83e0; }
+QLineEdit#settingsSearch:focus { border-color: #496ecf; }
 QTreeWidget#settingsTree {
     background: transparent; border: none; outline: none;
     color: #9a9da5; font-size: 13px;
@@ -118,12 +118,12 @@ QToolButton#settingsBack:hover { background: #2c2e35; }
 QToolButton#settingsBack:disabled { opacity: 0.4; }
 """,
     "light": """
-QWidget#settingsNav { background: #fafafa; border-right: 1px solid #e0e0e0; }
+QWidget#settingsNav { background: #faf9f7; border-right: 1px solid #e6e4e0; }
 QLineEdit#settingsSearch {
-    background: #ffffff; border: 1px solid #d8d8dd; border-radius: 6px;
+    background: #ffffff; border: 1px solid #dedbd6; border-radius: 6px;
     padding: 5px 22px 5px 26px; color: #383a42;
 }
-QLineEdit#settingsSearch:focus { border-color: #4f83e0; }
+QLineEdit#settingsSearch:focus { border-color: #496ecf; }
 QTreeWidget#settingsTree {
     background: transparent; border: none; outline: none;
     color: #5a5d65; font-size: 13px;
@@ -132,17 +132,17 @@ QTreeWidget#settingsTree::item { padding: 6px 6px; border-radius: 6px; }
 QScrollArea#settingsScroll,
 QScrollArea#settingsScroll > QWidget > QWidget,
 QStackedWidget#settingsPages { background: transparent; }
-QTreeWidget#settingsTree::item:hover { background: #e8e8ec; color: #1b1d22; }
-QTreeWidget#settingsTree::item:selected { background: #e0e0e5; color: #1b1d22; }
+QTreeWidget#settingsTree::item:hover { background: #f1efeb; color: #1b1d22; }
+QTreeWidget#settingsTree::item:selected { background: #e6e4e0; color: #1b1d22; }
 QTreeWidget#modelTree {
-    background: #ffffff; border: 1px solid #d8d8dd; border-radius: 6px;
+    background: #ffffff; border: 1px solid #dedbd6; border-radius: 6px;
     outline: none; color: #383a42; font-size: 12px; padding: 4px;
 }
 QTreeWidget#modelTree::item { padding: 3px 4px; border-radius: 4px; }
-QTreeWidget#modelTree::item:hover { background: #ececef; }
+QTreeWidget#modelTree::item:hover { background: #f1efeb; }
 QTreeWidget#modelTree::item:has-children { color: #7a7d85; }
 QLabel[role="keycap"] {
-    background: #ffffff; border: 1px solid #d8d8dd; border-radius: 4px;
+    background: #ffffff; border: 1px solid #dedbd6; border-radius: 4px;
     padding: 1px 5px; color: #5a5d65; font-size: 11px;
 }
 QLabel[role="hint"] { color: #8a8d95; font-size: 11px; }
@@ -151,9 +151,9 @@ QLabel[role="section"] { color: #7a7d85; font-size: 12px; }
 QLabel[role="group"] { color: #1b1d22; font-size: 13px; font-weight: 600; }
 QLabel[role="title"] { color: #1b1d22; font-size: 13px; font-weight: 600; }
 QLabel[role="description"] { color: #8a8d95; font-size: 12px; }
-QFrame[role="rule"] { background: #e0e0e0; border: none; }
+QFrame[role="rule"] { background: #e6e4e0; border: none; }
 QToolButton#settingsBack { border: none; border-radius: 4px; padding: 2px; }
-QToolButton#settingsBack:hover { background: #e8e8ec; }
+QToolButton#settingsBack:hover { background: #f1efeb; }
 """,
 }
 

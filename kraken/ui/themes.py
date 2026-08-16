@@ -50,10 +50,14 @@ DARK = TerminalTheme(
     foreground=(0xFF, 0xFF, 0xFF),
 )
 
-# One Half Light.
+# One Half Light, on a white ground rather than the palette's own #FAFAFA. The
+# light theme is built on white — the cards, the window, and the terminal are
+# one surface (see UI_COLORS), and everything that is *not* that surface is a
+# shade of warm grey off it. A near-white ground gave the chrome nothing to be
+# a shade off of.
 LIGHT = TerminalTheme(
     name="light",
-    background=(0xFA, 0xFA, 0xFA),
+    background=(0xFF, 0xFF, 0xFF),
     foreground=(0x38, 0x3A, 0x42),
     ansi=(
         (0x38, 0x3A, 0x42),  # black
@@ -86,14 +90,34 @@ DEFAULT_THEME = LIGHT.name
 # all — the line beside it belongs to the dock's divider. The offset runs the
 # same direction in both themes: a shade off the cards it sits beside, never
 # far enough to read as a separate window.
+#
+# Every panel's top strip — a tab row, or the plain row the drag grip rides in —
+# is painted in "header": the same shade as the sidebar, because it is the same
+# kind of thing. Chrome that frames content sits a step off the surface the
+# content itself is on, whichever edge it runs along. The window's own title bar
+# is the exception: it spans the whole window rather than running along one edge
+# of the content, so it stays on the base surface and is closed with a hairline.
+#
+# "accent" is the one blue the app marks a current or active thing in: a tool
+# button for a panel that is open, the selected tab, a focused field, the drop
+# indicator. It is a fill, so it carries "accent_on" for whatever sits on top of
+# it. "accent_soft" is the same blue as a tint, for a mark that should not shout
+# (a tab pill), with "accent_text" for the text and glyphs on it — in the dark
+# theme that has to be lighter than the fill, which is why the two differ.
 UI_COLORS: dict[str, dict[str, str]] = {
     "dark": {
         "window": "#1f2127",
         "card": "#%02X%02X%02X" % DARK.background,
         "card_border": "#3a3f4a",
         "sidebar": "#23252b",
+        "header": "#23252b",
+        "hover": "#2c2e35",
         "home": "#1f2127",
         "text": "#c8cad0",
+        "accent": "#4f77d4",
+        "accent_on": "#ffffff",
+        "accent_soft": "#26365e",
+        "accent_text": "#8ab4f8",
     },
     "light": {
         # The same value as the cards, and written the same way so the two
@@ -103,12 +127,20 @@ UI_COLORS: dict[str, dict[str, str]] = {
         # more of the same surface rather than as a second one.
         "window": "#%02X%02X%02X" % LIGHT.background,
         "card": "#%02X%02X%02X" % LIGHT.background,
-        "card_border": "#e0e0e0",
-        "sidebar": "#f5f4f1",
+        "card_border": "#e6e4e0",
+        "sidebar": "#faf9f7",
+        "header": "#faf9f7",
+        # A hover on a chrome strip: one step further from the base than the
+        # strip itself, stopping short of the hairline that closes it.
+        "hover": "#f1efeb",
         # The home screen keeps the cream the rest of the app used to be
         # painted in: it is one logo on an empty window rather than a working
         # surface, and it is the one place the warmth was worth keeping.
         "home": "#faf6ec",
         "text": "#383a42",
+        "accent": "#496ecf",
+        "accent_on": "#ffffff",
+        "accent_soft": "#dfe6f8",
+        "accent_text": "#496ecf",
     },
 }

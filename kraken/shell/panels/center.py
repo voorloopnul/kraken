@@ -216,7 +216,7 @@ class CenterPanel(Panel):
         )
         self.chat.set_theme(name)
         handle, handle_hover = (
-            ("#3a3d45", "#4a4e58") if name == "dark" else ("#c9c9ce", "#b3b4b9")
+            ("#3a3d45", "#4a4e58") if name == "dark" else ("#ccc9c3", "#b6b3ac")
         )
         self._scrollbar.setStyleSheet(
             "QScrollBar:vertical { background: transparent; border: none;"
@@ -244,7 +244,7 @@ class CenterPanel(Panel):
 
     def _apply_busy_style(self) -> None:
         dark = self._theme_name == "dark"
-        dim, hover = ("#7a7d85", "#2c2e35") if dark else ("#5f6269", "#e0e0e4")
+        dim, hover = ("#7a7d85", "#2c2e35") if dark else ("#5f6269", "#f1efeb")
         size = secondary(self._font_size)
         self._busy_row.setStyleSheet(
             f"QLabel {{ color: {dim}; font-size: {size}px; font-style: italic; }}"
