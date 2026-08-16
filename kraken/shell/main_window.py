@@ -237,6 +237,7 @@ class MainWindow(QMainWindow):
         self.title_bar.buttons["Close"].clicked.connect(self.close)
         self.title_bar.branch_changed.connect(self._on_branch_switched)
         self.title_bar.session_menu.aboutToShow.connect(self._populate_session_menu)
+        self.title_bar.memory_requested.connect(self._open_process_memory)
 
         content = QWidget()
         content_layout = QHBoxLayout(content)
@@ -404,6 +405,14 @@ class MainWindow(QMainWindow):
         # without this every visit to Settings leaves one behind — an OpenRouter
         # catalogue's worth of tree items each time. A model fetch still in
         # flight answers into the dialog, which checks it is alive first.
+        dialog.deleteLater()
+
+    def _open_process_memory(self) -> None:
+        from kraken.shell.process_dialog import ProcessDialog
+
+        debug.action("process-memory.open")
+        dialog = ProcessDialog(self, theme_name=self._theme_name)
+        dialog.exec()
         dialog.deleteLater()
 
     def _fetch_models(self, callback) -> None:

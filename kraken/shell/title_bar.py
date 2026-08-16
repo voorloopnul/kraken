@@ -72,6 +72,8 @@ QToolButton:hover {{ background: {c['hover']}; }}
    among text rather than in a strip of its own. */
 #panelButton:checked {{ background: {ui['accent_soft']}; }}
 #sessionButton::menu-indicator {{ image: none; }}
+#memoryLabel {{ background: transparent; border-radius: 5px; padding: 3px 6px; }}
+#memoryLabel:hover {{ background: {ui['hover']}; }}
 #trafficLight {{ background: transparent; border: none; border-radius: 0; }}
 #trafficLight:hover {{ background: transparent; }}
 """
@@ -183,6 +185,7 @@ class _TrafficLight(QToolButton):
 class TitleBar(QWidget):
     # HEAD moved via the branch dropdown; lets the window refresh git views.
     branch_changed = Signal()
+    memory_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -248,8 +251,12 @@ class TitleBar(QWidget):
         )
         self.session_menu = QMenu(self.session_button)
         self.session_button.setMenu(self.session_menu)
-        self.memory_label = QLabel()
+        self.memory_label = QToolButton()
         self.memory_label.setObjectName("memoryLabel")
+        self.memory_label.setToolTip("Show Kraken processes and memory")
+        self.memory_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.memory_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.memory_label.clicked.connect(self.memory_requested.emit)
 
         # Whether the pointer is over any of the three, which is what decides
         # if the glyphs are showing.

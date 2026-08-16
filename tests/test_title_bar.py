@@ -61,6 +61,16 @@ def test_the_memory_readout_stays_at_the_far_right(bar):
     assert bar.memory_label.geometry().left() > bar.session_button.geometry().right()
 
 
+def test_the_memory_readout_requests_the_process_modal(bar):
+    requested = []
+    bar.memory_requested.connect(lambda: requested.append(True))
+
+    assert bar.memory_label.toolTip() == "Show Kraken processes and memory"
+    bar.memory_label.click()
+
+    assert requested == [True]
+
+
 def test_both_lines_fit_the_bar(bar):
     assert bar.folder_label.geometry().bottom() <= bar.height()
 

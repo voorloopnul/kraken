@@ -59,6 +59,17 @@ class Settings:
     trace_input: bool = False
     heartbeat: float = HEARTBEAT_DEFAULT  # seconds; 0 disables
 
+
+@dataclass(frozen=True)
+class ProcessMemory:
+    """One process in Kraken's own descendant tree."""
+
+    pid: int
+    ppid: int
+    rss: int
+    command: str
+    depth: int
+
 # The open log stream, or None when debugging is off. Every entry point checks
 # this first, so an un-started module costs one global lookup per call.
 _file = None
@@ -264,6 +275,64 @@ def _darwin_tree_stats() -> tuple[int, int]:
 def process_tree_rss() -> int:
     """Resident set size in bytes of this process and all its descendants."""
     return tree_stats()[0]
+
+
+def process_tree() -> list[ProcessMemory]:
+    """Kraken and the processes it spawned, with resident memory.
+
+    This is a UI-facing snapshot rather than a hot diagnostics path, so one
+    portable `ps` call is preferable to stitching names onto the platform-
+    specific fast counters above. The `ps` reader itself is excluded.
+    """
+    table: dict[int, tuple[int, int, str]] = {}
+    try:
+        reader = subprocess.Popen(
+            ["/bin/ps", "-axo", "pid=,ppid=,rss=,comm="],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except OSError:
+        return []
+    try:
+        out, _ = reader.communicate(timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        reader.kill()
+        try:
+            reader.communicate(timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return []
+    for line in out.splitlines():
+        parts = line.strip().split(None, 3)
+        if len(parts) != 4:
+            continue
+        try:
+            pid, ppid, rss_kb = (int(part) for part in parts[:3])
+        except ValueError:
+            continue
+        if pid != reader.pid:
+            table[pid] = (ppid, rss_kb * 1024, parts[3])
+
+    root = os.getpid()
+    children: dict[int, list[int]] = {}
+    for pid, (ppid, _, _) in table.items():
+        children.setdefault(ppid, []).append(pid)
+    rows: list[ProcessMemory] = []
+    stack = [(root, 0)]
+    seen: set[int] = set()
+    while stack:
+        pid, depth = stack.pop()
+        if pid in seen or pid not in table:
+            continue
+        seen.add(pid)
+        ppid, rss, command = table[pid]
+        rows.append(ProcessMemory(pid, ppid, rss, command, depth))
+        stack.extend(
+            (child, depth + 1)
+            for child in reversed(sorted(children.get(pid, ())))
+        )
+    return rows
 
 
 def open_fds() -> int:
