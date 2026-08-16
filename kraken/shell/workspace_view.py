@@ -79,25 +79,23 @@ class WorkspaceView(QWidget):
         self.remote = remote
 
         self.left_panel = LeftPanel(cwd=path)
-        # Only a floor: the History panel grows to fill its column so its
-        # resize grip stays flush with the panel edge rather than detaching
-        # once the content hits a maximum.
-        self.left_panel.setMinimumWidth(280)
         self.center_panel = CenterPanel()
         # Per-workspace browser, like the terminals; it's lazily populated
         # on first show, so hidden panels cost no Chromium processes.
         self.browser_panel = BrowserPanel()
         self.browser_panel.emptied.connect(self.browser_closed)
         self.diff_panel = DiffPanel(cwd=path, remote=remote)
-        self.diff_panel.setMinimumWidth(300)
         self.git_panel = GitPanel(cwd=path, remote=remote)
-        self.git_panel.setMinimumWidth(320)
         self.right_panel = RightPanel(
             cwd=path, remote=remote, font_size=self._terminal_font_size
         )
-        # The terminal panel never shrinks below a usable width; the splitter
-        # stops the drag here rather than letting it collapse to a sliver.
-        self.right_panel.setMinimumWidth(380)
+        # Column widths are preferences in dock._PREF_WIDTH, not hard widget
+        # minima. Hard minima from every open column add up into the top-level
+        # window's minimum size; when that exceeds a fullscreen client area,
+        # Qt can shrink the splitter wrappers while their contents retain the
+        # larger width. The resulting overlap paints controls somewhere other
+        # than their hit boxes. Natural size hints still keep each panel usable
+        # while allowing the whole dock to contract coherently when necessary.
 
         # Every panel lives in the dock, wrapped in a draggable header. The
         # dock arranges them into columns (up to two panels stacked per column)
