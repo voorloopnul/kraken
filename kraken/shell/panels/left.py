@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from kraken.shell.panels.base import Panel, _dot_icon
-from kraken.ui.fonts import UI_SANS_FAMILY
+from kraken.ui.fonts import MONO_FAMILY, UI_SANS_FAMILY
 from kraken.ui.themes import DEFAULT_THEME, UI_COLORS
 
 # Total item padding from the stylesheet below ("6px 8px"), which the
@@ -57,8 +57,18 @@ QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 # Row text per theme, picked for contrast against the backgrounds above: the
 # selected row sits on a tinted band and needs its own value.
 _ROW_COLORS = {
-    "dark": {"text": "#c8cad0", "selected": "#ffffff"},
-    "light": {"text": "#4a4d55", "selected": "#1b1d22"},
+    "dark": {
+        "title": "#c8cad0",
+        "subtitle": "#9a9da5",
+        "selected_title": "#ffffff",
+        "selected_subtitle": "#c8cad0",
+    },
+    "light": {
+        "title": "#2a2824",
+        "subtitle": "#8e8b86",
+        "selected_title": "#1b1d22",
+        "selected_subtitle": "#5a5d65",
+    },
 }
 
 _NEW_SESSION_STYLES = {
@@ -76,13 +86,15 @@ QPushButton:hover { background: #f1efeb; color: #1b1d22; }
 
 
 def _row_html(title: str, subtitle: str) -> str:
-    """One history row: the session title in bold over its subtitle line."""
-    return f"<b>{html.escape(title)}</b><br>{html.escape(subtitle)}"
+    """One history row: the session title over its subtitle line."""
+    return (
+        f'<span class="title">{html.escape(title)}</span><br>'
+        f'<span class="subtitle">{html.escape(subtitle)}</span>'
+    )
 
 
 class _SessionDelegate(QStyledItemDelegate):
-    """Paints a history row as HTML so the title can be bold while the
-    subtitle stays regular — an item's own font would apply to both lines.
+    """Paints a two-line history row as HTML.
 
     Wrapping is done here rather than by the view: QListWidget's word wrap
     only applies to its own plain-text painting, so the document is given the
@@ -143,8 +155,12 @@ class _SessionDelegate(QStyledItemDelegate):
         option = QTextOption()
         option.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
         doc.setDefaultTextOption(option)
-        color = self._colors["selected" if selected else "text"]
-        doc.setDefaultStyleSheet(f"body {{ color: {color}; }}")
+        prefix = "selected_" if selected else ""
+        doc.setDefaultStyleSheet(
+            f".title {{ color: {self._colors[prefix + 'title']}; font-size: 13px; }}"
+            f".subtitle {{ color: {self._colors[prefix + 'subtitle']}; "
+            "font-size: 11px; }}"
+        )
         doc.setHtml(f"<body>{text}</body>")
         doc.setTextWidth(width)
         return doc
@@ -184,21 +200,22 @@ class LeftPanel(Panel):
         # QWidget subclasses ignore stylesheet backgrounds without this.
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._layout.setContentsMargins(12, 12, 12, 12)
-        # The History pane uses the proportional Roboto face rather than the
-        # app-wide mono. The delegate paints rows from the list's own font, so
-        # setting an explicit pixel size here (not just in the stylesheet) is
-        # what fixes the row size the delegate measures and paints with.
-        sans = QFont(UI_SANS_FAMILY)
-        sans.setPixelSize(13)
+        # History rows use the mockup's proportional face. The delegate paints
+        # from the list's own font, so the explicit pixel size also controls
+        # the row measurement. Surrounding chrome remains app-wide mono.
+        history_font = QFont(UI_SANS_FAMILY)
+        history_font.setPixelSize(13)
+        chrome_font = QFont(MONO_FAMILY)
+        chrome_font.setPixelSize(13)
         self._new_button = QPushButton("＋  New Session")
-        self._new_button.setFont(sans)
+        self._new_button.setFont(chrome_font)
         self._new_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self._new_button.clicked.connect(self.new_session_requested)
         self._list = _SessionList()
-        self._list.setFont(sans)
+        self._list.setFont(history_font)
         self._list.setWordWrap(True)
-        # Rows are HTML (see _SessionDelegate) so the title can be bold while
-        # the subtitle line stays regular.
+        # Rows are HTML (see _SessionDelegate) so the title and subtitle can
+        # occupy separate lines while sharing the regular font weight.
         self._delegate = _SessionDelegate(self._list)
         self._list.setItemDelegate(self._delegate)
         self._list.setHorizontalScrollBarPolicy(
