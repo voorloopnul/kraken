@@ -6,7 +6,9 @@ panels, so the workspace can stack (for example) the terminal above the git
 history in a single column. Every panel carries a slim header that doubles as
 a drag handle: grab it and drop the panel beside a column (to open a new
 column) or onto the top/bottom half of a column (to stack it there, up to the
-two-panel limit).
+two-panel limit). A workspace may also cap the number of side-panel columns;
+once that cap is reached, newly shown panels fill the columns from right to
+left instead of making the workspace wider.
 
 `WorkspaceView` owns the content panels and registers each one here under a
 short key ("left", "center", …); the dock only reparents those widgets between
@@ -347,6 +349,7 @@ class DockArea(QWidget):
         fixed_keys: set[str] | None = None,
         no_stack_keys: set[str] | None = None,
         parent: QWidget | None = None,
+        max_side_columns: int | None = None,
     ):
         super().__init__(parent)
         self._order = order
@@ -358,6 +361,9 @@ class DockArea(QWidget):
         # no-stack.
         self._fixed = set(fixed_keys or ())
         self._no_stack = set(no_stack_keys or ()) | self._fixed
+        # Side panels are the draggable panels; fixed workspace anchors such
+        # as History and Conversation do not count toward this limit.
+        self._max_side_columns = max_side_columns
         self._theme_name = DEFAULT_THEME
         self._panels: dict[str, DockPanel] = {}
         # Every column ever made. The splitter owns them in C++, but reaching
@@ -420,17 +426,39 @@ class DockArea(QWidget):
     def show_panel(self, key: str) -> None:
         """Reveal a panel. It reappears in whatever column it last lived in; a
         panel that has never been placed gets a fresh column positioned to
-        match the canonical order."""
+        match the canonical order. Once the side-column limit is full, a panel
+        whose own column would add another one stacks into the first available
+        column working from right to left."""
         if key in self._shown:
             return
         pre = self._snapshot()
-        self._shown.add(key)
         panel = self._panels[key]
         column = panel.parentWidget()
-        if not isinstance(column, _DockColumn):
+        source = column if isinstance(column, _DockColumn) else None
+        source_is_active = source is not None and self._column_has_shown(source)
+        stack = None
+        if (
+            panel.draggable
+            and not source_is_active
+            and self._side_column_limit_reached()
+        ):
+            stack = self._auto_stack_column(source)
+
+        if stack is not None:
+            panel.setParent(None)
+            stack.addWidget(panel)
+            column = stack
+            half = max(stack.height() // 2, 1)
+            stack.setSizes([half] * stack.count())
+            if source is not None and not self._column_has_shown(source):
+                source.setVisible(False)
+        elif source is None:
             column = self._acquire_column()
             column.addWidget(panel)
             self._insert_column(self._insertion_index(key), column)
+        else:
+            column = source
+        self._shown.add(key)
         panel.setVisible(True)
         column.setVisible(True)
         self._reflow(pre)
@@ -471,6 +499,57 @@ class DockArea(QWidget):
 
     def _active_columns(self) -> list[_DockColumn]:
         return [c for c in self._columns() if self._column_has_shown(c)]
+
+    def _active_side_columns(self) -> list[_DockColumn]:
+        """Active columns belonging to draggable, right-side panels."""
+        return [
+            column
+            for column in self._active_columns()
+            if any(panel.draggable for panel in column.panels())
+        ]
+
+    def _side_column_limit_reached(self) -> bool:
+        return (
+            self._max_side_columns is not None
+            and len(self._active_side_columns()) >= self._max_side_columns
+        )
+
+    def _auto_stack_column(
+        self, source: _DockColumn | None = None
+    ) -> _DockColumn | None:
+        """Find space for the next toggled panel, from right to left."""
+        for column in reversed(self._active_side_columns()):
+            if column is source:
+                continue
+            keys = {panel.key for panel in column.panels()}
+            if not (keys & self._no_stack) and column.count() < 2:
+                return column
+        return None
+
+    def _can_open_side_column(self, panel: DockPanel | None) -> bool:
+        """Whether moving `panel` into a new column would stay under the cap.
+
+        Moving a lone visible panel only relocates its column and is allowed;
+        pulling one panel out of a visible stack would add a column.
+        """
+        if (
+            panel is None
+            or not panel.draggable
+            or self._max_side_columns is None
+        ):
+            return True
+        active = self._active_side_columns()
+        source = panel.parentWidget()
+        source_will_close = (
+            isinstance(source, _DockColumn)
+            and source in active
+            and not any(
+                other is not panel and other.key in self._shown
+                for other in source.panels()
+            )
+        )
+        projected = len(active) + 1 - int(source_will_close)
+        return projected <= self._max_side_columns
 
     def _column_has_shown(self, column: _DockColumn) -> bool:
         return any(p.key in self._shown for p in column.panels())
@@ -607,10 +686,12 @@ class DockArea(QWidget):
         rect = column.geometry()
         rel_x = (local.x() - rect.x()) / max(rect.width(), 1)
         if rel_x < _EDGE_BAND:
-            if fixed_col:
+            if fixed_col or not self._can_open_side_column(self._drag_panel):
                 return None
             return self._collapse_noop("new_before", column)
         if rel_x > 1 - _EDGE_BAND:
+            if not self._can_open_side_column(self._drag_panel):
+                return None
             return self._collapse_noop("new_after", column)
         # Middle band: stack into this column, unless it refuses stacking or
         # already holds two panels other than the one being dragged. The limit
@@ -653,6 +734,8 @@ class DockArea(QWidget):
 
     def _apply_drop(self, panel: DockPanel, target: tuple[str, _DockColumn]) -> None:
         mode, dest = target
+        if mode in ("new_before", "new_after") and not self._can_open_side_column(panel):
+            return
         # A drop reparents a live panel — terminals, a web view — between
         # splitters, which is the kind of move that upsets native children.
         debug.action("dock.drop", panel=panel.key, mode=mode)

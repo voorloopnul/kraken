@@ -101,12 +101,15 @@ class WorkspaceView(QWidget):
 
         # Every panel lives in the dock, wrapped in a draggable header. The
         # dock arranges them into columns (up to two panels stacked per column)
-        # and lets the user drag a panel's header to re-column or stack it.
+        # and lets the user drag a panel's header to re-column or stack it. At
+        # most three side-panel columns sit beside the conversation; later
+        # toggles stack into those columns from right to left.
         self._dock = DockArea(
             order=["left", "center", "browser", "diff", "git", "right"],
             stretch_key="center",
             fixed_keys={"left"},
             no_stack_keys={"center"},
+            max_side_columns=3,
         )
         # History is a fixed anchor on the far left: not draggable, and nothing
         # may stack with it or open a column to its left. The conversation is

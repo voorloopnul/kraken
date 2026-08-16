@@ -117,3 +117,61 @@ def test_panels_survive_a_collection(dock):
     assert {key: shiboken6.isValid(p) for key, p in sorted(dock._panels.items())} == {
         key: True for key in sorted(KEYS)
     }
+
+
+def test_extra_side_panels_stack_from_right_to_left(qapp):
+    """Three side columns is the horizontal limit. Panels four through six
+    fill the lower half of those columns, starting at the right edge."""
+    anchors = ("left", "center")
+    side_keys = tuple(f"side-{number}" for number in range(1, 7))
+    area = DockArea(
+        order=[*anchors, *side_keys],
+        stretch_key="center",
+        fixed_keys={"left"},
+        no_stack_keys={"center"},
+        max_side_columns=3,
+    )
+    for key in (*anchors, *side_keys):
+        content = Panel()
+        content.add_widget(QLabel(key))
+        area.register(DockPanel(key, content, draggable=key in side_keys))
+    area.set_layout([["left"], ["center"]])
+
+    for key in side_keys:
+        area.show_panel(key)
+
+    side_columns = [
+        [panel.key for panel in column.panels()]
+        for column in area._active_side_columns()
+    ]
+    assert side_columns == [
+        ["side-1", "side-6"],
+        ["side-2", "side-5"],
+        ["side-3", "side-4"],
+    ]
+
+
+def test_side_panel_cannot_be_dragged_into_a_fourth_column(qapp):
+    """The cap still holds when a panel is pulled out of an automatic stack."""
+    keys = ("center", "one", "two", "three", "four")
+    area = DockArea(
+        order=list(keys),
+        stretch_key="center",
+        no_stack_keys={"center"},
+        max_side_columns=3,
+    )
+    for key in keys:
+        content = Panel()
+        content.add_widget(QLabel(key))
+        area.register(DockPanel(key, content, draggable=key != "center"))
+    area.set_layout([["center"]])
+    for key in keys[1:]:
+        area.show_panel(key)
+
+    panel = area._panels["four"]
+    source = panel.parentWidget()
+    destination = area._panels["one"].parentWidget()
+    area._apply_drop(panel, ("new_after", destination))
+
+    assert panel.parentWidget() is source
+    assert len(area._active_side_columns()) == 3
