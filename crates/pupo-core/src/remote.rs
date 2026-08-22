@@ -124,6 +124,17 @@ impl SshHost {
             "BatchMode=yes".into(),
             "-o".into(),
             "ConnectTimeout=10".into(),
+            // A connection that has gone quiet is noticed and dropped, after
+            // roughly a minute of silence. This is what makes a wedged transfer
+            // end on its own, and it is the right measure for one: a copy has
+            // no honest time limit — its length is its size over the link's
+            // speed, and neither is knowable here — but "no bytes have moved
+            // for a minute" says something has actually gone wrong, whether the
+            // copy is a kilobyte or six gigabytes.
+            "-o".into(),
+            "ServerAliveInterval=15".into(),
+            "-o".into(),
+            "ServerAliveCountMax=4".into(),
         ];
         if let Some(identity) = self.identity.as_deref().filter(|s| !s.is_empty()) {
             args.push("-i".into());
@@ -409,6 +420,11 @@ mod tests {
         assert!(args.contains("ControlPersist=120"));
         assert!(args.contains("BatchMode=yes"));
         assert!(args.contains("ConnectTimeout=10"));
+        // What ends a wedged transfer. There is no wall-clock cap on a copy —
+        // its length is its size over the link's speed — so silence is the
+        // thing measured instead, and this is what measures it.
+        assert!(args.contains("ServerAliveInterval=15"));
+        assert!(args.contains("ServerAliveCountMax=4"));
         // The socket name is the hashed connection tuple, not the literal one.
         assert!(args.contains("cm-%C"));
         assert!(!args.contains("%r@%h"));

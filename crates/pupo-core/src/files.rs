@@ -187,14 +187,14 @@ impl Place {
     }
 }
 
-/// How long a remote listing may take before it is given up on. Generous
+/// How long a remote listing may take before it is given up on.
+///
+/// A listing is a bounded thing — one `find` at one level — so a wall-clock cap
+/// is a fair question to ask of it, and the pane has to be able to say "this is
+/// not answering" rather than showing a branch that never opens. Generous
 /// because the first one also pays for opening the SSH connection; every one
 /// after it rides the multiplexed channel and returns in milliseconds.
-pub const REMOTE_LIST_TIMEOUT: Duration = Duration::from_secs(20);
-
-/// How long a transfer may take. A directory can be large and a link can be
-/// slow, and a copy killed half way is worse than one that took a while.
-pub const REMOTE_COPY_TIMEOUT: Duration = Duration::from_secs(600);
+pub const REMOTE_LIST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The shell command that lists one directory on the far side.
 ///
@@ -1070,10 +1070,19 @@ pub fn tar_receive_command(
 
 /// Run `producer`, feeding its stdout to `consumer`, and wait for both.
 ///
+/// There is no deadline here on purpose. A transfer's length is its size over
+/// the link's speed and neither is knowable from here, so any number picked
+/// would be wrong for somebody — and it would be wrong in the worst direction,
+/// killing a copy that was working. What ends a *wedged* transfer is ssh's own
+/// keepalive (see `SshHost::ssh_base_args`): about a minute of silence and the
+/// connection drops, the pipe closes, and both ends fall out of their waits.
+/// That measures the thing actually worth measuring — that nothing is moving —
+/// rather than how long the job has been running.
+///
 /// The producer's failure is reported before the consumer's: a `tar` that could
 /// not read the source and an `ssh` that got no bytes are the same event, and
 /// the first of them is the one that says what actually went wrong.
-fn pipe(producer: &[String], consumer: &[String], timeout: Duration) -> Result<(), String> {
+fn pipe(producer: &[String], consumer: &[String]) -> Result<(), String> {
     use std::process::{Command, Stdio};
 
     let (head, rest) = producer.split_first().ok_or("nothing to run")?;
@@ -1095,12 +1104,14 @@ fn pipe(producer: &[String], consumer: &[String], timeout: Duration) -> Result<(
         .spawn()
         .map_err(|error| format!("{head}: {error}"))?;
 
-    // The sink is waited on with a deadline; the source is drained by it and
-    // ends when the pipe closes.
-    let sink = wait_with_deadline(sink, timeout)?;
+    // The source is drained by the sink and ends when the pipe closes, so
+    // waiting on the sink first is what lets the pair finish in either order.
+    let sink = sink
+        .wait_with_output()
+        .map_err(|error| error.to_string())?;
     let source = source
         .wait_with_output()
-        .map_err(|error| format!("{error}"))?;
+        .map_err(|error| error.to_string())?;
 
     if !source.status.success() {
         return Err(remote_error(&String::from_utf8_lossy(&source.stderr)));
@@ -1109,35 +1120,6 @@ fn pipe(producer: &[String], consumer: &[String], timeout: Duration) -> Result<(
         return Err(remote_error(&String::from_utf8_lossy(&sink.stderr)));
     }
     Ok(())
-}
-
-/// `wait_with_output` with a deadline, killing by pid on the way out — the same
-/// shape [`crate::git::run_argv`] uses, and for the same reason: the standard
-/// wait has no timeout and a stalled connection must not hold a worker for ever.
-fn wait_with_deadline(
-    child: std::process::Child,
-    timeout: Duration,
-) -> Result<std::process::Output, String> {
-    use std::sync::mpsc;
-
-    let pid = child.id();
-    let (sender, receiver) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = sender.send(child.wait_with_output());
-    });
-    match receiver.recv_timeout(timeout) {
-        Ok(Ok(output)) => Ok(output),
-        Ok(Err(error)) => Err(error.to_string()),
-        Err(_) => {
-            // SAFETY: `pid` is a child of this process that nothing has reaped
-            // yet — the thread above still holds its `Child` and reaps it once
-            // the kill lands, so the pid cannot have been recycled.
-            unsafe {
-                libc::kill(pid as libc::pid_t, libc::SIGKILL);
-            }
-            Err("The copy took too long and was stopped.".to_string())
-        }
-    }
 }
 
 /// Copy a local file or folder into a directory on the remote host.
@@ -1170,7 +1152,6 @@ pub fn copy_up(
     if let Err(reason) = pipe(
         &tar_send_argv(&parent, &name),
         &target.ssh_argv(&command, false),
-        REMOTE_COPY_TIMEOUT,
     ) {
         report.failures.push(reason);
         report.replaced = false;
@@ -1207,7 +1188,6 @@ pub fn copy_down(
     let outcome = pipe(
         &target.ssh_argv(&tar_send_command(&parent, &name), false),
         &tar_receive_argv(&stage),
-        REMOTE_COPY_TIMEOUT,
     );
     let report = match outcome {
         Err(reason) => CopyReport {
@@ -1398,7 +1378,9 @@ pub fn fetch_to(target: &RemoteTarget, source: &Path, into: &Path) -> Result<(),
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("{head}: {error}"))?;
-    let output = wait_with_deadline(child, REMOTE_COPY_TIMEOUT)?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| error.to_string())?;
     if output.status.success() {
         return Ok(());
     }
