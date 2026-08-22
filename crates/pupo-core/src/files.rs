@@ -6,10 +6,17 @@
 //! a re-expand come back to the same open branches, and a refresh that finds a
 //! new file leaves every other branch where the reader left it.
 //!
-//! Directories are read lazily — opening one is one `readdir`, and the tree
-//! never walks what nobody has looked at. That is the difference between a
-//! panel that opens instantly on a repository with a `target/` in it and one
-//! that appears to hang.
+//! Directories are read lazily — opening one is one listing, and the tree never
+//! walks what nobody has looked at. That is the difference between a panel that
+//! opens instantly on a repository with a `target/` in it and one that appears
+//! to hang.
+//!
+//! The tree itself does no I/O at all. It holds what has been read and says
+//! what it still wants ([`Tree::view`]); the caller fetches that and hands it
+//! back ([`Tree::deliver`]). This is not ceremony — for a workspace on another
+//! machine every listing is an SSH round trip, and a tree that read directories
+//! from inside a property getter would freeze the window on each one. The same
+//! seam makes the whole tree testable by handing it invented listings.
 //!
 //! The other half of this file is copying. Every rule that decides whether a
 //! copy is allowed, and what the copy ends up called, lives here rather than in
@@ -27,6 +34,10 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
+
+use crate::remote::{self, RemoteTarget};
+use crate::util::shell_quote;
 
 /// The most rows the tree will produce, however much is expanded.
 ///
@@ -91,17 +102,20 @@ pub fn sort_entries(entries: &mut [Entry]) {
     });
 }
 
-/// One directory's entries, sorted. An unreadable directory is an error rather
-/// than an empty one — the panel says which it was, because "no permission" and
-/// "nothing in it" look identical in a list and mean opposite things.
-pub fn read_dir(dir: &Path, show_hidden: bool) -> io::Result<Vec<Entry>> {
+/// One directory's entries, sorted, hidden ones included.
+///
+/// Filtering happens in the walk rather than here, so that showing dotfiles is
+/// a redraw rather than a re-read. On a remote workspace that is the difference
+/// between a toggle and a round trip.
+///
+/// An unreadable directory is an error rather than an empty one — the panel
+/// says which it was, because "no permission" and "nothing in it" look
+/// identical in a list and mean opposite things.
+pub fn read_dir(dir: &Path) -> io::Result<Vec<Entry>> {
     let mut entries = Vec::new();
     for item in fs::read_dir(dir)? {
         let Ok(item) = item else { continue };
         let name = item.file_name().to_string_lossy().into_owned();
-        if !show_hidden && is_hidden(&name) {
-            continue;
-        }
         // `file_type` is the cheap one — it comes from the directory read
         // itself and does not follow the link. `metadata` does follow it, which
         // is what makes a symlink to a folder open like a folder.
@@ -128,6 +142,148 @@ pub fn read_dir(dir: &Path, show_hidden: bool) -> io::Result<Vec<Entry>> {
 }
 
 // ---------------------------------------------------------------------------
+// Where a tree lives
+// ---------------------------------------------------------------------------
+
+/// The machine a workspace's files are on.
+///
+/// The two differ in one thing only — how a directory is listed and how bytes
+/// are moved — so everything above this (the tree, the sort, the collision
+/// rules, the naming) is written once and does not know which it is looking at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Place {
+    Local,
+    Remote(Box<RemoteTarget>),
+}
+
+impl Default for Place {
+    fn default() -> Self {
+        Place::Local
+    }
+}
+
+impl Place {
+    /// The place a workspace key names: a remote one when the key is a remote
+    /// workspace's anchor, local otherwise. The same lookup `GitRunner` does.
+    pub fn for_workspace(path: &str) -> Self {
+        match remote::resolve(path) {
+            Some(target) => Place::Remote(Box::new(target)),
+            None => Place::Local,
+        }
+    }
+
+    pub fn is_remote(&self) -> bool {
+        matches!(self, Place::Remote(_))
+    }
+
+    /// The directory a tree rooted at this workspace starts from. A remote
+    /// workspace's key is a local stand-in folder; the files are at the path on
+    /// the far side.
+    pub fn root_for(&self, workspace: &str) -> PathBuf {
+        match self {
+            Place::Local => PathBuf::from(workspace),
+            Place::Remote(target) => PathBuf::from(&target.path),
+        }
+    }
+}
+
+/// How long a remote listing may take before it is given up on. Generous
+/// because the first one also pays for opening the SSH connection; every one
+/// after it rides the multiplexed channel and returns in milliseconds.
+pub const REMOTE_LIST_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// How long a transfer may take. A directory can be large and a link can be
+/// slow, and a copy killed half way is worse than one that took a while.
+pub const REMOTE_COPY_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// The shell command that lists one directory on the far side.
+///
+/// One `find`, so one round trip. The fields are the entry's own type, the type
+/// of whatever it points at, the size and the basename, NUL-terminated per
+/// entry — a name may contain a newline or a tab, and NUL is the one byte a
+/// path cannot hold.
+///
+/// `%y` is `l` for a symlink while `%Y` is what it resolves to, which is how a
+/// link to a folder comes to open like a folder and a broken one still gets a
+/// row.
+pub fn list_command(dir: &Path) -> String {
+    format!(
+        "find {} -mindepth 1 -maxdepth 1 -printf '%y\\t%Y\\t%s\\t%f\\0'",
+        shell_quote(&dir.to_string_lossy())
+    )
+}
+
+/// The entries in what [`list_command`] printed.
+///
+/// Anything malformed is dropped rather than failing the listing: one entry the
+/// remote `find` could not describe should cost that row, not the directory.
+pub fn parse_listing(stdout: &str) -> Vec<Entry> {
+    let mut entries = Vec::new();
+    for record in stdout.split('\0') {
+        if record.is_empty() {
+            continue;
+        }
+        // Four fields, and the name is last because it is the one that can
+        // contain a tab.
+        let mut fields = record.splitn(4, '\t');
+        let (Some(kind), Some(target), Some(size), Some(name)) = (
+            fields.next(),
+            fields.next(),
+            fields.next(),
+            fields.next(),
+        ) else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        entries.push(Entry {
+            name: name.to_string(),
+            is_dir: target == "d",
+            size: size.parse().unwrap_or(0),
+            symlink: kind == "l",
+        });
+    }
+    sort_entries(&mut entries);
+    entries
+}
+
+/// List one directory, wherever it is.
+///
+/// The error is the sentence the panel shows, so it says what actually went
+/// wrong rather than "failed": a directory that is not there and a host that
+/// will not answer look the same in an empty list and are not the same problem.
+pub fn list(place: &Place, dir: &Path) -> Result<Vec<Entry>, String> {
+    match place {
+        Place::Local => read_dir(dir).map_err(|error| error.to_string()),
+        Place::Remote(target) => {
+            let argv = target.ssh_argv(&list_command(dir), false);
+            // `run_argv` is git's only by where it lives; it is a plain timed
+            // process runner and this is the second thing that wants one.
+            match crate::git::run_argv(&argv, REMOTE_LIST_TIMEOUT) {
+                Some(output) if output.ok() => Ok(parse_listing(&output.stdout)),
+                Some(output) => Err(remote_error(&output.stderr)),
+                None => Err("The host did not answer.".to_string()),
+            }
+        }
+    }
+}
+
+/// A remote command's stderr, cut down to something a one-line footer can hold.
+fn remote_error(stderr: &str) -> String {
+    let line = stderr
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("The command failed on the remote host.");
+    if line.len() > 200 {
+        format!("{}…", &line[..line.floor_char_boundary(200)])
+    } else {
+        line.to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The tree
 // ---------------------------------------------------------------------------
 
@@ -140,20 +296,49 @@ pub struct Row {
     pub depth: usize,
     pub is_dir: bool,
     pub expanded: bool,
+    /// Open, but its listing has not arrived yet. Only ever true for long
+    /// enough to see on a remote workspace, which is exactly where it matters.
+    pub loading: bool,
     pub size: u64,
     pub symlink: bool,
 }
 
 /// Why a directory has no rows under it, when it is open and shows none.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Empty {
-    /// Nothing in it — or nothing but hidden entries, with hidden entries off.
+    /// Nothing in it at all.
     Nothing,
-    /// It could not be read; the usual reason is permissions.
-    Unreadable,
+    /// Nothing in it but hidden entries, with hidden entries turned off. Worth
+    /// telling apart from the above: the toggle that fixes it is right there.
+    HiddenOnly,
+    /// It could not be read, and why.
+    Unreadable(String),
+}
+
+/// One directory the tree wants read, and the state of the tree when it asked.
+///
+/// The generation is what keeps a slow listing honest. A remote `find` can take
+/// seconds, and in that time the reader can switch workspace or hit refresh;
+/// the answer to the old question must not be filed as the answer to the new
+/// one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Load {
+    pub dir: PathBuf,
+    pub generation: u64,
+}
+
+/// What the panel draws, and what it must fetch before it can draw more.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct View {
+    pub rows: Vec<Row>,
+    pub wanted: Vec<Load>,
 }
 
 /// The workspace's tree: what is open, and what has been read.
+///
+/// Does no I/O. See the module header — that is what lets the same type serve a
+/// local folder and a machine at the end of an SSH connection, and what lets
+/// every rule below be tested by handing it invented listings.
 #[derive(Debug, Default)]
 pub struct Tree {
     root: PathBuf,
@@ -161,9 +346,15 @@ pub struct Tree {
     /// collapse, which is what makes re-opening a branch return to it rather
     /// than to a closed copy of it.
     expanded: BTreeSet<PathBuf>,
+    /// Listings as they arrived, hidden entries and all — see [`read_dir`].
     children: HashMap<PathBuf, Vec<Entry>>,
-    unreadable: BTreeSet<PathBuf>,
+    unreadable: HashMap<PathBuf, String>,
+    /// Directories already asked for, so a slow listing is not asked for again
+    /// on every repaint.
+    requested: BTreeSet<PathBuf>,
     show_hidden: bool,
+    /// Bumped whenever what has been read stops being valid.
+    generation: u64,
     /// Set while the last walk stopped at [`MAX_ROWS`].
     truncated: bool,
 }
@@ -180,8 +371,13 @@ impl Tree {
         &self.root
     }
 
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     /// Point the tree at another folder. Everything read and everything open
-    /// belongs to the old one, so all of it goes.
+    /// belongs to the old one, so all of it goes — and the generation moves, so
+    /// a listing still in flight for the old root is discarded when it lands.
     pub fn set_root(&mut self, root: impl Into<PathBuf>) {
         let root = root.into();
         if root == self.root {
@@ -189,38 +385,42 @@ impl Tree {
         }
         self.root = root;
         self.expanded.clear();
-        self.children.clear();
-        self.unreadable.clear();
-        self.truncated = false;
+        self.forget();
     }
 
     pub fn show_hidden(&self) -> bool {
         self.show_hidden
     }
 
-    /// Show or hide dotfiles. Every cached listing was filtered under the old
-    /// answer, so the cache goes; what is open does not.
+    /// Show or hide dotfiles.
+    ///
+    /// A redraw, not a re-read: listings are kept whole and filtered in the
+    /// walk. On a remote workspace re-reading would be a round trip per open
+    /// branch, for a question already answered.
     pub fn set_show_hidden(&mut self, show: bool) {
-        if show == self.show_hidden {
-            return;
-        }
         self.show_hidden = show;
-        self.children.clear();
-        self.unreadable.clear();
     }
 
-    /// Re-read every directory, keeping what is open. This is what a refresh
-    /// and a completed copy both do: the reader's place in the tree is not
-    /// something either of them has any business resetting.
+    /// Re-read every directory, keeping the branches that are open. This is
+    /// what a refresh and a completed copy both do: the reader's place in the
+    /// tree is not something either of them has any business resetting.
     pub fn refresh(&mut self) {
-        self.children.clear();
-        self.unreadable.clear();
+        self.forget();
     }
 
-    /// Forget one directory's listing, so the next walk re-reads it.
+    fn forget(&mut self) {
+        self.children.clear();
+        self.unreadable.clear();
+        self.requested.clear();
+        self.generation += 1;
+        self.truncated = false;
+    }
+
+    /// Forget one directory's listing, so the next view asks for it again.
     pub fn invalidate(&mut self, dir: &Path) {
         self.children.remove(dir);
         self.unreadable.remove(dir);
+        self.requested.remove(dir);
     }
 
     pub fn is_expanded(&self, path: &Path) -> bool {
@@ -265,15 +465,49 @@ impl Tree {
         }
     }
 
-    /// Why an open directory shows nothing, or `None` when it has rows.
+    /// File a listing the caller fetched.
+    ///
+    /// A load from an earlier generation is dropped: it answers a question
+    /// about a workspace or a state of the tree that is no longer on screen.
+    pub fn deliver(&mut self, load: &Load, outcome: Result<Vec<Entry>, String>) {
+        if load.generation != self.generation {
+            return;
+        }
+        self.requested.remove(&load.dir);
+        match outcome {
+            Ok(mut entries) => {
+                sort_entries(&mut entries);
+                self.unreadable.remove(&load.dir);
+                self.children.insert(load.dir.clone(), entries);
+            }
+            Err(reason) => {
+                self.unreadable.insert(load.dir.clone(), reason);
+                self.children.insert(load.dir.clone(), Vec::new());
+            }
+        }
+    }
+
+    /// Whether anything is still on its way. The panel says so rather than
+    /// showing a tree that is quietly incomplete.
+    pub fn loading(&self) -> bool {
+        !self.requested.is_empty()
+    }
+
+    /// Why an open directory shows nothing, or `None` when it has rows or has
+    /// not been read yet — nothing is known about an unread directory, and
+    /// "empty" would be a claim.
     pub fn empty_reason(&self, dir: &Path) -> Option<Empty> {
-        if self.unreadable.contains(dir) {
-            return Some(Empty::Unreadable);
+        if let Some(reason) = self.unreadable.get(dir) {
+            return Some(Empty::Unreadable(reason.clone()));
         }
-        match self.children.get(dir) {
-            Some(entries) if entries.is_empty() => Some(Empty::Nothing),
-            _ => None,
+        let entries = self.children.get(dir)?;
+        if entries.is_empty() {
+            return Some(Empty::Nothing);
         }
+        if !self.show_hidden && entries.iter().all(|entry| is_hidden(&entry.name)) {
+            return Some(Empty::HiddenOnly);
+        }
+        None
     }
 
     /// Whether the last walk hit [`MAX_ROWS`] and stopped short.
@@ -281,36 +515,84 @@ impl Tree {
         self.truncated
     }
 
-    /// The visible rows, top to bottom. Reads whatever open directory has not
-    /// been read yet, which is why this takes `&mut self`.
+    /// The visible rows, and the directories that have to be read before any
+    /// more of them exist.
+    ///
+    /// Asking marks them asked, so a listing that takes a while is fetched once
+    /// rather than started again on every repaint.
+    pub fn view(&mut self) -> View {
+        let mut view = self.look();
+        view.wanted.retain(|load| !self.requested.contains(&load.dir));
+        for load in &view.wanted {
+            self.requested.insert(load.dir.clone());
+        }
+        view
+    }
+
+    /// The rows as they stand, asking for nothing.
+    ///
+    /// Deliberately free of [`view`](Self::view)'s side effect: a repaint that
+    /// only wants to draw should not be able to start an SSH round trip, and a
+    /// test that reads the tree should not consume the request it is about to
+    /// assert on.
     pub fn rows(&mut self) -> Vec<Row> {
+        self.look().rows
+    }
+
+    /// Walk the cache: the rows it can draw, and every directory it would need
+    /// read to draw more. Marks nothing.
+    fn look(&mut self) -> View {
         self.truncated = false;
-        let mut rows = Vec::new();
+        let mut view = View::default();
         if self.root.as_os_str().is_empty() {
-            return rows;
+            return view;
         }
         let root = self.root.clone();
+        self.want(&root, &mut view);
         // Guards against a symlink loop: a link pointing at one of its own
         // ancestors would otherwise be a branch that can be opened for ever.
         let mut open: Vec<PathBuf> = vec![root.clone()];
-        self.walk(&root, 0, &mut open, &mut rows);
-        rows
+        self.walk(&root, 0, &mut open, &mut view);
+        view
     }
 
-    fn walk(&mut self, dir: &Path, depth: usize, open: &mut Vec<PathBuf>, rows: &mut Vec<Row>) {
-        for entry in self.load(dir) {
-            if rows.len() >= MAX_ROWS {
+    /// Note that `dir` has not been read. Whether it has also already been
+    /// asked for is [`view`](Self::view)'s business, not this walk's.
+    fn want(&mut self, dir: &Path, view: &mut View) {
+        if self.children.contains_key(dir) {
+            return;
+        }
+        view.wanted.push(Load {
+            dir: dir.to_path_buf(),
+            generation: self.generation,
+        });
+    }
+
+    fn walk(&mut self, dir: &Path, depth: usize, open: &mut Vec<PathBuf>, view: &mut View) {
+        let entries = match self.children.get(dir) {
+            Some(entries) => entries.clone(),
+            // Not read yet. Its own row already says it is loading; there is
+            // nothing under it to draw until the listing lands.
+            None => return,
+        };
+        for entry in entries {
+            if !self.show_hidden && is_hidden(&entry.name) {
+                continue;
+            }
+            if view.rows.len() >= MAX_ROWS {
                 self.truncated = true;
                 return;
             }
             let path = dir.join(&entry.name);
             let expanded = entry.is_dir && self.expanded.contains(&path);
-            rows.push(Row {
+            let loading = expanded && !self.children.contains_key(&path);
+            view.rows.push(Row {
                 path: path.clone(),
                 name: entry.name,
                 depth,
                 is_dir: entry.is_dir,
                 expanded,
+                loading,
                 size: entry.size,
                 symlink: entry.symlink,
             });
@@ -318,31 +600,19 @@ impl Tree {
                 continue;
             }
             // A link back up the branch we are standing on. Its row stays —
-            // the link is really there — but it is not followed.
+            // the link is really there — but it is not followed. Only local
+            // paths can be resolved here; a remote loop is caught by the row
+            // cap instead, which is the honest limit when the filesystem is on
+            // the other side of a wire.
             let real = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
             if open.contains(&real) {
                 continue;
             }
+            self.want(&path, view);
             open.push(real);
-            self.walk(&path, depth + 1, open, rows);
+            self.walk(&path, depth + 1, open, view);
             open.pop();
         }
-    }
-
-    /// One directory's entries, reading it the first time it is asked for.
-    fn load(&mut self, dir: &Path) -> Vec<Entry> {
-        if let Some(cached) = self.children.get(dir) {
-            return cached.clone();
-        }
-        let entries = match read_dir(dir, self.show_hidden) {
-            Ok(entries) => entries,
-            Err(_) => {
-                self.unreadable.insert(dir.to_path_buf());
-                Vec::new()
-            }
-        };
-        self.children.insert(dir.to_path_buf(), entries.clone());
-        entries
     }
 }
 
@@ -362,16 +632,28 @@ pub enum OnCollision {
     Replace,
 }
 
-/// The names among `sources` that `dest_dir` already has, in the order they
-/// were given. Empty when nothing is in the way, which is the case that needs
-/// no question asked.
-pub fn collisions(sources: &[PathBuf], dest_dir: &Path) -> Vec<String> {
+/// The names among `sources` that are already in `taken`, in the order given.
+///
+/// Off a list rather than the filesystem, because the destination may be on
+/// another machine — one listing answers this for the whole batch, where one
+/// `exists` per name would be one round trip per name.
+pub fn collisions_among(sources: &[PathBuf], taken: &[String]) -> Vec<String> {
     sources
         .iter()
         .filter_map(|source| source.file_name())
         .map(|name| name.to_string_lossy().into_owned())
-        .filter(|name| dest_dir.join(name).exists())
+        .filter(|name| taken.iter().any(|entry| entry == name))
         .collect()
+}
+
+/// The names among `sources` that a local `dest_dir` already has.
+pub fn collisions(sources: &[PathBuf], dest_dir: &Path) -> Vec<String> {
+    let taken: Vec<String> = read_dir(dest_dir)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect();
+    collisions_among(sources, &taken)
 }
 
 /// The question the panel asks about a collision.
@@ -414,24 +696,35 @@ pub fn numbered_name(name: &str, n: u32) -> String {
     }
 }
 
-/// A name for `name` inside `dir` that is not taken.
+/// A name not in `taken`, counting up from `name`.
 ///
-/// A copy never overwrites. That is the whole rule, and it is here rather than
-/// at the call sites because there are three of them — a drop, a paste and an
-/// import — and two out of three getting it right is a feature that eats files.
-pub fn unique_name(dir: &Path, name: &str) -> String {
-    if !dir.join(name).exists() {
+/// Takes the list rather than the directory because a remote directory cannot
+/// be asked "does this exist" cheaply — it has already been listed, and one
+/// listing is the round trip that answers this for every name in the batch.
+pub fn unique_name_among(taken: &[String], name: &str) -> String {
+    let free = |candidate: &str| !taken.iter().any(|entry| entry == candidate);
+    if free(name) {
         return name.to_string();
     }
     for n in 2..1000 {
         let candidate = numbered_name(name, n);
-        if !dir.join(&candidate).exists() {
+        if free(&candidate) {
             return candidate;
         }
     }
     // A thousand copies of one name is not a case worth a cleverer answer, but
-    // it still must not return a name that exists.
+    // it still must not return a name that is taken.
     numbered_name(name, std::process::id())
+}
+
+/// A name for `name` inside a local `dir` that is not taken.
+pub fn unique_name(dir: &Path, name: &str) -> String {
+    let taken: Vec<String> = read_dir(dir)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect();
+    unique_name_among(&taken, name)
 }
 
 // ---------------------------------------------------------------------------
@@ -495,6 +788,26 @@ pub fn normalize(path: &Path) -> PathBuf {
 /// Whether `path` is `root` or sits under it.
 pub fn within(root: &Path, path: &Path) -> bool {
     normalize(path).starts_with(normalize(root))
+}
+
+/// The checks that still mean something when the two ends are on different
+/// machines.
+///
+/// Only reach: a copy into the workspace has to land inside it, and that is a
+/// question about the shape of the path rather than about what is on any disk.
+/// The rest of [`check_copy`] cannot apply — a local process cannot stat a
+/// remote directory, and "a folder inside itself" is not a thing two machines
+/// can be, however alike their paths look.
+pub fn check_across(source: &Path, dest_dir: &Path, root: Option<&Path>) -> Result<(), Refusal> {
+    if !source.exists() {
+        return Err(Refusal::Missing);
+    }
+    if let Some(root) = root {
+        if !within(root, dest_dir) {
+            return Err(Refusal::OutsideWorkspace);
+        }
+    }
+    Ok(())
 }
 
 /// Whether `source` may be copied into `dest_dir` under `mode`.
@@ -570,7 +883,10 @@ impl CopyReport {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
         let verb = if self.replaced { "Replaced" } else { "Copied" };
-        let head = if self.files == 1 {
+        // A transfer over SSH is a tar stream and reports no counts, so zero
+        // means "not measured" rather than "nothing" — and a single file has
+        // nothing worth measuring either way.
+        let head = if self.files <= 1 {
             format!("{verb} {name}")
         } else {
             format!(
@@ -677,6 +993,255 @@ fn copy_tree(source: &Path, destination: &Path, report: &mut CopyReport) {
 }
 
 // ---------------------------------------------------------------------------
+// Moving bytes to and from another machine
+// ---------------------------------------------------------------------------
+
+/// A copy across the wire is a `tar` stream through the same `ssh` invocation
+/// everything else on the remote goes through, so it rides the multiplexed
+/// connection that is already open and needs no `scp` on either side.
+///
+/// `-h` dereferences symlinks, which matches what a local copy does: a link
+/// into the source tree would dangle once the copy is elsewhere, and a link out
+/// of it would be a surprise in a folder the reader thinks they own outright.
+pub fn tar_send_argv(parent: &Path, name: &str) -> Vec<String> {
+    vec![
+        "tar".into(),
+        "-chf".into(),
+        "-".into(),
+        "-C".into(),
+        parent.to_string_lossy().into_owned(),
+        "--".into(),
+        name.to_string(),
+    ]
+}
+
+/// The same, as a shell command for the far side.
+pub fn tar_send_command(parent: &Path, name: &str) -> String {
+    format!(
+        "tar -chf - -C {} -- {}",
+        shell_quote(&parent.to_string_lossy()),
+        shell_quote(name)
+    )
+}
+
+/// The local argv that unpacks a stream into `into`.
+pub fn tar_receive_argv(into: &Path) -> Vec<String> {
+    vec![
+        "tar".into(),
+        "-xf".into(),
+        "-".into(),
+        "-C".into(),
+        into.to_string_lossy().into_owned(),
+    ]
+}
+
+/// The shell command that lands an incoming stream in `dest_dir` under
+/// `final_name`.
+///
+/// It unpacks into a staging directory beside the destination and moves the
+/// result into place, for two reasons. A rename within one directory is atomic,
+/// so a reader watching the tree never sees a half-written folder appear under
+/// the name they are waiting for. And it is what lets the copy land under a
+/// name of our choosing — `tar` extracts whatever name the archive carries, and
+/// "keep both" needs a different one.
+///
+/// The staging directory is removed whether or not the unpack worked, and the
+/// exit status carried through, so a failure is a failure rather than a
+/// half-finished folder nobody knows about.
+pub fn tar_receive_command(
+    dest_dir: &Path,
+    name: &str,
+    final_name: &str,
+    mode: OnCollision,
+) -> String {
+    let dest = shell_quote(&dest_dir.to_string_lossy());
+    let landed = shell_quote(&dest_dir.join(final_name).to_string_lossy());
+    let clear = match mode {
+        OnCollision::Replace => format!("rm -rf -- {landed} && "),
+        OnCollision::KeepBoth => String::new(),
+    };
+    format!(
+        "stage=$(mktemp -d {dest}/.pupo-XXXXXX) || exit 1; \
+         {{ tar -xf - -C \"$stage\" && {clear}mv -- \"$stage\"/{} {landed}; }}; \
+         rc=$?; rm -rf \"$stage\"; exit $rc",
+        shell_quote(name)
+    )
+}
+
+/// Run `producer`, feeding its stdout to `consumer`, and wait for both.
+///
+/// The producer's failure is reported before the consumer's: a `tar` that could
+/// not read the source and an `ssh` that got no bytes are the same event, and
+/// the first of them is the one that says what actually went wrong.
+fn pipe(producer: &[String], consumer: &[String], timeout: Duration) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+
+    let (head, rest) = producer.split_first().ok_or("nothing to run")?;
+    let mut source = Command::new(head)
+        .args(rest)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("{head}: {error}"))?;
+    let stream = source.stdout.take().ok_or("no stream to read")?;
+
+    let (head, rest) = consumer.split_first().ok_or("nothing to run")?;
+    let sink = Command::new(head)
+        .args(rest)
+        .stdin(Stdio::from(stream))
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("{head}: {error}"))?;
+
+    // The sink is waited on with a deadline; the source is drained by it and
+    // ends when the pipe closes.
+    let sink = wait_with_deadline(sink, timeout)?;
+    let source = source
+        .wait_with_output()
+        .map_err(|error| format!("{error}"))?;
+
+    if !source.status.success() {
+        return Err(remote_error(&String::from_utf8_lossy(&source.stderr)));
+    }
+    if !sink.status.success() {
+        return Err(remote_error(&String::from_utf8_lossy(&sink.stderr)));
+    }
+    Ok(())
+}
+
+/// `wait_with_output` with a deadline, killing by pid on the way out — the same
+/// shape [`crate::git::run_argv`] uses, and for the same reason: the standard
+/// wait has no timeout and a stalled connection must not hold a worker for ever.
+fn wait_with_deadline(
+    child: std::process::Child,
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
+    use std::sync::mpsc;
+
+    let pid = child.id();
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(child.wait_with_output());
+    });
+    match receiver.recv_timeout(timeout) {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(error)) => Err(error.to_string()),
+        Err(_) => {
+            // SAFETY: `pid` is a child of this process that nothing has reaped
+            // yet — the thread above still holds its `Child` and reaps it once
+            // the kill lands, so the pid cannot have been recycled.
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGKILL);
+            }
+            Err("The copy took too long and was stopped.".to_string())
+        }
+    }
+}
+
+/// Copy a local file or folder into a directory on the remote host.
+///
+/// `taken` is what the destination directory already holds, which the caller
+/// has listed anyway to find the collision in the first place.
+pub fn copy_up(
+    target: &RemoteTarget,
+    source: &Path,
+    dest_dir: &Path,
+    taken: &[String],
+    mode: OnCollision,
+) -> Result<CopyReport, Refusal> {
+    if !source.exists() {
+        return Err(Refusal::Missing);
+    }
+    let (parent, name) = split_source(source)?;
+    let final_name = match mode {
+        OnCollision::KeepBoth => unique_name_among(taken, &name),
+        OnCollision::Replace => name.clone(),
+    };
+    let replaced = mode == OnCollision::Replace && taken.contains(&final_name);
+
+    let command = tar_receive_command(dest_dir, &name, &final_name, mode);
+    let mut report = CopyReport {
+        destination: dest_dir.join(&final_name),
+        replaced,
+        ..Default::default()
+    };
+    if let Err(reason) = pipe(
+        &tar_send_argv(&parent, &name),
+        &target.ssh_argv(&command, false),
+        REMOTE_COPY_TIMEOUT,
+    ) {
+        report.failures.push(reason);
+        report.replaced = false;
+    }
+    Ok(report)
+}
+
+/// Copy a file or folder from the remote host into a local directory.
+///
+/// The bytes land in a staging directory next to the destination and are then
+/// placed by [`copy_into`], so the naming and replacing rules that apply to a
+/// local copy apply to this one too — written once, tested once.
+pub fn copy_down(
+    target: &RemoteTarget,
+    source: &Path,
+    dest_dir: &Path,
+    mode: OnCollision,
+) -> Result<CopyReport, Refusal> {
+    if !dest_dir.is_dir() {
+        return Err(Refusal::NotADirectory);
+    }
+    let (parent, name) = split_source(source)?;
+
+    let stage = dest_dir.join(format!(".pupo-stage-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&stage);
+    if let Err(error) = fs::create_dir_all(&stage) {
+        return Ok(CopyReport {
+            destination: dest_dir.join(&name),
+            failures: vec![format!("{}: {error}", stage.display())],
+            ..Default::default()
+        });
+    }
+
+    let outcome = pipe(
+        &target.ssh_argv(&tar_send_command(&parent, &name), false),
+        &tar_receive_argv(&stage),
+        REMOTE_COPY_TIMEOUT,
+    );
+    let report = match outcome {
+        Err(reason) => CopyReport {
+            destination: dest_dir.join(&name),
+            failures: vec![reason],
+            ..Default::default()
+        },
+        // Placed by the local rules, which is the whole reason for staging.
+        Ok(()) => copy_into(&stage.join(&name), dest_dir, None, mode)
+            .unwrap_or_else(|refusal| CopyReport {
+                destination: dest_dir.join(&name),
+                failures: vec![refusal.message().to_string()],
+                ..Default::default()
+            }),
+    };
+    let _ = fs::remove_dir_all(&stage);
+    Ok(report)
+}
+
+/// A source split into the directory holding it and its own name — what `tar`
+/// needs, and what a path with no name at all (a bare `/`) has none of.
+fn split_source(source: &Path) -> Result<(PathBuf, String), Refusal> {
+    let name = source
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .ok_or(Refusal::Missing)?;
+    let parent = source
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("/"));
+    Ok((parent, name))
+}
+
+// ---------------------------------------------------------------------------
 // Previewing a file
 // ---------------------------------------------------------------------------
 
@@ -762,6 +1327,83 @@ pub fn preview(path: &Path) -> Preview {
     let truncated = lines.len() > MAX_PREVIEW_LINES;
     lines.truncate(MAX_PREVIEW_LINES);
     Preview::Text { lines, truncated }
+}
+
+/// Read a file on the far side for the sheet.
+///
+/// `size` and `is_dir` come from the row the reader clicked, which the tree
+/// already listed — so this is one round trip, not a `stat` followed by a
+/// `cat`. Nothing but the bytes has to cross the wire.
+pub fn preview_remote(target: &RemoteTarget, path: &Path, size: u64, is_dir: bool) -> Preview {
+    if is_dir {
+        return Preview::Unreadable("That is a folder.".to_string());
+    }
+    if size == 0 {
+        return Preview::Empty;
+    }
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    // Decided by name and before the size check, exactly as locally: a
+    // photograph is routinely past the text budget and is what a preview is for.
+    if is_image(&name) {
+        return Preview::Image;
+    }
+    if size > MAX_PREVIEW_BYTES {
+        return Preview::TooLarge(size);
+    }
+
+    let command = format!(
+        "head -c {MAX_PREVIEW_BYTES} -- {}",
+        shell_quote(&path.to_string_lossy())
+    );
+    let argv = target.ssh_argv(&command, false);
+    let output = match crate::git::run_argv(&argv, REMOTE_LIST_TIMEOUT) {
+        Some(output) if output.ok() => output.stdout,
+        Some(output) => return Preview::Unreadable(remote_error(&output.stderr)),
+        None => return Preview::Unreadable("The host did not answer.".to_string()),
+    };
+    // NUL survives the lossy decode — it is valid UTF-8 — so the same test that
+    // sorts text from binary locally works on what came back over the wire.
+    if output.chars().take(SNIFF_BYTES).any(|ch| ch == '\0') {
+        return Preview::Binary;
+    }
+    let mut lines: Vec<String> = output.lines().map(str::to_string).collect();
+    let truncated = lines.len() > MAX_PREVIEW_LINES;
+    lines.truncate(MAX_PREVIEW_LINES);
+    Preview::Text { lines, truncated }
+}
+
+/// Copy one remote file to a local path, byte for byte.
+///
+/// For the one thing the sheet cannot render from text: an image has to exist
+/// as a file before anything can draw it.
+pub fn fetch_to(target: &RemoteTarget, source: &Path, into: &Path) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+
+    if let Some(parent) = into.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let file = fs::File::create(into).map_err(|error| format!("{}: {error}", into.display()))?;
+    let argv = target.ssh_argv(
+        &format!("cat -- {}", shell_quote(&source.to_string_lossy())),
+        false,
+    );
+    let (head, rest) = argv.split_first().ok_or("nothing to run")?;
+    let child = Command::new(head)
+        .args(rest)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(file))
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("{head}: {error}"))?;
+    let output = wait_with_deadline(child, REMOTE_COPY_TIMEOUT)?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let _ = fs::remove_file(into);
+    Err(remote_error(&String::from_utf8_lossy(&output.stderr)))
 }
 
 // ---------------------------------------------------------------------------
@@ -1165,11 +1807,30 @@ mod tests {
             .collect()
     }
 
+    /// Do what the panel does: ask the tree what it wants, read it, hand it
+    /// back, and go round again until it wants nothing more.
+    ///
+    /// The tree does no I/O of its own, so nothing in it draws until something
+    /// plays this part. Here that is the local filesystem; in the app it is a
+    /// worker thread that may be talking to another machine.
+    fn settle(tree: &mut Tree) -> Vec<Row> {
+        for _ in 0..64 {
+            let view = tree.view();
+            if view.wanted.is_empty() {
+                return view.rows;
+            }
+            for load in &view.wanted {
+                tree.deliver(load, list(&Place::Local, &load.dir));
+            }
+        }
+        panic!("tree never settled");
+    }
+
     #[test]
     fn a_closed_tree_shows_only_the_top_level() {
         let mut tree = Tree::new(sample_tree());
         assert_eq!(
-            names(&tree.rows()),
+            names(&settle(&mut tree)),
             [
                 (0, "docs".into()),
                 (0, "src".into()),
@@ -1184,7 +1845,7 @@ mod tests {
         let mut tree = Tree::new(&root);
         tree.expand(&root.join("src"));
         assert_eq!(
-            names(&tree.rows()),
+            names(&settle(&mut tree)),
             [
                 (0, "docs".into()),
                 (0, "src".into()),
@@ -1204,14 +1865,14 @@ mod tests {
         let mut tree = Tree::new(&root);
         tree.expand(&root.join("src"));
         tree.expand(&root.join("src/inner"));
-        assert_eq!(tree.rows().len(), 6);
+        assert_eq!(settle(&mut tree).len(), 6);
 
         tree.collapse(&root.join("src"));
-        assert_eq!(tree.rows().len(), 3);
+        assert_eq!(settle(&mut tree).len(), 3);
 
         tree.expand(&root.join("src"));
         assert_eq!(
-            names(&tree.rows()),
+            names(&settle(&mut tree)),
             [
                 (0, "docs".into()),
                 (0, "src".into()),
@@ -1226,9 +1887,9 @@ mod tests {
     #[test]
     fn hidden_entries_appear_only_when_they_are_asked_for() {
         let mut tree = Tree::new(sample_tree());
-        assert!(!tree.rows().iter().any(|row| row.name == ".hidden"));
+        assert!(!settle(&mut tree).iter().any(|row| row.name == ".hidden"));
         tree.set_show_hidden(true);
-        assert!(tree.rows().iter().any(|row| row.name == ".hidden"));
+        assert!(settle(&mut tree).iter().any(|row| row.name == ".hidden"));
     }
 
     #[test]
@@ -1236,15 +1897,15 @@ mod tests {
         let root = sample_tree();
         let mut tree = Tree::new(&root);
         tree.expand(&root.join("src"));
-        assert_eq!(tree.rows().len(), 5);
+        assert_eq!(settle(&mut tree).len(), 5);
 
         fs::write(root.join("src/added.rs"), b"new").unwrap();
         // Without the refresh the listing is the cached one, which is the whole
         // point of caching it.
-        assert_eq!(tree.rows().len(), 5);
+        assert_eq!(settle(&mut tree).len(), 5);
 
         tree.refresh();
-        let rows = tree.rows();
+        let rows = settle(&mut tree);
         assert_eq!(rows.len(), 6);
         assert!(rows.iter().any(|row| row.name == "added.rs"));
         assert!(tree.is_expanded(&root.join("src")));
@@ -1257,7 +1918,7 @@ mod tests {
         tree.reveal(&root.join("src/inner/deep.rs"));
         assert!(tree.is_expanded(&root.join("src")));
         assert!(tree.is_expanded(&root.join("src/inner")));
-        assert!(tree.rows().iter().any(|row| row.name == "deep.rs"));
+        assert!(settle(&mut tree).iter().any(|row| row.name == "deep.rs"));
     }
 
     #[test]
@@ -1277,14 +1938,14 @@ mod tests {
         fs::create_dir(&hollow).unwrap();
         let mut tree = Tree::new(&root);
         tree.expand(&hollow);
-        tree.rows();
+        settle(&mut tree);
         assert_eq!(tree.empty_reason(&hollow), Some(Empty::Nothing));
 
         // A directory that was never read is not "empty" — nothing is known
         // about it yet, and saying "empty" would be a claim.
         let mut fresh = Tree::new(&root);
         assert_eq!(fresh.empty_reason(&hollow), None);
-        fresh.rows();
+        settle(&mut fresh);
         assert_eq!(fresh.empty_reason(&hollow), None);
     }
 
@@ -1294,10 +1955,10 @@ mod tests {
         let second = tempdir();
         let mut tree = Tree::new(&first);
         tree.expand(&first.join("src"));
-        assert_eq!(tree.rows().len(), 5);
+        assert_eq!(settle(&mut tree).len(), 5);
 
         tree.set_root(&second);
-        assert!(tree.rows().is_empty());
+        assert!(settle(&mut tree).is_empty());
         assert!(!tree.is_expanded(&first.join("src")));
     }
 
@@ -1315,9 +1976,267 @@ mod tests {
         tree.expand(&inner);
         tree.expand(&inner.join("loop"));
         tree.expand(&inner.join("loop/inner"));
-        let rows = tree.rows();
+        let rows = settle(&mut tree);
         assert!(rows.iter().any(|row| row.name == "loop"));
         assert!(rows.len() < 10);
+    }
+
+    // ---- Listing another machine ------------------------------------------
+
+    /// One record as the remote `find` prints it.
+    fn record(kind: &str, target: &str, size: &str, name: &str) -> String {
+        format!("{kind}\t{target}\t{size}\t{name}\0")
+    }
+
+    #[test]
+    fn a_remote_listing_reads_types_sizes_and_names() {
+        let stdout = format!(
+            "{}{}{}",
+            record("d", "d", "4096", "src"),
+            record("f", "f", "1234", "main.rs"),
+            record("f", "f", "0", "empty"),
+        );
+        let entries = parse_listing(&stdout);
+        assert_eq!(
+            entries
+                .iter()
+                .map(|e| (e.name.as_str(), e.is_dir, e.size))
+                .collect::<Vec<_>>(),
+            [("src", true, 4096), ("empty", false, 0), ("main.rs", false, 1234)]
+        );
+    }
+
+    #[test]
+    fn a_remote_symlink_is_typed_by_what_it_points_at() {
+        // %y is the link, %Y is its target. A link to a folder has to open like
+        // a folder, and a broken one still gets a row.
+        let stdout = format!(
+            "{}{}",
+            record("l", "d", "7", "vendor"),
+            record("l", "N", "9", "dangling"),
+        );
+        let entries = parse_listing(&stdout);
+        let vendor = entries.iter().find(|e| e.name == "vendor").unwrap();
+        assert!(vendor.is_dir);
+        assert!(vendor.symlink);
+        let dangling = entries.iter().find(|e| e.name == "dangling").unwrap();
+        assert!(!dangling.is_dir);
+        assert!(dangling.symlink);
+    }
+
+    #[test]
+    fn a_remote_name_may_hold_a_tab_or_a_newline() {
+        // Which is why the records are NUL-terminated and the name is the last
+        // field: NUL is the one byte a path cannot contain.
+        let stdout = format!(
+            "{}{}",
+            record("f", "f", "1", "od\td name"),
+            record("f", "f", "2", "two\nlines"),
+        );
+        let names: Vec<String> = parse_listing(&stdout)
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert!(names.contains(&"od\td name".to_string()));
+        assert!(names.contains(&"two\nlines".to_string()));
+    }
+
+    #[test]
+    fn a_malformed_record_costs_its_own_row_and_no_more() {
+        let stdout = format!(
+            "{}{}{}",
+            record("f", "f", "1", "good.rs"),
+            "nonsense-with-no-fields\0",
+            record("f", "f", "2", "also-good.rs"),
+        );
+        let names: Vec<String> = parse_listing(&stdout)
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+        assert_eq!(names, ["also-good.rs", "good.rs"]);
+    }
+
+    #[test]
+    fn the_listing_command_quotes_the_directory_it_is_given() {
+        // It is pasted into a shell command line on the far side, so a space or
+        // a quote in the path must not end the argument.
+        let command = list_command(Path::new("/srv/my project"));
+        assert!(command.contains("'/srv/my project'"), "{command}");
+        assert!(command.contains("-maxdepth 1"));
+        // NUL-terminated records, name last.
+        assert!(command.contains("%f"));
+    }
+
+    // ---- Listings arriving late -------------------------------------------
+
+    #[test]
+    fn a_listing_from_before_a_refresh_is_dropped() {
+        // A remote find can take seconds, and in that time the reader can hit
+        // refresh or switch workspace. Filing the old answer under the new
+        // question is how a tree comes to show another machine's folders.
+        let mut tree = Tree::new("/w");
+        let view = tree.view();
+        let stale = view.wanted[0].clone();
+
+        tree.refresh();
+        tree.deliver(&stale, Ok(vec![entry("ghost", false)]));
+        assert!(tree.rows().is_empty());
+
+        // The re-asked load is a new generation, and that one lands.
+        let view = tree.view();
+        assert_eq!(view.wanted.len(), 1);
+        assert!(view.rows.is_empty());
+        assert_ne!(view.wanted[0].generation, stale.generation);
+        tree.deliver(&view.wanted[0].clone(), Ok(vec![entry("real", false)]));
+        assert_eq!(names(&tree.rows()), [(0, "real".to_string())]);
+    }
+
+    #[test]
+    fn a_directory_is_asked_for_once_however_often_it_is_drawn() {
+        // Otherwise every repaint starts another SSH round trip for a listing
+        // that is already on its way.
+        let mut tree = Tree::new("/w");
+        assert_eq!(tree.view().wanted.len(), 1);
+        assert!(tree.view().wanted.is_empty());
+        assert!(tree.loading());
+    }
+
+    #[test]
+    fn an_open_directory_says_it_is_loading_until_its_listing_lands() {
+        let mut tree = Tree::new("/w");
+        let load = tree.view().wanted[0].clone();
+        tree.deliver(&load, Ok(vec![entry("src", true)]));
+        tree.expand(Path::new("/w/src"));
+
+        let view = tree.view();
+        assert!(view.rows[0].loading, "the open row should say it is waiting");
+        assert_eq!(view.wanted.len(), 1);
+        assert_eq!(view.wanted[0].dir, PathBuf::from("/w/src"));
+
+        tree.deliver(&view.wanted[0].clone(), Ok(vec![entry("main.rs", false)]));
+        let rows = tree.rows();
+        assert!(!rows[0].loading);
+        assert_eq!(rows[1].name, "main.rs");
+    }
+
+    #[test]
+    fn a_directory_that_would_not_be_read_says_why() {
+        // "No permission" and "nothing in it" look identical in a list and mean
+        // opposite things, and over SSH there is a third answer — the host did
+        // not reply — that must not read as either.
+        let mut tree = Tree::new("/w");
+        let load = tree.view().wanted[0].clone();
+        tree.deliver(&load, Err("The host did not answer.".into()));
+        assert_eq!(
+            tree.empty_reason(Path::new("/w")),
+            Some(Empty::Unreadable("The host did not answer.".into()))
+        );
+    }
+
+    #[test]
+    fn showing_hidden_entries_is_a_redraw_rather_than_a_re_read() {
+        // On a remote workspace a re-read is a round trip per open branch, for
+        // a question that was already answered.
+        let mut tree = Tree::new("/w");
+        let load = tree.view().wanted[0].clone();
+        tree.deliver(&load, Ok(vec![entry(".env", false), entry("main.rs", false)]));
+
+        assert_eq!(names(&tree.rows()), [(0, "main.rs".to_string())]);
+        assert_eq!(tree.empty_reason(Path::new("/w")), None);
+
+        tree.set_show_hidden(true);
+        // Nothing to fetch: the listing never left.
+        assert!(tree.view().wanted.is_empty());
+        assert_eq!(tree.rows().len(), 2);
+    }
+
+    #[test]
+    fn a_folder_of_nothing_but_dotfiles_is_told_apart_from_an_empty_one() {
+        let mut tree = Tree::new("/w");
+        let load = tree.view().wanted[0].clone();
+        tree.deliver(&load, Ok(vec![entry(".env", false)]));
+        assert_eq!(tree.empty_reason(Path::new("/w")), Some(Empty::HiddenOnly));
+
+        let mut bare = Tree::new("/b");
+        let load = bare.view().wanted[0].clone();
+        bare.deliver(&load, Ok(vec![]));
+        assert_eq!(bare.empty_reason(Path::new("/b")), Some(Empty::Nothing));
+    }
+
+    // ---- Moving bytes across the wire -------------------------------------
+
+    #[test]
+    fn a_send_dereferences_links_so_a_copy_matches_a_local_one() {
+        // -h. Without it the copy arrives full of links pointing at paths that
+        // exist only on the machine it came from.
+        let argv = tar_send_argv(Path::new("/w"), "src");
+        assert_eq!(argv[0], "tar");
+        assert!(argv.contains(&"-chf".to_string()));
+        // `--` before the name, so a file called `-C` is a file and not a flag.
+        let end = &argv[argv.len() - 2..];
+        assert_eq!(end, ["--", "src"]);
+    }
+
+    #[test]
+    fn a_send_command_quotes_both_the_directory_and_the_name() {
+        let command = tar_send_command(Path::new("/srv/my project"), "notes' file");
+        assert!(command.contains("'/srv/my project'"), "{command}");
+        // The apostrophe has to survive being pasted into a shell command line.
+        assert!(command.contains(r#"'notes'\'' file'"#), "{command}");
+    }
+
+    #[test]
+    fn a_receive_stages_then_moves_so_a_half_written_folder_never_appears() {
+        let command = tar_receive_command(
+            Path::new("/w/docs"),
+            "notes",
+            "notes",
+            OnCollision::KeepBoth,
+        );
+        // Staged beside the destination, so the move into place is a rename on
+        // the same filesystem rather than a second copy.
+        assert!(command.contains("mktemp -d /w/docs/.pupo-XXXXXX"), "{command}");
+        assert!(command.contains("tar -xf - -C \"$stage\""), "{command}");
+        assert!(command.contains("mv --"), "{command}");
+        // Cleaned up and the status carried through, whether or not it worked.
+        assert!(command.contains("rc=$?"), "{command}");
+        assert!(command.contains("rm -rf \"$stage\""), "{command}");
+        assert!(command.trim_end().ends_with("exit $rc"), "{command}");
+        // Nothing is deleted unless replacing was asked for.
+        assert!(!command.contains("rm -rf -- "), "{command}");
+    }
+
+    #[test]
+    fn a_receive_that_replaces_clears_the_way_first() {
+        let command = tar_receive_command(
+            Path::new("/w"),
+            "notes",
+            "notes",
+            OnCollision::Replace,
+        );
+        assert!(command.contains("rm -rf -- /w/notes"), "{command}");
+    }
+
+    #[test]
+    fn keeping_both_lands_under_the_free_name_not_the_archived_one() {
+        // tar extracts whatever name the archive carries, so the move is what
+        // makes "keep both" possible at all on the far side.
+        let command = tar_receive_command(
+            Path::new("/w"),
+            "notes.txt",
+            "notes 2.txt",
+            OnCollision::KeepBoth,
+        );
+        assert!(command.contains(r#""$stage"/notes.txt"#), "{command}");
+        assert!(command.contains("'/w/notes 2.txt'"), "{command}");
+    }
+
+    #[test]
+    fn a_free_remote_name_is_left_alone_and_a_taken_one_counts_up() {
+        let taken = vec!["report.txt".to_string(), "report 2.txt".to_string()];
+        assert_eq!(unique_name_among(&taken, "notes.txt"), "notes.txt");
+        assert_eq!(unique_name_among(&taken, "report.txt"), "report 3.txt");
+        assert!(unique_name_among(&[], "anything.txt") == "anything.txt");
     }
 
     // ---- Previewing -------------------------------------------------------
