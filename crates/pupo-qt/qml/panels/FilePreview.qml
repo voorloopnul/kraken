@@ -124,6 +124,18 @@ Item {
             }
         }
 
+        // Still reading. On a remote workspace the bytes are a round trip
+        // away, and a sheet that stayed blank until they landed would read as
+        // a click that did nothing.
+        Text {
+            anchors.centerIn: parent
+            visible: Files.preview_kind === "loading"
+            text: qsTr("Reading…")
+            color: Files.dim_color
+            font.family: Theme.mono_family
+            font.pixelSize: 12
+        }
+
         // Nothing to lay out as lines: a binary file, an empty one, one past the
         // size budget, or one that would not open.
         Text {

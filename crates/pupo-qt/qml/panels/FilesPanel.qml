@@ -156,10 +156,28 @@ Item {
                 height: 11
                 sourceSize: Qt.size(22, 22)
                 smooth: true
-                visible: row.modelData.is_dir
+                visible: row.modelData.is_dir && !row.modelData.loading
                 source: Theme.icon(
                     row.modelData.expanded ? "chevron-down" : "chevron-right",
                     Files.dim_color)
+            }
+
+            // An open folder whose listing has not arrived. Only ever visible
+            // on a remote workspace, which is exactly where a branch that took
+            // a moment would otherwise read as a click that did nothing.
+            Text {
+                anchors {
+                    left: parent.left
+                    leftMargin: 4 + row.modelData.depth * panel.indentStep
+                    verticalCenter: parent.verticalCenter
+                }
+                width: 11
+                horizontalAlignment: Text.AlignHCenter
+                visible: row.modelData.loading
+                text: "·"
+                color: Files.dim_color
+                font.family: Theme.mono_family
+                font.pixelSize: 11
             }
 
             Image {
@@ -216,6 +234,13 @@ Item {
             // What a drag out of the panel carries. `Drag.Automatic` is what
             // makes it a drag the rest of the desktop can receive rather than
             // one that only means something inside this window.
+            //
+            // Offered for a local workspace only. What the desktop's drag
+            // protocol wants is a path another application can open, and a file
+            // on the far side of an SSH connection has none until it has been
+            // fetched — which cannot happen inside the gesture. "Copy out of
+            // the workspace…" in the row menu does the same job with a
+            // destination chosen first and the transfer on a worker.
             Item {
                 id: payload
                 Drag.active: rowMouse.drag.active
@@ -229,7 +254,7 @@ Item {
                 anchors.fill: parent
                 hoverEnabled: true
                 acceptedButtons: Qt.LeftButton | Qt.RightButton
-                drag.target: payload
+                drag.target: Files.remote ? null : payload
                 // Past the platform's own threshold, so a click that wanders a
                 // pixel is still a click.
                 drag.threshold: 8
