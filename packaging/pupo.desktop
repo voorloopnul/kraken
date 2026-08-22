@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Pupo
+Comment=Desktop front end for the Pi coding agent
+Exec=pupo
+Icon=pupo
+Categories=Development;Utility;
+Terminal=false
+StartupWMClass=pupo
