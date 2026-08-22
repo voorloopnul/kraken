@@ -295,7 +295,7 @@ impl RemotesBridge {
 
         let destination = host.destination();
         let mut argv = vec!["ssh".to_string()];
-        argv.extend(host.ssh_base_args());
+        argv.extend(host.ssh_base_args(true));
         argv.push(destination.clone());
         // The cheapest command that proves a login shell was reached.
         argv.push("true".to_string());

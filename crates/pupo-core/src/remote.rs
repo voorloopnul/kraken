@@ -84,14 +84,33 @@ impl SshHost {
 
     /// Common ssh options — everything but the destination and the command:
     /// port, identity, and connection multiplexing.
-    pub fn ssh_base_args(&self) -> Vec<String> {
+    ///
+    /// `master` is whether this connection may become the shared one. Every
+    /// short-lived command says yes; the interactive terminal says no, and the
+    /// difference is not cosmetic.
+    ///
+    /// With `ControlMaster=auto`, whichever ssh starts first creates the socket
+    /// and the ones that started alongside it find it already there and say so
+    /// — on stderr, which for a session with a PTY is the pane the reader is
+    /// looking at. Opening a workspace starts several at once (the file tree,
+    /// git, pi's extension, the terminal), so this is a race the terminal loses
+    /// often enough to be the first thing in every shell.
+    ///
+    /// `ControlMaster=no` does not mean "unshared": with a `ControlPath` set,
+    /// ssh still uses an existing socket. It means "do not try to create one",
+    /// which is the whole of what the terminal was doing wrong.
+    pub fn ssh_base_args(&self, master: bool) -> Vec<String> {
         let control_dir = state::ssh_control_dir();
         let _ = fs::create_dir_all(&control_dir);
         let mut args = vec![
             "-p".into(),
             self.port.to_string(),
             "-o".into(),
-            "ControlMaster=auto".into(),
+            if master {
+                "ControlMaster=auto".into()
+            } else {
+                "ControlMaster=no".to_string()
+            },
             // %C is a short fixed-length hash of the connection tuple, so the
             // socket path stays well under the ~104-char AF_UNIX limit even for
             // long home dirs, usernames or hostnames (a literal %r@%h:%p can
@@ -138,7 +157,7 @@ impl RemoteTarget {
         if tty {
             argv.push("-t".into());
         }
-        argv.extend(self.host.ssh_base_args());
+        argv.extend(self.host.ssh_base_args(!tty));
         argv.push(self.host.destination());
         argv.push(format!(
             "cd {} && {remote_command}",
@@ -166,7 +185,7 @@ impl RemoteTarget {
     pub fn env_value(&self) -> String {
         json!({
             "destination": self.host.destination(),
-            "baseArgs": self.host.ssh_base_args(),
+            "baseArgs": self.host.ssh_base_args(true),
             "remotePath": self.path,
         })
         .to_string()
@@ -385,7 +404,7 @@ mod tests {
 
     #[test]
     fn base_args_multiplex_and_never_prompt() {
-        let args = host().ssh_base_args().join(" ");
+        let args = host().ssh_base_args(true).join(" ");
         assert!(args.contains("ControlMaster=auto"));
         assert!(args.contains("ControlPersist=120"));
         assert!(args.contains("BatchMode=yes"));
@@ -396,10 +415,34 @@ mod tests {
     }
 
     #[test]
+    fn only_the_interactive_terminal_declines_to_own_the_shared_connection() {
+        // Opening a workspace starts several ssh clients at once. Whichever
+        // creates the control socket first wins, and the rest print "already
+        // exists, disabling multiplexing" on stderr — which, for the one
+        // session that has a PTY, is the pane the reader is looking at.
+        let terminal = target().terminal_argv().join(" ");
+        assert!(terminal.contains("ControlMaster=no"), "{terminal}");
+        assert!(!terminal.contains("ControlMaster=auto"), "{terminal}");
+
+        // Everything else still shares: the file tree opens a listing per
+        // branch, and paying for a connection each time is the cost this whole
+        // arrangement exists to avoid.
+        let command = target().ssh_argv("ls", false).join(" ");
+        assert!(command.contains("ControlMaster=auto"), "{command}");
+        assert!(target().git_argv(&["status".into()]).join(" ").contains("ControlMaster=auto"));
+        assert!(target().env_value().contains("ControlMaster=auto"));
+
+        // Declining to create the socket is not declining to use one: the
+        // ControlPath is still passed, so the terminal rides a connection that
+        // is already up.
+        assert!(terminal.contains("cm-%C"), "{terminal}");
+    }
+
+    #[test]
     fn an_identity_is_expanded_and_passed_with_dash_i() {
         let mut with_key = host();
         with_key.identity = Some("~/.ssh/id_ed25519".into());
-        let args = with_key.ssh_base_args();
+        let args = with_key.ssh_base_args(true);
         let index = args.iter().position(|a| a == "-i").expect("-i is passed");
         assert!(!args[index + 1].starts_with('~'), "~ should be expanded");
         assert!(args[index + 1].ends_with(".ssh/id_ed25519"));
