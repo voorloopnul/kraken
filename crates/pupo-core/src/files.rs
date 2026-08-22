@@ -16,6 +16,12 @@
 //! the panel: a copy is the one thing this feature does that writes to the
 //! user's disk, and "would this overwrite something" is not a question to answer
 //! from a drag handler.
+//!
+//! A name that is already taken is the reader's decision, not this file's. The
+//! collision is found before anything is written ([`collisions`]) and the copy
+//! waits for an answer ([`OnCollision`]) — replacing quietly would destroy work,
+//! and renaming quietly leaves a `report 2.txt` nobody asked for and nobody
+//! notices until the wrong one gets sent.
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
@@ -344,6 +350,51 @@ impl Tree {
 // Naming a copy
 // ---------------------------------------------------------------------------
 
+/// What to do about a destination name that is already taken.
+///
+/// There is no default. Both answers lose something — one overwrites work, the
+/// other leaves a near-duplicate — so the caller has to have asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnCollision {
+    /// Copy alongside, under a name that is not taken.
+    KeepBoth,
+    /// Delete what is there and put this in its place.
+    Replace,
+}
+
+/// The names among `sources` that `dest_dir` already has, in the order they
+/// were given. Empty when nothing is in the way, which is the case that needs
+/// no question asked.
+pub fn collisions(sources: &[PathBuf], dest_dir: &Path) -> Vec<String> {
+    sources
+        .iter()
+        .filter_map(|source| source.file_name())
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| dest_dir.join(name).exists())
+        .collect()
+}
+
+/// The question the panel asks about a collision.
+///
+/// Names the single file where there is one, because "note.txt already exists"
+/// is answerable and "1 item already exists" is not. Past one, the count is the
+/// honest summary — a dialog listing forty names is a dialog nobody reads.
+pub fn collision_message(names: &[String], destination: &str) -> String {
+    let place = if destination.is_empty() {
+        "the workspace".to_string()
+    } else {
+        format!("\u{201c}{destination}\u{201d}")
+    };
+    match names.len() {
+        0 => String::new(),
+        1 => format!(
+            "\u{201c}{}\u{201d} already exists in {place}.",
+            names[0]
+        ),
+        many => format!("{many} items already exist in {place}."),
+    }
+}
+
 /// `name` with ` <n>` worked into it, for the nth copy of a file.
 ///
 /// The number goes before the extension, because the extension is what decides
@@ -400,6 +451,10 @@ pub enum Refusal {
     /// An import whose destination is outside the workspace. The panel's job is
     /// this project; a drop that lands elsewhere is one nobody asked for.
     OutsideWorkspace,
+    /// A replace whose destination is the source itself, or a folder holding
+    /// it. Replacing means deleting what is there first, so left to run this
+    /// deletes the very thing it was about to copy.
+    OntoItself,
 }
 
 impl Refusal {
@@ -411,6 +466,7 @@ impl Refusal {
             Refusal::NotADirectory => "That is not a folder to copy into.",
             Refusal::IntoItself => "A folder cannot be copied into itself.",
             Refusal::OutsideWorkspace => "That destination is outside the workspace.",
+            Refusal::OntoItself => "That would replace the file with itself.",
         }
     }
 }
@@ -441,12 +497,20 @@ pub fn within(root: &Path, path: &Path) -> bool {
     normalize(path).starts_with(normalize(root))
 }
 
-/// Whether `source` may be copied into `dest_dir`.
+/// Whether `source` may be copied into `dest_dir` under `mode`.
 ///
 /// `root` is the workspace, and `Some` of it means this is an import that has
 /// to land inside the project. An export — copying out to anywhere the reader
 /// picked — passes `None`, because the whole point of it is to leave.
-pub fn check_copy(source: &Path, dest_dir: &Path, root: Option<&Path>) -> Result<(), Refusal> {
+///
+/// The mode matters because [`OnCollision::Replace`] deletes before it writes,
+/// which makes destinations legal under `KeepBoth` fatal under `Replace`.
+pub fn check_copy(
+    source: &Path,
+    dest_dir: &Path,
+    root: Option<&Path>,
+    mode: OnCollision,
+) -> Result<(), Refusal> {
     if !source.exists() {
         return Err(Refusal::Missing);
     }
@@ -462,6 +526,16 @@ pub fn check_copy(source: &Path, dest_dir: &Path, root: Option<&Path>) -> Result
     // itself is a duplicate, which is a thing people mean to do.
     if source.is_dir() && within(source, dest_dir) {
         return Err(Refusal::IntoItself);
+    }
+    // Under Replace the destination is deleted first. If the thing that would
+    // be deleted is the source — or a folder with the source inside it — the
+    // copy destroys its own input and there is nothing left to write.
+    if mode == OnCollision::Replace {
+        if let Some(name) = source.file_name() {
+            if within(&dest_dir.join(name), source) {
+                return Err(Refusal::OntoItself);
+            }
+        }
     }
     Ok(())
 }
@@ -482,6 +556,9 @@ pub struct CopyReport {
     pub failures: Vec<String>,
     /// Where the copy landed, once the collision rule has had its say.
     pub destination: PathBuf,
+    /// Whether something was deleted to make room. Worth reporting: it is the
+    /// one outcome here that cannot be undone.
+    pub replaced: bool,
 }
 
 impl CopyReport {
@@ -492,10 +569,15 @@ impl CopyReport {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
+        let verb = if self.replaced { "Replaced" } else { "Copied" };
         let head = if self.files == 1 {
-            format!("Copied {name}")
+            format!("{verb} {name}")
         } else {
-            format!("Copied {name} — {} files, {}", self.files, format_size(self.bytes))
+            format!(
+                "{verb} {name} — {} files, {}",
+                self.files,
+                format_size(self.bytes)
+            )
         };
         if self.failures.is_empty() {
             head
@@ -505,23 +587,53 @@ impl CopyReport {
     }
 }
 
-/// Copy `source` into `dest_dir`, under a name that is not taken.
+/// Copy `source` into `dest_dir`, resolving a taken name the way `mode` says.
 ///
 /// Directories come across whole. Symlinks are copied as what they point at
 /// rather than re-created as links: a link into the source tree would dangle
 /// once the copy is somewhere else, and a link out of it would be a surprise in
 /// a folder the reader thinks they now own outright.
-pub fn copy_into(source: &Path, dest_dir: &Path, root: Option<&Path>) -> Result<CopyReport, Refusal> {
-    check_copy(source, dest_dir, root)?;
+pub fn copy_into(
+    source: &Path,
+    dest_dir: &Path,
+    root: Option<&Path>,
+    mode: OnCollision,
+) -> Result<CopyReport, Refusal> {
+    check_copy(source, dest_dir, root, mode)?;
     let name = source
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .ok_or(Refusal::Missing)?;
-    let destination = dest_dir.join(unique_name(dest_dir, &name));
+
+    let destination = match mode {
+        OnCollision::KeepBoth => dest_dir.join(unique_name(dest_dir, &name)),
+        OnCollision::Replace => dest_dir.join(&name),
+    };
     let mut report = CopyReport {
         destination: destination.clone(),
         ..Default::default()
     };
+
+    // Clear the way, and only then. A failed removal must not be followed by a
+    // copy that half-merges the new tree into the old one — `fs::copy` would
+    // overwrite the files that match and leave every file the old tree had and
+    // the new one does not, which is neither of the two things anyone asked
+    // for and is indistinguishable from success.
+    if mode == OnCollision::Replace && destination.exists() {
+        let removed = if destination.is_dir() {
+            fs::remove_dir_all(&destination)
+        } else {
+            fs::remove_file(&destination)
+        };
+        if let Err(error) = removed {
+            report
+                .failures
+                .push(format!("{}: {error}", destination.display()));
+            return Ok(report);
+        }
+        report.replaced = true;
+    }
+
     copy_tree(source, &destination, &mut report);
     Ok(report)
 }
@@ -838,17 +950,17 @@ mod tests {
         fs::create_dir_all(&inner).unwrap();
 
         assert_eq!(
-            check_copy(&outer, &outer, None),
+            check_copy(&outer, &outer, None, OnCollision::KeepBoth),
             Err(Refusal::IntoItself)
         );
         // The one that actually eats a disk: the copy's own output becomes more
         // to copy, for ever.
         assert_eq!(
-            check_copy(&outer, &inner, None),
+            check_copy(&outer, &inner, None, OnCollision::KeepBoth),
             Err(Refusal::IntoItself)
         );
         // The other way round is an ordinary copy.
-        assert!(check_copy(&inner, &root, None).is_ok());
+        assert!(check_copy(&inner, &root, None, OnCollision::KeepBoth).is_ok());
     }
 
     #[test]
@@ -856,7 +968,7 @@ mod tests {
         let dir = tempdir();
         let file = dir.join("note.txt");
         fs::write(&file, b"x").unwrap();
-        assert!(check_copy(&file, &dir, None).is_ok());
+        assert!(check_copy(&file, &dir, None, OnCollision::KeepBoth).is_ok());
     }
 
     #[test]
@@ -868,20 +980,20 @@ mod tests {
         let source = outside.join("note.txt");
         fs::write(&source, b"x").unwrap();
 
-        assert!(check_copy(&source, &inside, Some(&root)).is_ok());
+        assert!(check_copy(&source, &inside, Some(&root), OnCollision::KeepBoth).is_ok());
         assert_eq!(
-            check_copy(&source, &outside, Some(&root)),
+            check_copy(&source, &outside, Some(&root), OnCollision::KeepBoth),
             Err(Refusal::OutsideWorkspace)
         );
         // An export names no root, because leaving is the point of it.
-        assert!(check_copy(&source, &outside, None).is_ok());
+        assert!(check_copy(&source, &outside, None, OnCollision::KeepBoth).is_ok());
     }
 
     #[test]
     fn a_source_that_is_gone_is_refused_before_anything_is_written() {
         let dir = tempdir();
         assert_eq!(
-            check_copy(&dir.join("ghost"), &dir, None),
+            check_copy(&dir.join("ghost"), &dir, None, OnCollision::KeepBoth),
             Err(Refusal::Missing)
         );
     }
@@ -889,14 +1001,21 @@ mod tests {
     // ---- Doing the copy ---------------------------------------------------
 
     #[test]
-    fn a_copy_never_overwrites_what_is_already_there() {
+    fn keeping_both_leaves_what_was_already_there() {
         let source_dir = tempdir();
         let dest = tempdir();
         fs::write(source_dir.join("note.txt"), b"new").unwrap();
         fs::write(dest.join("note.txt"), b"original").unwrap();
 
-        let report = copy_into(&source_dir.join("note.txt"), &dest, None).unwrap();
+        let report = copy_into(
+            &source_dir.join("note.txt"),
+            &dest,
+            None,
+            OnCollision::KeepBoth,
+        )
+        .unwrap();
         assert_eq!(report.destination, dest.join("note 2.txt"));
+        assert!(!report.replaced);
         assert_eq!(fs::read(dest.join("note.txt")).unwrap(), b"original");
         assert_eq!(fs::read(dest.join("note 2.txt")).unwrap(), b"new");
     }
@@ -910,7 +1029,7 @@ mod tests {
         fs::write(tree.join("README.md"), b"hello").unwrap();
         fs::write(tree.join("src/deep/main.rs"), b"fn main() {}").unwrap();
 
-        let report = copy_into(&tree, &dest, None).unwrap();
+        let report = copy_into(&tree, &dest, None, OnCollision::KeepBoth).unwrap();
         assert_eq!(report.files, 2);
         assert_eq!(report.bytes, 5 + 12);
         assert!(report.failures.is_empty());
@@ -918,6 +1037,111 @@ mod tests {
             fs::read(dest.join("project/src/deep/main.rs")).unwrap(),
             b"fn main() {}"
         );
+    }
+
+    #[test]
+    fn replacing_puts_the_new_file_where_the_old_one_was() {
+        let source_dir = tempdir();
+        let dest = tempdir();
+        fs::write(source_dir.join("note.txt"), b"new").unwrap();
+        fs::write(dest.join("note.txt"), b"original").unwrap();
+
+        let report = copy_into(
+            &source_dir.join("note.txt"),
+            &dest,
+            None,
+            OnCollision::Replace,
+        )
+        .unwrap();
+        assert_eq!(report.destination, dest.join("note.txt"));
+        assert!(report.replaced);
+        assert_eq!(fs::read(dest.join("note.txt")).unwrap(), b"new");
+        // No stray second copy left beside it.
+        assert!(!dest.join("note 2.txt").exists());
+    }
+
+    #[test]
+    fn replacing_a_folder_removes_it_rather_than_merging_into_it() {
+        // The failure this rules out is subtle: copying over the top would
+        // overwrite the files that match and leave every file the old tree had
+        // and the new one does not, which is neither tree.
+        let source_dir = tempdir();
+        let dest = tempdir();
+        fs::create_dir(source_dir.join("tree")).unwrap();
+        fs::write(source_dir.join("tree/new.txt"), b"new").unwrap();
+        fs::create_dir(dest.join("tree")).unwrap();
+        fs::write(dest.join("tree/stale.txt"), b"stale").unwrap();
+
+        let report = copy_into(
+            &source_dir.join("tree"),
+            &dest,
+            None,
+            OnCollision::Replace,
+        )
+        .unwrap();
+        assert!(report.replaced);
+        assert!(dest.join("tree/new.txt").exists());
+        assert!(!dest.join("tree/stale.txt").exists());
+    }
+
+    #[test]
+    fn replacing_a_file_with_itself_is_refused_before_it_is_deleted() {
+        // Beside itself is a duplicate under KeepBoth and suicide under
+        // Replace: the destination is the source, so clearing the way for the
+        // copy destroys what was about to be copied.
+        let dir = tempdir();
+        let file = dir.join("note.txt");
+        fs::write(&file, b"precious").unwrap();
+
+        assert!(check_copy(&file, &dir, None, OnCollision::KeepBoth).is_ok());
+        assert_eq!(
+            check_copy(&file, &dir, None, OnCollision::Replace),
+            Err(Refusal::OntoItself)
+        );
+        assert_eq!(
+            copy_into(&file, &dir, None, OnCollision::Replace),
+            Err(Refusal::OntoItself)
+        );
+        assert_eq!(fs::read(&file).unwrap(), b"precious");
+    }
+
+    #[test]
+    fn collisions_are_the_names_already_taken_and_nothing_else() {
+        let source_dir = tempdir();
+        let dest = tempdir();
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            fs::write(source_dir.join(name), b"x").unwrap();
+        }
+        fs::write(dest.join("a.txt"), b"x").unwrap();
+        fs::write(dest.join("c.txt"), b"x").unwrap();
+
+        let sources: Vec<PathBuf> = ["a.txt", "b.txt", "c.txt"]
+            .iter()
+            .map(|name| source_dir.join(name))
+            .collect();
+        assert_eq!(collisions(&sources, &dest), ["a.txt", "c.txt"]);
+        // Nothing in the way is the case that needs no question asked.
+        assert!(collisions(&sources, &tempdir()).is_empty());
+    }
+
+    #[test]
+    fn the_collision_question_names_one_file_and_counts_the_rest() {
+        // "note.txt already exists" is answerable; "1 item already exists" is
+        // not.
+        assert_eq!(
+            collision_message(&["note.txt".into()], "docs"),
+            "\u{201c}note.txt\u{201d} already exists in \u{201c}docs\u{201d}."
+        );
+        assert_eq!(
+            collision_message(&["a".into(), "b".into(), "c".into()], "docs"),
+            "3 items already exist in \u{201c}docs\u{201d}."
+        );
+        // The workspace root has no name to quote.
+        assert_eq!(
+            collision_message(&["a".into(), "b".into()], ""),
+            "2 items already exist in the workspace."
+        );
+        assert_eq!(collision_message(&[], "docs"), "");
     }
 
     // ---- The tree ---------------------------------------------------------
