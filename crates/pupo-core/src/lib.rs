@@ -13,6 +13,7 @@ pub mod debug;
 pub mod diff;
 pub mod dock;
 pub mod external;
+pub mod files;
 pub mod git;
 pub mod pi;
 pub mod remote;
