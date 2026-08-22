@@ -1,37 +1,65 @@
 //! The Files pane, as QML sees it: the workspace's tree, and the copies in and
-//! out of it.
+//! out of it — on this machine or on one at the end of an SSH connection.
 //!
-//! Reading a directory is one `readdir` and happens on the UI thread — opening
-//! a branch is not work worth a thread, and a tree that arrived a frame later
-//! than the click that asked for it would flicker. Copying is the opposite: a
-//! folder can be gigabytes, so every copy runs on a worker and reports back.
+//! Nothing here touches a filesystem on the UI thread. Every listing, every
+//! transfer and every read for the preview runs on a worker and comes back
+//! through a queued callback, because on a remote workspace each of them is an
+//! SSH round trip and a window that stopped for one would stop for all of them.
+//! Locally the same path costs a thread and gains a window that never blocks on
+//! a slow disk.
 //!
-//! The preview sheet is the diff sheet's twin, and deliberately so — it reuses
-//! [`super::diff`]'s run builders and `pupo_core::diff`'s sheet colours, so a
-//! file read here is lexed, coloured and laid out exactly as the same file is
-//! when it is read as a diff. Two sheets that showed the same code in different
-//! colours would be two sheets nobody trusts.
+//! Which machine is answering is [`Place`]'s business, and it is the only thing
+//! that differs: the tree, the sorting, the collision rules and the naming are
+//! written once and do not know which they are looking at.
+//!
+//! The preview sheet reuses [`super::diff`]'s run builders and
+//! `pupo_core::diff`'s sheet colours, so a file read here is lexed, coloured
+//! and laid out exactly as the same file is when it is read as a diff. Two
+//! sheets that showed the same code in different colours would be two sheets
+//! nobody trusts.
 
 use std::path::{Path, PathBuf};
 
 use pupo_core::chat::highlight;
-use pupo_core::files::{self, CopyReport, Empty, OnCollision, Preview, Refusal, Row, Tree};
+use pupo_core::files::{
+    self, CopyReport, Empty, Entry, Load, OnCollision, Place, Preview, Refusal, Row, Tree,
+};
 use pupo_core::theme::DEFAULT_THEME;
-use pupo_core::{diff, remote};
+use pupo_core::{diff, state};
 use qmetaobject::*;
 
 use super::diff::{push_run, runs_for};
 
-/// A copy that is ready to run and waiting for the reader to say what to do
-/// about the names already taken at the other end.
-struct Pending {
+/// A copy that has been checked and knows where it is going.
+#[derive(Clone)]
+struct Plan {
+    /// Where the bytes come from. Local paths for an import, paths on the far
+    /// side for an export out of a remote workspace.
     sources: Vec<PathBuf>,
+    /// The directory they land in.
     dest: PathBuf,
-    /// `Some` for an import, which is the direction that has to land inside the
-    /// workspace and the direction whose result the tree shows.
+    /// `Some` for an import — the direction that has to land inside the
+    /// workspace, and the direction whose result the tree shows.
     root: Option<PathBuf>,
     note: String,
-    /// The colliding names, for the question.
+}
+
+impl Plan {
+    fn importing(&self) -> bool {
+        self.root.is_some()
+    }
+}
+
+/// A plan held up waiting for the reader to say what to do about names that are
+/// already taken at the other end.
+struct Pending {
+    plan: Plan,
+    /// Everything the destination already holds. Carried rather than re-read:
+    /// it is what found the collision, and it is what names the copy if the
+    /// answer turns out to be "keep both".
+    taken: Vec<String>,
+    /// The colliding names. Empty while the destination is still being listed,
+    /// which is how "getting ready" is told from "waiting for an answer".
     names: Vec<String>,
 }
 
@@ -42,6 +70,21 @@ struct Outcome {
     /// opens down to it so the reader can see it arrived.
     reveal: Option<PathBuf>,
     failed: bool,
+}
+
+/// A file read for the sheet, with everything the view needs already measured.
+struct Sheet {
+    path: PathBuf,
+    label: String,
+    subtitle: String,
+    body: Preview,
+    /// One entry per line, from the lexer. Empty for a body that is not text.
+    spans: Vec<Vec<highlight::Span>>,
+    digits: i32,
+    columns: i32,
+    /// Where the picture is, for an image body: a local file's own path, or the
+    /// cache file a remote one was fetched into.
+    image: PathBuf,
 }
 
 #[derive(QObject, Default)]
@@ -55,19 +98,24 @@ pub struct FilesBridge {
     theme: qt_property!(QString; NOTIFY theme_changed READ get_theme WRITE set_theme),
 
     /// One entry per visible line: `{ path, name, depth, is_dir, expanded,
-    /// size_label, symlink }`. Rebuilt whole rather than patched — the tree is
-    /// a few hundred rows at the sizes anyone reads, and a list rebuilt whole
-    /// is one that cannot disagree with itself.
+    /// loading, size_label, symlink }`. Rebuilt whole rather than patched — the
+    /// tree is a few hundred rows at the sizes anyone reads, and a list rebuilt
+    /// whole is one that cannot disagree with itself.
     rows: qt_property!(QVariantList; NOTIFY rows_changed READ get_rows),
-    /// The one sentence shown instead of rows: an empty folder, a remote
-    /// workspace, or no workspace at all. Empty while there are rows.
+    /// The one sentence shown instead of rows: no workspace, an empty folder, a
+    /// folder that would not be read. Empty while there are rows.
     message: qt_property!(QString; NOTIFY rows_changed READ get_message),
+    /// Whether a listing is still on its way. On a remote workspace this is the
+    /// difference between "empty" and "not here yet".
+    listing: qt_property!(bool; NOTIFY rows_changed READ get_listing),
+    /// Whether the workspace is on another machine. The pane reads it to know
+    /// which gestures it can offer.
+    remote: qt_property!(bool; NOTIFY workspace_changed READ get_remote),
     /// Whether dotfiles are listed.
     show_hidden: qt_property!(bool; NOTIFY rows_changed READ get_show_hidden WRITE set_show_hidden),
     /// Set while the tree stopped at `files::MAX_ROWS`.
     truncated: qt_property!(bool; NOTIFY rows_changed READ get_truncated),
-    /// The row the reader last clicked, as a path. Drives the highlight, and is
-    /// the default target for a copy out.
+    /// The row the reader last clicked, as a path.
     selected: qt_property!(QString; NOTIFY selected_changed READ get_selected WRITE set_selected),
 
     /// What the last copy did, or why it was refused. Shown in the panel's
@@ -76,7 +124,8 @@ pub struct FilesBridge {
     /// Whether that status is a refusal rather than a result, so the footer can
     /// colour it.
     status_failed: qt_property!(bool; NOTIFY status_changed READ get_status_failed),
-    /// A copy is running. The panel says so and does not start a second.
+    /// A copy is running, or is being got ready. The panel says so and does not
+    /// start a second.
     busy: qt_property!(bool; NOTIFY status_changed READ get_busy),
 
     /// Whether a copy is held up waiting for an answer about names that are
@@ -87,17 +136,15 @@ pub struct FilesBridge {
     collision_message: qt_property!(QString; NOTIFY collision_changed READ get_collision_message),
 
     // ---- The preview sheet ----
-    /// Whether the sheet is up.
     preview_open: qt_property!(bool; NOTIFY preview_changed READ get_preview_open),
     /// The previewed file's path within the workspace, for the sheet's title.
     preview_path: qt_property!(QString; NOTIFY preview_changed READ get_preview_path),
     /// Its size, as the sheet's subtitle.
     preview_subtitle: qt_property!(QString; NOTIFY preview_changed READ get_preview_subtitle),
-    /// "text", "image", or "message" — which of the sheet's three bodies to
-    /// show. One string rather than three booleans that could all be true.
+    /// "loading", "text", "image", or "message" — which of the sheet's bodies
+    /// to show. One string rather than four booleans that could all be true.
     preview_kind: qt_property!(QString; NOTIFY preview_changed READ get_preview_kind),
-    /// The sentence shown for a file there is nothing to lay out for: binary,
-    /// empty, too large, unreadable.
+    /// The sentence shown for a file there is nothing to lay out for.
     preview_message: qt_property!(QString; NOTIFY preview_changed READ get_preview_message),
     /// A `file://` URL for the image body.
     preview_url: qt_property!(QString; NOTIFY preview_changed READ get_preview_url),
@@ -111,10 +158,9 @@ pub struct FilesBridge {
     preview_scrim: qt_property!(QString; NOTIFY preview_changed READ get_preview_scrim),
 
     /// The subdued text colour, for the pane's own furniture as much as the
-    /// sheet's: the size column, the twisty, the footer, the empty sentence.
-    /// One property rather than one per surface, so they cannot drift.
+    /// sheet's. One property rather than one per surface, so they cannot drift.
     dim_color: qt_property!(QString; NOTIFY theme_changed READ get_dim_color),
-    /// What a refusal is written in. The same red the diff sheet marks a
+    /// What a refusal is written in — the same red the diff sheet marks a
     /// removed line with, because it is the same "this did not happen".
     alert_color: qt_property!(QString; NOTIFY theme_changed READ get_alert_color),
 
@@ -130,56 +176,42 @@ pub struct FilesBridge {
     refresh: qt_method!(fn(&mut self)),
     /// Open or close a directory row.
     toggle: qt_method!(fn(&mut self, path: QString)),
-    /// Close every branch. The way back from a tree that got away from the
-    /// reader — an accidental `node_modules` is otherwise a lot of clicking.
+    /// Close every branch.
     collapse_all: qt_method!(fn(&mut self)),
     /// The directory a drop on this row lands in: the row itself when it is a
-    /// folder, its parent when it is a file. QML asks rather than deciding,
-    /// because "drop on a file" meaning "into the folder holding it" is the
-    /// same rule a copy out of the panel obeys and it is written once.
+    /// folder, its parent when it is a file. Answered here rather than in QML
+    /// because it is the same rule the row menu obeys, and because on a remote
+    /// workspace QML has no filesystem to ask.
     drop_target: qt_method!(fn(&mut self, path: QString) -> QString),
-    /// A `file://` URL for a row, for the drag payload and for "copy path".
+    /// A `file://` URL for a row. Empty on a remote workspace, whose paths name
+    /// nothing on this machine.
     url_for: qt_method!(fn(&mut self, path: QString) -> QString),
 
-    /// Copy the files named by a `text/uri-list` payload into `dest` — a drop
-    /// from another application, or the file chooser's answer.
+    /// Copy the files named by a `text/uri-list` payload into `dest`.
     copy_in: qt_method!(fn(&mut self, payload: QString, dest: QString)),
     /// Copy one row out to a folder the reader picked, named by a URL.
     copy_out: qt_method!(fn(&mut self, path: QString, dest_url: QString)),
     /// Answer the collision question: "replace", "keep_both" or "cancel".
-    /// Anything else cancels, because an answer nobody recognises is not an
-    /// answer to act on when the act deletes files.
     resolve_collision: qt_method!(fn(&mut self, choice: QString)),
 
     /// Read a file into the sheet.
     open_preview: qt_method!(fn(&mut self, path: QString)),
     close_preview: qt_method!(fn(&mut self)),
 
+    /// Which machine the tree is reading.
+    place: Place,
     tree: Tree,
     entries: Vec<Row>,
-    /// Set when the workspace lives on another machine, which this pane cannot
-    /// read. Kept as a field so the message survives a refresh.
-    remote_workspace: bool,
     note: String,
     failed: bool,
     running: usize,
     pending: Option<Pending>,
     sheet: Option<Sheet>,
-    /// Bumped whenever a copy starts; a result from a copy the reader has since
-    /// navigated away from is applied to the status but not to the tree.
+    /// Bumped whenever a copy or a preview starts; an answer from one the
+    /// reader has since navigated away from is dropped rather than shown.
     generation: u64,
-}
-
-/// A file read for the sheet, with everything the view needs already measured.
-struct Sheet {
-    path: PathBuf,
-    label: String,
-    subtitle: String,
-    body: Preview,
-    /// One entry per line, from the lexer. Empty for a body that is not text.
-    spans: Vec<Vec<highlight::Span>>,
-    digits: i32,
-    columns: i32,
+    /// Counts the cache files a remote image preview is fetched into.
+    fetched: u64,
 }
 
 impl FilesBridge {
@@ -206,6 +238,10 @@ impl FilesBridge {
         self.theme.to_string()
     }
 
+    fn get_remote(&self) -> bool {
+        self.place.is_remote()
+    }
+
     fn set_workspace(&mut self, path: QString) {
         let path = path.to_string();
         if path == self.cwd() {
@@ -217,22 +253,25 @@ impl FilesBridge {
         // about a folder that has just gone off screen.
         self.sheet = None;
         self.pending = None;
-        self.collision_changed();
         self.note.clear();
         self.failed = false;
         self.selected = QString::default();
-        // A remote workspace's anchor is a local stand-in folder with none of
-        // the project in it. Listing it would show an empty folder and call it
-        // the project, which is worse than saying there is nothing to show.
-        self.remote_workspace = !path.is_empty() && remote::resolve(&path).is_some();
-        self.tree.set_root(if self.remote_workspace {
-            String::new()
+        self.generation += 1;
+
+        self.place = if path.is_empty() {
+            Place::Local
         } else {
-            path
-        });
+            Place::for_workspace(&path)
+        };
+        // A remote workspace's key is a local stand-in folder with none of the
+        // project in it; the files are at the path on the far side.
+        self.tree.set_root(self.place.root_for(&path));
+
         self.workspace_changed();
         self.selected_changed();
+        self.collision_changed();
         self.preview_changed();
+        self.status_changed();
         self.rebuild();
     }
 
@@ -248,14 +287,45 @@ impl FilesBridge {
         self.theme = name.as_str().into();
         self.theme_changed();
         // The sheet's runs carry their colours; the tree's do not.
+        self.relex();
         self.preview_changed();
     }
 
     // ---- The tree ---------------------------------------------------------
 
+    /// Redraw from what has been read, and fetch whatever that turned out to
+    /// need. This is the whole loop: a listing arriving calls it again, and it
+    /// settles when the tree wants nothing more.
     fn rebuild(&mut self) {
-        self.entries = self.tree.rows();
+        let view = self.tree.view();
+        self.entries = view.rows;
+        for load in view.wanted {
+            self.fetch(load);
+        }
         self.rows_changed();
+    }
+
+    /// Read one directory on a worker: one SSH round trip on a remote
+    /// workspace, one `readdir` locally, and neither on the UI thread.
+    fn fetch(&mut self, load: Load) {
+        let place = self.place.clone();
+        let pointer = QPointer::from(&*self);
+        let deliver = queued_callback(move |(load, outcome): (Load, Result<Vec<Entry>, String>)| {
+            if let Some(this) = pointer.as_pinned() {
+                this.borrow_mut().on_listed(load, outcome);
+            }
+        });
+        std::thread::spawn(move || {
+            let outcome = files::list(&place, &load.dir);
+            deliver((load, outcome));
+        });
+    }
+
+    fn on_listed(&mut self, load: Load, outcome: Result<Vec<Entry>, String>) {
+        // The tree drops a listing from a generation it has moved past, so a
+        // slow answer about a workspace the reader has left goes nowhere.
+        self.tree.deliver(&load, outcome);
+        self.rebuild();
     }
 
     fn refresh(&mut self) {
@@ -285,11 +355,16 @@ impl FilesBridge {
         }
         self.show_hidden = show;
         self.tree.set_show_hidden(show);
+        // A redraw, not a re-read: the listings are kept whole.
         self.rebuild();
     }
 
     fn get_truncated(&self) -> bool {
         self.tree.truncated()
+    }
+
+    fn get_listing(&self) -> bool {
+        self.tree.loading()
     }
 
     fn get_selected(&self) -> QString {
@@ -305,10 +380,6 @@ impl FilesBridge {
     }
 
     fn get_message(&self) -> QString {
-        if self.remote_workspace {
-            return "This workspace is on another machine. Its files are not browsable here yet."
-                .into();
-        }
         if self.cwd().is_empty() {
             return "No workspace open.".into();
         }
@@ -316,11 +387,14 @@ impl FilesBridge {
             return QString::default();
         }
         match self.tree.empty_reason(self.tree.root()) {
-            Some(Empty::Unreadable) => "This folder could not be read.".into(),
-            _ if self.show_hidden => "This folder is empty.".into(),
-            // Worth saying which, because the toggle is right there and a
-            // dotfile-only folder looks identical to an empty one.
-            _ => "Nothing here but hidden files.".into(),
+            Some(Empty::Unreadable(reason)) => reason.as_str().into(),
+            Some(Empty::Nothing) => "This folder is empty.".into(),
+            Some(Empty::HiddenOnly) => "Nothing here but hidden files.".into(),
+            // Not read yet. On a remote workspace this is the first thing the
+            // pane says, and it must not say "empty" about a folder nobody has
+            // looked in.
+            None if self.tree.loading() => "Reading…".into(),
+            None => QString::default(),
         }
     }
 
@@ -338,6 +412,7 @@ impl FilesBridge {
             map.insert("depth".into(), (row.depth as i32).into());
             map.insert("is_dir".into(), row.is_dir.into());
             map.insert("expanded".into(), row.expanded.into());
+            map.insert("loading".into(), row.loading.into());
             map.insert("symlink".into(), row.symlink.into());
             // A directory's size is the size of the directory entry itself,
             // which is a number about the filesystem rather than about the
@@ -356,22 +431,34 @@ impl FilesBridge {
         list
     }
 
+    /// The row for a path. It carries the size and the type, which is what
+    /// keeps the preview from needing a round trip to learn them.
+    fn row_for(&self, path: &Path) -> Option<&Row> {
+        self.entries.iter().find(|row| row.path == path)
+    }
+
     fn drop_target(&mut self, path: QString) -> QString {
         let path = path.to_string();
         // An empty path is the panel's own background: the workspace root.
         if path.is_empty() {
             return self.tree.root().to_string_lossy().as_ref().into();
         }
-        let path = PathBuf::from(path);
-        let target = if path.is_dir() {
-            path
-        } else {
-            path.parent().map(Path::to_path_buf).unwrap_or_default()
+        // Answered from the row rather than from the disk, because on a remote
+        // workspace the disk is not here to ask.
+        let target = match self.row_for(Path::new(&path)) {
+            Some(row) if row.is_dir => PathBuf::from(&path),
+            Some(row) => row.path.parent().map(Path::to_path_buf).unwrap_or_default(),
+            None => PathBuf::from(&path),
         };
         target.to_string_lossy().as_ref().into()
     }
 
     fn url_for(&mut self, path: QString) -> QString {
+        // A remote path names nothing on this machine, so there is no URL to
+        // hand another application.
+        if self.place.is_remote() {
+            return QString::default();
+        }
         files::file_url(Path::new(&path.to_string()))
             .as_str()
             .into()
@@ -399,9 +486,8 @@ impl FilesBridge {
 
     /// Copy files in from outside the project.
     ///
-    /// The whole payload is checked before any of it is copied, so a drop of
-    /// five files where one is refused copies none of them: half a drop is a
-    /// state nobody can see and nobody asked for.
+    /// The sources are always on this machine — they came from a drop or from
+    /// the chooser — while the destination is wherever the workspace is.
     fn copy_in(&mut self, payload: QString, dest: QString) {
         if self.running > 0 || self.pending.is_some() {
             return;
@@ -410,18 +496,38 @@ impl FilesBridge {
         if sources.is_empty() {
             return self.say("Nothing there that is a file on this machine.", true);
         }
-        let root = PathBuf::from(self.cwd());
+        let root = self.tree.root().to_path_buf();
         let dest = PathBuf::from(dest.to_string());
         let into = files::relative_to(&root, &dest);
         let where_ = if into.is_empty() {
             "the workspace".to_string()
         } else {
-            into.clone()
+            into
         };
-        self.begin(sources, dest, Some(root), format!("Copying into {where_}…"));
+
+        // Whichever machine the destination is on, the copy has to land inside
+        // the workspace. The rest of the rules only mean something when both
+        // ends are on one machine — a local process cannot stat a remote
+        // directory, and two paths on two machines are never the same file.
+        for source in &sources {
+            let outcome = if self.place.is_remote() {
+                files::check_across(source, &dest, Some(&root))
+            } else {
+                files::check_copy(source, &dest, Some(&root), OnCollision::KeepBoth)
+            };
+            if let Err(refusal) = outcome {
+                return self.say(refusal.message(), true);
+            }
+        }
+        self.prepare(Plan {
+            sources,
+            dest,
+            root: Some(root),
+            note: format!("Copying into {where_}…"),
+        });
     }
 
-    /// Copy one row out to a folder outside the project.
+    /// Copy one row out to a folder on this machine.
     fn copy_out(&mut self, path: QString, dest_url: QString) {
         if self.running > 0 || self.pending.is_some() {
             return;
@@ -430,73 +536,123 @@ impl FilesBridge {
         let Some(dest) = files::path_from_url(&dest_url.to_string()) else {
             return self.say("That destination is not a folder on this machine.", true);
         };
+        if !dest.is_dir() {
+            return self.say(Refusal::NotADirectory.message(), true);
+        }
+        // No root: leaving the workspace is the point of an export. A source on
+        // the far side cannot be stat-ed from here, so a local export is the
+        // only one with anything more to check.
+        if !self.place.is_remote() {
+            if let Err(refusal) = files::check_copy(&source, &dest, None, OnCollision::KeepBoth) {
+                return self.say(refusal.message(), true);
+            }
+        }
         let name = source
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        // No root: leaving the workspace is the point of an export.
-        self.begin(vec![source], dest, None, format!("Copying {name}…"));
+        self.prepare(Plan {
+            sources: vec![source],
+            dest,
+            root: None,
+            note: format!("Copying {name}…"),
+        });
     }
 
-    /// Check a batch, then either run it or stop and ask.
+    /// Find out what the destination already holds, then either run the copy or
+    /// stop and ask.
     ///
-    /// The structural checks run under `KeepBoth`, which is the mode that
-    /// refuses least — a batch that fails one of them fails whatever the reader
-    /// would have answered, so it is refused before they are asked anything.
-    fn begin(
-        &mut self,
-        sources: Vec<PathBuf>,
-        dest: PathBuf,
-        root: Option<PathBuf>,
-        note: String,
-    ) {
-        for source in &sources {
-            if let Err(refusal) =
-                files::check_copy(source, &dest, root.as_deref(), OnCollision::KeepBoth)
-            {
-                return self.say(refusal.message(), true);
+    /// One listing rather than one `exists` per name: on a remote destination
+    /// that is a single round trip instead of one per file, and it is the same
+    /// list that names the copy if the answer turns out to be "keep both".
+    fn prepare(&mut self, plan: Plan) {
+        self.generation += 1;
+        let generation = self.generation;
+        self.running += 1;
+        self.say(plan.note.clone(), false);
+
+        // The destination is on the workspace's machine for an import, and on
+        // this one for an export.
+        let place = if plan.importing() {
+            self.place.clone()
+        } else {
+            Place::Local
+        };
+        let dest = plan.dest.clone();
+        self.pending = Some(Pending {
+            plan,
+            taken: Vec::new(),
+            names: Vec::new(),
+        });
+
+        let pointer = QPointer::from(&*self);
+        let deliver = queued_callback(move |taken: Result<Vec<String>, String>| {
+            if let Some(this) = pointer.as_pinned() {
+                this.borrow_mut().on_prepared(generation, taken);
             }
+        });
+        std::thread::spawn(move || {
+            let taken = files::list(&place, &dest)
+                .map(|entries| entries.into_iter().map(|entry| entry.name).collect());
+            deliver(taken);
+        });
+    }
+
+    fn on_prepared(&mut self, generation: u64, taken: Result<Vec<String>, String>) {
+        self.running = self.running.saturating_sub(1);
+        if generation != self.generation {
+            return;
         }
-        let names = files::collisions(&sources, &dest);
+        let Some(mut pending) = self.pending.take() else {
+            return;
+        };
+        let taken = match taken {
+            Ok(taken) => taken,
+            Err(reason) => {
+                self.collision_changed();
+                return self.say(reason, true);
+            }
+        };
+
+        let names = files::collisions_among(&pending.plan.sources, &taken);
         if names.is_empty() {
             // Nothing in the way, so there is nothing to ask and the mode
             // cannot matter.
-            return self.run_copy(sources, dest, root, note, OnCollision::KeepBoth);
+            self.collision_changed();
+            return self.run(pending.plan, taken, OnCollision::KeepBoth);
         }
-        // The footer says nothing: the dialog is about to ask the same
-        // question in larger type, and the status line's job starts again when
-        // there is an outcome to report.
-        self.pending = Some(Pending {
-            sources,
-            dest,
-            root,
-            note,
-            names,
-        });
+        // The footer says nothing: the dialog is about to ask the same question
+        // in larger type, and the status line's job starts again when there is
+        // an outcome to report.
+        self.say("", false);
+        pending.taken = taken;
+        pending.names = names;
+        self.pending = Some(pending);
         self.collision_changed();
     }
 
     fn get_collision_open(&self) -> bool {
-        self.pending.is_some()
+        self.pending
+            .as_ref()
+            .is_some_and(|pending| !pending.names.is_empty())
     }
 
     fn get_collision_message(&self) -> QString {
-        match &self.pending {
-            Some(pending) => {
-                let where_ = match &pending.root {
-                    Some(root) => files::relative_to(root, &pending.dest),
-                    None => pending
-                        .dest
-                        .file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_default(),
-                };
-                files::collision_message(&pending.names, &where_)
-                    .as_str()
-                    .into()
-            }
-            None => QString::default(),
-        }
+        let Some(pending) = &self.pending else {
+            return QString::default();
+        };
+        let where_ = match &pending.plan.root {
+            Some(root) => files::relative_to(root, &pending.plan.dest),
+            None => pending
+                .plan
+                .dest
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        };
+        files::collision_message(&pending.names, &where_)
+            .as_str()
+            .into()
     }
 
     /// The reader's answer. Taking the pending copy out first means a second
@@ -518,46 +674,32 @@ impl FilesBridge {
         };
 
         // Replace deletes before it writes, so it refuses destinations the
-        // first pass allowed. Checked here rather than at the end of the
-        // worker, where the deletion would already have happened.
-        if mode == OnCollision::Replace {
-            for source in &pending.sources {
+        // first pass allowed. Only checkable when both ends are on one machine:
+        // across the wire the two paths belong to different filesystems and
+        // cannot be the same file however alike they look.
+        if mode == OnCollision::Replace && !self.place.is_remote() {
+            for source in &pending.plan.sources {
                 if let Err(refusal) = files::check_copy(
                     source,
-                    &pending.dest,
-                    pending.root.as_deref(),
+                    &pending.plan.dest,
+                    pending.plan.root.as_deref(),
                     OnCollision::Replace,
                 ) {
                     return self.say(refusal.message(), true);
                 }
             }
         }
-        self.run_copy(
-            pending.sources,
-            pending.dest,
-            pending.root,
-            pending.note,
-            mode,
-        );
+        self.run(pending.plan, pending.taken, mode);
     }
 
     /// Run one batch of copies on a worker and report back.
-    ///
-    /// `root` is `Some` for an import, which is the direction that has to land
-    /// inside the workspace — and the direction whose result the tree shows.
-    fn run_copy(
-        &mut self,
-        sources: Vec<PathBuf>,
-        dest: PathBuf,
-        root: Option<PathBuf>,
-        note: String,
-        mode: OnCollision,
-    ) {
+    fn run(&mut self, plan: Plan, taken: Vec<String>, mode: OnCollision) {
         self.generation += 1;
         let generation = self.generation;
         self.running += 1;
-        self.say(note, false);
+        self.say(plan.note.clone(), false);
 
+        let place = self.place.clone();
         let pointer = QPointer::from(&*self);
         let deliver = queued_callback(move |outcome: Outcome| {
             if let Some(this) = pointer.as_pinned() {
@@ -565,20 +707,7 @@ impl FilesBridge {
             }
         });
         std::thread::spawn(move || {
-            let mut reports: Vec<CopyReport> = Vec::new();
-            let mut refusal: Option<Refusal> = None;
-            for source in &sources {
-                match files::copy_into(source, &dest, root.as_deref(), mode) {
-                    Ok(report) => reports.push(report),
-                    // Checked before the batch started, so reaching here means
-                    // the source went away while the copy was running.
-                    Err(reason) => {
-                        refusal = Some(reason);
-                        break;
-                    }
-                }
-            }
-            deliver(summarise(reports, refusal, root.is_some()));
+            deliver(carry_out(&place, plan, taken, mode));
         });
     }
 
@@ -603,49 +732,113 @@ impl FilesBridge {
 
     fn open_preview(&mut self, path: QString) {
         let path = PathBuf::from(path.to_string());
-        let body = files::preview(&path);
-        let label = files::relative_to(self.tree.root(), &path);
-        let subtitle = match &body {
-            Preview::TooLarge(size) => files::format_size(*size),
-            _ => std::fs::metadata(&path)
-                .map(|meta| files::format_size(meta.len()))
-                .unwrap_or_default(),
+        // The row carries the size and the type. Over SSH that is the
+        // difference between one round trip and two.
+        let Some(row) = self.row_for(&path) else {
+            return;
         };
+        let (size, is_dir) = (row.size, row.is_dir);
+        if is_dir {
+            return;
+        }
 
-        // Lexing is the expensive half and it is only ever wanted for text. A
-        // syntax the set does not know comes back as no spans at all, which
-        // renders as plain text rather than as an error.
-        let (spans, digits, columns) = match &body {
-            Preview::Text { lines, .. } => {
-                let source = lines.join("\n");
-                let syntax = highlight::syntax_for_filename(&path.to_string_lossy());
-                let spans = highlight::line_spans(&source, syntax, &self.theme_name());
-                let digits = lines.len().to_string().len().max(2) as i32;
-                let columns = lines
-                    .iter()
-                    .map(|line| line.chars().count())
-                    .max()
-                    .unwrap_or(0) as i32;
-                (spans, digits, columns)
-            }
-            _ => (Vec::new(), 2, 0),
-        };
-
+        self.generation += 1;
+        let generation = self.generation;
+        // Up straight away, saying it is reading. On a remote workspace the
+        // bytes are a round trip away, and a sheet that appeared only once they
+        // landed would read as a click that did nothing.
         self.sheet = Some(Sheet {
-            path,
-            label,
-            subtitle,
-            body,
-            spans,
-            digits,
-            columns,
+            label: files::relative_to(self.tree.root(), &path),
+            subtitle: files::format_size(size),
+            path: path.clone(),
+            body: Preview::Unreadable(String::new()),
+            spans: Vec::new(),
+            digits: 2,
+            columns: 0,
+            image: PathBuf::new(),
         });
+        self.preview_changed();
+
+        let place = self.place.clone();
+        // A fresh cache name each time: Qt caches an image by its URL, and
+        // reusing one would redraw the file before this one.
+        self.fetched += 1;
+        let cache = image_cache_path(&path, self.fetched);
+        let pointer = QPointer::from(&*self);
+        let deliver = queued_callback(move |(body, image): (Preview, PathBuf)| {
+            if let Some(this) = pointer.as_pinned() {
+                this.borrow_mut().on_previewed(generation, body, image);
+            }
+        });
+        std::thread::spawn(move || match &place {
+            Place::Local => {
+                let body = files::preview(&path);
+                deliver((body, path.clone()));
+            }
+            Place::Remote(target) => {
+                let body = files::preview_remote(target, &path, size, is_dir);
+                // An image has to exist as a file before anything can draw it,
+                // so this is the one preview that fetches rather than reads.
+                if body == Preview::Image {
+                    return match files::fetch_to(target, &path, &cache) {
+                        Ok(()) => deliver((body, cache)),
+                        Err(reason) => deliver((Preview::Unreadable(reason), PathBuf::new())),
+                    };
+                }
+                deliver((body, PathBuf::new()));
+            }
+        });
+    }
+
+    fn on_previewed(&mut self, generation: u64, body: Preview, image: PathBuf) {
+        if generation != self.generation {
+            return;
+        }
+        let Some(sheet) = &mut self.sheet else {
+            return;
+        };
+        sheet.body = body;
+        sheet.image = image;
+        if let Preview::TooLarge(size) = &sheet.body {
+            sheet.subtitle = files::format_size(*size);
+        }
+        self.relex();
         self.preview_changed();
     }
 
-    fn close_preview(&mut self) {
-        if self.sheet.is_none() {
+    /// Lex the sheet's text and measure it. Run when a file arrives, and again
+    /// when the theme changes, because the runs carry their own colours.
+    fn relex(&mut self) {
+        let theme = self.theme_name();
+        let Some(sheet) = &mut self.sheet else {
             return;
+        };
+        let Preview::Text { lines, .. } = &sheet.body else {
+            sheet.spans = Vec::new();
+            sheet.digits = 2;
+            sheet.columns = 0;
+            return;
+        };
+        // A syntax the set does not know comes back as no spans at all, which
+        // renders as plain text rather than as an error.
+        let syntax = highlight::syntax_for_filename(&sheet.path.to_string_lossy());
+        sheet.spans = highlight::line_spans(&lines.join("\n"), syntax, &theme);
+        sheet.digits = lines.len().to_string().len().max(2) as i32;
+        sheet.columns = lines
+            .iter()
+            .map(|line| line.chars().count())
+            .max()
+            .unwrap_or(0) as i32;
+    }
+
+    fn close_preview(&mut self) {
+        let Some(sheet) = &self.sheet else {
+            return;
+        };
+        // A fetched picture has done its job, and it is the reader's disk. A
+        // local one is the file itself and stays where it is.
+        if !sheet.image.as_os_str().is_empty() && sheet.image != sheet.path {
+            let _ = std::fs::remove_file(&sheet.image);
         }
         self.sheet = None;
         self.preview_changed();
@@ -673,6 +866,9 @@ impl FilesBridge {
         match self.sheet.as_ref().map(|sheet| &sheet.body) {
             Some(Preview::Text { .. }) => "text".into(),
             Some(Preview::Image) => "image".into(),
+            // The placeholder a sheet is opened with carries an empty reason,
+            // which is how "still reading" is told from "would not read".
+            Some(Preview::Unreadable(reason)) if reason.is_empty() => "loading".into(),
             Some(_) => "message".into(),
             None => QString::default(),
         }
@@ -693,20 +889,21 @@ impl FilesBridge {
             .as_str()
             .into(),
             Preview::Unreadable(reason) => reason.as_str().into(),
-            Preview::Text { truncated: true, .. } => format!(
-                "Showing the first {} lines.",
-                files::MAX_PREVIEW_LINES
-            )
-            .as_str()
-            .into(),
+            Preview::Text { truncated: true, .. } => {
+                format!("Showing the first {} lines.", files::MAX_PREVIEW_LINES)
+                    .as_str()
+                    .into()
+            }
             _ => QString::default(),
         }
     }
 
     fn get_preview_url(&self) -> QString {
         match &self.sheet {
-            Some(sheet) => files::file_url(&sheet.path).as_str().into(),
-            None => QString::default(),
+            Some(sheet) if sheet.body == Preview::Image => {
+                files::file_url(&sheet.image).as_str().into()
+            }
+            _ => QString::default(),
         }
     }
 
@@ -767,6 +964,55 @@ impl FilesBridge {
     }
 }
 
+/// Where a remote image is fetched to before it is drawn.
+fn image_cache_path(source: &Path, serial: u64) -> PathBuf {
+    let extension = source
+        .extension()
+        .map(|extension| format!(".{}", extension.to_string_lossy()))
+        .unwrap_or_default();
+    state::config_dir()
+        .join("cache")
+        .join(format!("preview-{serial}{extension}"))
+}
+
+/// Do the copies, wherever the two ends are.
+///
+/// The three cases differ only in which function moves the bytes; the naming,
+/// the replacing and the refusing are the same rules in all of them.
+fn carry_out(place: &Place, plan: Plan, mut taken: Vec<String>, mode: OnCollision) -> Outcome {
+    let importing = plan.importing();
+    let mut reports: Vec<CopyReport> = Vec::new();
+    let mut refusal: Option<Refusal> = None;
+
+    for source in &plan.sources {
+        let attempt = match (place, importing) {
+            (Place::Local, _) => files::copy_into(source, &plan.dest, plan.root.as_deref(), mode),
+            (Place::Remote(target), true) => {
+                files::copy_up(target, source, &plan.dest, &taken, mode)
+            }
+            (Place::Remote(target), false) => files::copy_down(target, source, &plan.dest, mode),
+        };
+        match attempt {
+            Ok(report) => {
+                // The next source in the batch must not be handed a name this
+                // one has just taken — nobody is going to re-list the far side
+                // between two files of one drop.
+                if let Some(name) = report.destination.file_name() {
+                    taken.push(name.to_string_lossy().into_owned());
+                }
+                reports.push(report);
+            }
+            // Checked before the batch started, so reaching here means the
+            // source went away while the copy was running.
+            Err(reason) => {
+                refusal = Some(reason);
+                break;
+            }
+        }
+    }
+    summarise(reports, refusal, importing)
+}
+
 /// Turn a batch of copy reports into the one sentence the footer shows.
 fn summarise(reports: Vec<CopyReport>, refusal: Option<Refusal>, importing: bool) -> Outcome {
     if let Some(refusal) = refusal {
@@ -776,23 +1022,31 @@ fn summarise(reports: Vec<CopyReport>, refusal: Option<Refusal>, importing: bool
             failed: true,
         };
     }
+    let failures: usize = reports.iter().map(|report| report.failures.len()).sum();
     // The tree only shows the workspace, so only an import has anything to
     // reveal — and only the first of a batch, since revealing the last would
-    // scroll away from the rest.
-    let reveal = importing
+    // scroll away from the rest. A copy that failed has nothing to point at.
+    let reveal = (importing && failures == 0)
         .then(|| reports.first().map(|report| report.destination.clone()))
         .flatten();
-    let failures: usize = reports.iter().map(|report| report.failures.len()).sum();
     let message = match reports.len() {
         0 => "Nothing was copied.".to_string(),
+        // One thing, and none of it arrived. A transfer across the wire is a
+        // single operation, so its one failure is the whole story — "Copied src
+        // (1 skipped)" would be a claim about a file that never landed.
+        1 if failures > 0 && reports[0].files == 0 => reports[0].failures[0].clone(),
         1 => reports[0].summary(),
         many => {
             let files: usize = reports.iter().map(|report| report.files).sum();
             let bytes: u64 = reports.iter().map(|report| report.bytes).sum();
-            format!(
-                "Copied {many} items — {files} files, {}",
-                files::format_size(bytes)
-            )
+            if files > 0 {
+                format!(
+                    "Copied {many} items — {files} files, {}",
+                    files::format_size(bytes)
+                )
+            } else {
+                format!("Copied {many} items")
+            }
         }
     };
     let message = if failures > 0 && reports.len() > 1 {
@@ -806,7 +1060,7 @@ fn summarise(reports: Vec<CopyReport>, refusal: Option<Refusal>, importing: bool
         // Files skipped inside an otherwise finished copy are worth colouring:
         // the copy happened, and it is not the copy that was asked for.
         failed: failures > 0,
-        }
+    }
 }
 
 #[cfg(test)]
@@ -845,11 +1099,40 @@ mod tests {
     }
 
     #[test]
-    fn a_copy_that_skipped_something_says_so_and_reads_as_failed() {
-        // It happened, and it is not the copy that was asked for.
-        let outcome = summarise(vec![report("/w/tree", 4, 100, 2)], None, true);
-        assert!(outcome.message.contains("2 skipped"));
+    fn a_transfer_that_counts_nothing_still_names_what_it_moved() {
+        // A copy over SSH is a tar stream and counts no files, so zero means
+        // "not measured" rather than "nothing happened".
+        let outcome = summarise(vec![report("/w/src", 0, 0, 0)], None, true);
+        assert_eq!(outcome.message, "Copied src");
+        assert!(!outcome.failed);
+
+        let batch = summarise(
+            vec![report("/w/a", 0, 0, 0), report("/w/b", 0, 0, 0)],
+            None,
+            true,
+        );
+        assert_eq!(batch.message, "Copied 2 items");
+    }
+
+    #[test]
+    fn a_failed_transfer_says_what_went_wrong_rather_than_claiming_a_copy() {
+        let mut failed = report("/w/src", 0, 0, 0);
+        failed.failures = vec!["ssh: connect to host: No route to host".into()];
+        let outcome = summarise(vec![failed], None, true);
+        assert_eq!(outcome.message, "ssh: connect to host: No route to host");
         assert!(outcome.failed);
+        // Nothing landed, so there is nothing in the tree to point at.
+        assert_eq!(outcome.reveal, None);
+    }
+
+    #[test]
+    fn a_local_copy_that_skipped_something_says_so_and_reads_as_failed() {
+        // It happened, and it is not the copy that was asked for. Distinct from
+        // the case above: files did land, so the summary still counts them.
+        let outcome = summarise(vec![report("/w/tree", 4, 100, 2)], None, true);
+        assert!(outcome.message.contains("2 skipped"), "{}", outcome.message);
+        assert!(outcome.failed);
+        assert_eq!(outcome.reveal, None);
     }
 
     #[test]
@@ -871,5 +1154,31 @@ mod tests {
         let outcome = summarise(vec![report("/elsewhere/note.txt", 1, 12, 0)], None, false);
         assert_eq!(outcome.reveal, None);
         assert!(!outcome.failed);
+    }
+
+    #[test]
+    fn a_batch_never_hands_two_sources_the_same_landing_name() {
+        // Two files with one basename, dropped together. The second has to see
+        // the name the first has just taken, and on a remote destination nobody
+        // is going to re-list the far side between them.
+        let mut running: Vec<String> = Vec::new();
+        for landed in ["note.txt", "note 2.txt", "note 3.txt"] {
+            assert_eq!(files::unique_name_among(&running, "note.txt"), landed);
+            running.push(landed.to_string());
+        }
+    }
+
+    #[test]
+    fn an_image_cache_name_keeps_the_extension_and_changes_every_time() {
+        // Qt caches an image by its URL, so reusing a name would redraw the
+        // file before this one.
+        let first = image_cache_path(Path::new("/w/shot.png"), 1);
+        let second = image_cache_path(Path::new("/w/shot.png"), 2);
+        assert_ne!(first, second);
+        assert!(first.to_string_lossy().ends_with("preview-1.png"));
+        // A file with no extension still gets a name.
+        assert!(image_cache_path(Path::new("/w/shot"), 3)
+            .to_string_lossy()
+            .ends_with("preview-3"));
     }
 }
