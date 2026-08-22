@@ -172,6 +172,13 @@ Window {
             anchors.fill: parent
         }
 
+        // A file's contents, over the window for the same reason and in the
+        // same way. Beside the diff sheet rather than inside the Files pane, so
+        // the two dim the app identically.
+        FilePreview {
+            anchors.fill: parent
+        }
+
         // Settings, over the app for the same reason and in the same way.
         SettingsWindow {
             anchors.fill: parent

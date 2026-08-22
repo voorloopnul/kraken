@@ -23,6 +23,7 @@ pub fn preferred_width(key: &str) -> i32 {
         "left" => HISTORY_WIDTH,
         "center" => 700,
         "browser" => 480,
+        "files" => 300,
         "diff" => 380,
         "git" => 360,
         "right" => 460,
@@ -919,7 +920,7 @@ mod tests {
 
     #[test]
     fn every_side_panel_can_be_dragged_and_stops_at_a_floor() {
-        for key in ["browser", "diff", "git", "right"] {
+        for key in ["files", "browser", "diff", "git", "right"] {
             assert!(is_resizable(key), "{key} should be resizable");
             assert!(
                 min_width(key) <= preferred_width(key),

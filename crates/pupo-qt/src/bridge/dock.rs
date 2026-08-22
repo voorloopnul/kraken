@@ -19,7 +19,7 @@ use serde_json::Value;
 /// refuses stacking, but columns may open on either side of it. At most three
 /// side-panel columns sit beside the conversation; later toggles stack into
 /// those columns from right to left.
-const ORDER: [&str; 6] = ["left", "center", "browser", "diff", "git", "right"];
+const ORDER: [&str; 7] = ["left", "center", "files", "browser", "diff", "git", "right"];
 const FIXED: [&str; 1] = ["left"];
 const NO_STACK: [&str; 1] = ["center"];
 const MAX_SIDE_COLUMNS: usize = 3;

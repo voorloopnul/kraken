@@ -12,6 +12,7 @@ use bridge::app::App;
 use bridge::browser::BrowserBridge;
 use bridge::diff::DiffBridge;
 use bridge::dock::DockModel;
+use bridge::files::FilesBridge;
 use bridge::git::GitBridge;
 use bridge::history::HistoryBridge;
 use bridge::remotes::RemotesBridge;
@@ -121,6 +122,7 @@ fn main() {
         "Browser" => BrowserBridge::new(),
         "Diff" => DiffBridge::new(),
         "Git" => GitBridge::new(),
+        "Files" => FilesBridge::new(),
         "Settings" => SettingsBridge::new(),
     );
 

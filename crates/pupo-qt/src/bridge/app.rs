@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 /// "left" (History) is the one that starts open — it is the only pane that
 /// costs nothing to have open and the only one you need before you have asked
 /// the agent anything.
-pub const PANEL_KEYS: [&str; 5] = ["left", "browser", "diff", "git", "right"];
+pub const PANEL_KEYS: [&str; 6] = ["left", "files", "browser", "diff", "git", "right"];
 
 fn default_panels() -> HashMap<String, bool> {
     PANEL_KEYS
@@ -549,7 +549,7 @@ mod tests {
     fn history_is_the_only_pane_that_starts_open() {
         let panels = default_panels();
         assert_eq!(panels["left"], true);
-        for side in ["browser", "diff", "git", "right"] {
+        for side in ["files", "browser", "diff", "git", "right"] {
             assert_eq!(panels[side], false, "{side} should start closed");
         }
         assert_eq!(panels.len(), PANEL_KEYS.len());

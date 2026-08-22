@@ -266,7 +266,8 @@ mod tests {
             "square-terminal", "globe", "diff", "git-branch", "camera", "settings",
             "sun", "moon", "power", "plus", "minus", "x", "square", "copy",
             "search", "panel-left", "arrow-left", "ellipsis", "maximize-2",
-            "minimize-2",
+            "minimize-2", "folder", "folder-open", "folder-tree", "file",
+            "chevron-right", "chevron-down",
         ] {
             assert!(icons.contains_key(name), "missing icon {name}");
         }
