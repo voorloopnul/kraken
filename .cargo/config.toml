@@ -1,0 +1,6 @@
+# Ghostty's VT core is a dependency, not code anyone here is stepping through,
+# and a Zig `Debug` build of it makes a debug-profile terminal roughly a hundred
+# times slower to feed. Build it optimised whichever Cargo profile is in use;
+# `LIBGHOSTTY_VT_SYS_OPTIMIZE` in the environment still wins over this.
+[env]
+LIBGHOSTTY_VT_SYS_OPTIMIZE = "ReleaseFast"
