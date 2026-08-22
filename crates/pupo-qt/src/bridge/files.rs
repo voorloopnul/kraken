@@ -15,12 +15,25 @@
 use std::path::{Path, PathBuf};
 
 use pupo_core::chat::highlight;
-use pupo_core::files::{self, CopyReport, Empty, Preview, Refusal, Row, Tree};
+use pupo_core::files::{self, CopyReport, Empty, OnCollision, Preview, Refusal, Row, Tree};
 use pupo_core::theme::DEFAULT_THEME;
 use pupo_core::{diff, remote};
 use qmetaobject::*;
 
 use super::diff::{push_run, runs_for};
+
+/// A copy that is ready to run and waiting for the reader to say what to do
+/// about the names already taken at the other end.
+struct Pending {
+    sources: Vec<PathBuf>,
+    dest: PathBuf,
+    /// `Some` for an import, which is the direction that has to land inside the
+    /// workspace and the direction whose result the tree shows.
+    root: Option<PathBuf>,
+    note: String,
+    /// The colliding names, for the question.
+    names: Vec<String>,
+}
 
 /// What a finished copy said, and which way it went.
 struct Outcome {
@@ -66,6 +79,13 @@ pub struct FilesBridge {
     /// A copy is running. The panel says so and does not start a second.
     busy: qt_property!(bool; NOTIFY status_changed READ get_busy),
 
+    /// Whether a copy is held up waiting for an answer about names that are
+    /// already taken. The panel puts its question up while this is set.
+    collision_open: qt_property!(bool; NOTIFY collision_changed READ get_collision_open),
+    /// The question itself, naming the one file where there is one and counting
+    /// them where there are more.
+    collision_message: qt_property!(QString; NOTIFY collision_changed READ get_collision_message),
+
     // ---- The preview sheet ----
     /// Whether the sheet is up.
     preview_open: qt_property!(bool; NOTIFY preview_changed READ get_preview_open),
@@ -103,6 +123,7 @@ pub struct FilesBridge {
     rows_changed: qt_signal!(),
     selected_changed: qt_signal!(),
     status_changed: qt_signal!(),
+    collision_changed: qt_signal!(),
     preview_changed: qt_signal!(),
 
     /// Re-read every open directory, keeping the branches that are open.
@@ -125,6 +146,10 @@ pub struct FilesBridge {
     copy_in: qt_method!(fn(&mut self, payload: QString, dest: QString)),
     /// Copy one row out to a folder the reader picked, named by a URL.
     copy_out: qt_method!(fn(&mut self, path: QString, dest_url: QString)),
+    /// Answer the collision question: "replace", "keep_both" or "cancel".
+    /// Anything else cancels, because an answer nobody recognises is not an
+    /// answer to act on when the act deletes files.
+    resolve_collision: qt_method!(fn(&mut self, choice: QString)),
 
     /// Read a file into the sheet.
     open_preview: qt_method!(fn(&mut self, path: QString)),
@@ -138,6 +163,7 @@ pub struct FilesBridge {
     note: String,
     failed: bool,
     running: usize,
+    pending: Option<Pending>,
     sheet: Option<Sheet>,
     /// Bumped whenever a copy starts; a result from a copy the reader has since
     /// navigated away from is applied to the status but not to the tree.
@@ -187,8 +213,11 @@ impl FilesBridge {
         }
         self.workspace = path.as_str().into();
         // A sheet open on the old workspace's file has nothing to do with this
-        // one, and its path would read as belonging here.
+        // one, and its path would read as belonging here. Nor does a question
+        // about a folder that has just gone off screen.
         self.sheet = None;
+        self.pending = None;
+        self.collision_changed();
         self.note.clear();
         self.failed = false;
         self.selected = QString::default();
@@ -374,7 +403,7 @@ impl FilesBridge {
     /// five files where one is refused copies none of them: half a drop is a
     /// state nobody can see and nobody asked for.
     fn copy_in(&mut self, payload: QString, dest: QString) {
-        if self.running > 0 {
+        if self.running > 0 || self.pending.is_some() {
             return;
         }
         let sources = files::paths_from_uri_list(&payload.to_string());
@@ -383,38 +412,133 @@ impl FilesBridge {
         }
         let root = PathBuf::from(self.cwd());
         let dest = PathBuf::from(dest.to_string());
-        for source in &sources {
-            if let Err(refusal) = files::check_copy(source, &dest, Some(&root)) {
-                return self.say(refusal.message(), true);
-            }
-        }
         let into = files::relative_to(&root, &dest);
-        let into = if into.is_empty() {
+        let where_ = if into.is_empty() {
             "the workspace".to_string()
         } else {
-            into
+            into.clone()
         };
-        self.run_copy(sources, dest, Some(root), format!("Copying into {into}…"));
+        self.begin(sources, dest, Some(root), format!("Copying into {where_}…"));
     }
 
     /// Copy one row out to a folder outside the project.
     fn copy_out(&mut self, path: QString, dest_url: QString) {
-        if self.running > 0 {
+        if self.running > 0 || self.pending.is_some() {
             return;
         }
         let source = PathBuf::from(path.to_string());
         let Some(dest) = files::path_from_url(&dest_url.to_string()) else {
             return self.say("That destination is not a folder on this machine.", true);
         };
-        // No root: leaving the workspace is the point of an export.
-        if let Err(refusal) = files::check_copy(&source, &dest, None) {
-            return self.say(refusal.message(), true);
-        }
         let name = source
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        self.run_copy(vec![source], dest, None, format!("Copying {name}…"));
+        // No root: leaving the workspace is the point of an export.
+        self.begin(vec![source], dest, None, format!("Copying {name}…"));
+    }
+
+    /// Check a batch, then either run it or stop and ask.
+    ///
+    /// The structural checks run under `KeepBoth`, which is the mode that
+    /// refuses least — a batch that fails one of them fails whatever the reader
+    /// would have answered, so it is refused before they are asked anything.
+    fn begin(
+        &mut self,
+        sources: Vec<PathBuf>,
+        dest: PathBuf,
+        root: Option<PathBuf>,
+        note: String,
+    ) {
+        for source in &sources {
+            if let Err(refusal) =
+                files::check_copy(source, &dest, root.as_deref(), OnCollision::KeepBoth)
+            {
+                return self.say(refusal.message(), true);
+            }
+        }
+        let names = files::collisions(&sources, &dest);
+        if names.is_empty() {
+            // Nothing in the way, so there is nothing to ask and the mode
+            // cannot matter.
+            return self.run_copy(sources, dest, root, note, OnCollision::KeepBoth);
+        }
+        // The footer says nothing: the dialog is about to ask the same
+        // question in larger type, and the status line's job starts again when
+        // there is an outcome to report.
+        self.pending = Some(Pending {
+            sources,
+            dest,
+            root,
+            note,
+            names,
+        });
+        self.collision_changed();
+    }
+
+    fn get_collision_open(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    fn get_collision_message(&self) -> QString {
+        match &self.pending {
+            Some(pending) => {
+                let where_ = match &pending.root {
+                    Some(root) => files::relative_to(root, &pending.dest),
+                    None => pending
+                        .dest
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                };
+                files::collision_message(&pending.names, &where_)
+                    .as_str()
+                    .into()
+            }
+            None => QString::default(),
+        }
+    }
+
+    /// The reader's answer. Taking the pending copy out first means a second
+    /// click on a button whose dialog is already closing cannot start the copy
+    /// twice.
+    fn resolve_collision(&mut self, choice: QString) {
+        let Some(pending) = self.pending.take() else {
+            return;
+        };
+        self.collision_changed();
+
+        let mode = match choice.to_string().as_str() {
+            "replace" => OnCollision::Replace,
+            "keep_both" => OnCollision::KeepBoth,
+            // Including "cancel", and including anything unrecognised: an
+            // answer nobody meant is not one to act on when acting deletes
+            // files.
+            _ => return self.say("Copy cancelled.", false),
+        };
+
+        // Replace deletes before it writes, so it refuses destinations the
+        // first pass allowed. Checked here rather than at the end of the
+        // worker, where the deletion would already have happened.
+        if mode == OnCollision::Replace {
+            for source in &pending.sources {
+                if let Err(refusal) = files::check_copy(
+                    source,
+                    &pending.dest,
+                    pending.root.as_deref(),
+                    OnCollision::Replace,
+                ) {
+                    return self.say(refusal.message(), true);
+                }
+            }
+        }
+        self.run_copy(
+            pending.sources,
+            pending.dest,
+            pending.root,
+            pending.note,
+            mode,
+        );
     }
 
     /// Run one batch of copies on a worker and report back.
@@ -427,6 +551,7 @@ impl FilesBridge {
         dest: PathBuf,
         root: Option<PathBuf>,
         note: String,
+        mode: OnCollision,
     ) {
         self.generation += 1;
         let generation = self.generation;
@@ -443,7 +568,7 @@ impl FilesBridge {
             let mut reports: Vec<CopyReport> = Vec::new();
             let mut refusal: Option<Refusal> = None;
             for source in &sources {
-                match files::copy_into(source, &dest, root.as_deref()) {
+                match files::copy_into(source, &dest, root.as_deref(), mode) {
                     Ok(report) => reports.push(report),
                     // Checked before the batch started, so reaching here means
                     // the source went away while the copy was running.
@@ -694,6 +819,7 @@ mod tests {
             bytes,
             failures: (0..failures).map(|i| format!("skipped {i}")).collect(),
             destination: PathBuf::from(name),
+            replaced: false,
         }
     }
 
