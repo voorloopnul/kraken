@@ -12,6 +12,9 @@ its shape: a chat transcript beside the panes you need while the agent works.
 - a diff pane — the files changed since the last commit, with the lines added
   and removed in each; click a file to read its diff, syntax highlighted, over
   the dimmed app
+- a files pane — the workspace as a tree, the way an editor draws one; click a
+  file to read it over the dimmed app, and drag files in and out of the project
+  (or use the row menu, which also takes a folder)
 - workspace/project switching, local and over SSH
 
 ## How it is put together
@@ -22,8 +25,8 @@ Two crates, and the split between them is the point:
   dependency on Qt: the theme and type scales, persistent state, the Pi RPC
   client and its on-disk configuration, remote SSH workspaces, git, the chat
   pipeline (markdown, syntax highlighting, the transcript model), the terminal
-  engine, the dock's layout rules. It is unit-tested without a
-  display.
+  engine, the dock's layout rules, the file tree and the rules a copy in or out
+  of it obeys. It is unit-tested without a display.
 - **`crates/pupo-qt`** — the interface: a thin layer of `QObject` bridges over
   that core, and the QML that draws it. The QML tree, the fonts and the icons
   are compiled into the binary, so a checkout and a packaged AppImage both find
