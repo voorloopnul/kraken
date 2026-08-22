@@ -21,6 +21,10 @@ Item {
     // Mounted into the dock's panel header; see DockPanel.qml.
     property Item headerTools: tools
 
+    // A copy already running, or one stopped on a question nobody has answered
+    // yet, is a copy in flight as far as starting another one goes.
+    readonly property bool canCopy: !Files.busy && !Files.collision_open
+
     readonly property int rowHeight: 22
     readonly property int indentStep: 14
 
@@ -36,7 +40,7 @@ Item {
                 glyph: "plus"
                 glyphSize: 14
                 tooltip: qsTr("Copy files into the workspace")
-                enabled: !Files.busy
+                enabled: panel.canCopy
                 onClicked: {
                     importDialog.destination = panel.destinationForImport()
                     importDialog.open()
@@ -256,7 +260,7 @@ Item {
                 }
                 MenuItem {
                     text: qsTr("Copy out of the workspace…")
-                    enabled: !Files.busy
+                    enabled: panel.canCopy
                     onTriggered: {
                         exportDialog.source = row.modelData.path
                         exportDialog.open()
@@ -264,7 +268,7 @@ Item {
                 }
                 MenuItem {
                     text: qsTr("Copy files in here…")
-                    enabled: !Files.busy && row.modelData.is_dir
+                    enabled: panel.canCopy && row.modelData.is_dir
                     onTriggered: {
                         importDialog.destination = row.modelData.path
                         importDialog.open()
@@ -305,7 +309,7 @@ Item {
             // A drag carrying no files — a link out of a browser, a selection
             // out of an editor — has nothing to copy, and saying so at the
             // border is better than refusing it after the drop.
-            if (!drag.hasUrls || Files.busy || Files.message !== "") {
+            if (!drag.hasUrls || !panel.canCopy || Files.message !== "") {
                 drag.accepted = false
                 return
             }

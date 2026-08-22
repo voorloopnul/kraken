@@ -14,7 +14,8 @@ its shape: a chat transcript beside the panes you need while the agent works.
   the dimmed app
 - a files pane — the workspace as a tree, the way an editor draws one; click a
   file to read it over the dimmed app, and drag files in and out of the project
-  (or use the row menu, which also takes a folder)
+  (or use the row menu, which also takes a folder). A name that is already taken
+  stops the copy and asks: replace, keep both, or cancel
 - workspace/project switching, local and over SSH
 
 ## How it is put together

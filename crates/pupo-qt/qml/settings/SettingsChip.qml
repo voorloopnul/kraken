@@ -10,6 +10,10 @@ Item {
 
     property string text
     property bool enabled: true
+    // For a press that destroys something. The border and the word carry it
+    // rather than a filled red ground: this is still the button you are meant
+    // to reach for, just not the one to reach for without reading.
+    property bool danger: false
 
     signal clicked()
 
@@ -23,14 +27,19 @@ Item {
              : mouse.containsMouse ? Theme.colors.hover
                                    : Theme.colors.header
         border.width: 1
-        border.color: Theme.colors.card_border
+        border.color: chip.danger && chip.enabled ? chip.dangerColor
+                                                  : Theme.colors.card_border
     }
+
+    readonly property color dangerColor: Theme.name === "dark" ? "#e06c75" : "#c93c36"
 
     Text {
         id: label
         anchors.centerIn: parent
         text: chip.text
-        color: chip.enabled ? Theme.colors.text : Theme.chat_colors.dim
+        color: !chip.enabled ? Theme.chat_colors.dim
+             : chip.danger ? chip.dangerColor
+                           : Theme.colors.text
         font.family: Theme.sans_family
         font.pixelSize: 11
     }

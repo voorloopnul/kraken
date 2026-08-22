@@ -179,6 +179,12 @@ Window {
             anchors.fill: parent
         }
 
+        // The one question a copy stops on. Over the window because the Files
+        // pane is a narrow column, and this is about deleting someone's file.
+        FileCollisionDialog {
+            anchors.fill: parent
+        }
+
         // Settings, over the app for the same reason and in the same way.
         SettingsWindow {
             anchors.fill: parent
