@@ -13,10 +13,51 @@ its shape: a chat transcript beside the panes you need while the agent works.
   and removed in each; click a file to read its diff, syntax highlighted, over
   the dimmed app
 - a files pane — the workspace as a tree, the way an editor draws one; click a
-  file to read it over the dimmed app, and drag files in and out of the project
-  (or use the row menu, which also takes a folder). A name that is already taken
-  stops the copy and asks: replace, keep both, or cancel
+  file to read it over the dimmed app, and copy files in and out of the project.
+  A name that is already taken stops the copy and asks: replace, keep both, or
+  cancel. Works the same on a workspace reached over SSH (see below)
 - workspace/project switching, local and over SSH
+
+## The files pane over SSH
+
+A remote workspace's files are read and written over the SSH connection the
+rest of the app already holds open, so the pane behaves the same whichever
+machine the project is on. Three mechanisms, and no `scp` or `rsync` on either
+side:
+
+- **Listing** is one `find -mindepth 1 -maxdepth 1 -printf` per directory,
+  NUL-terminated so a name containing a tab or a newline survives, with the
+  entry's own type and its target's type so a symlink to a folder opens like a
+  folder. One round trip per branch opened, on the multiplexed connection.
+- **Copying** is a `tar` stream through the same `ssh` invocation everything
+  else goes through. Going out, the far side unpacks into a staging directory
+  beside the destination and moves the result into place — atomic, so a reader
+  never sees a half-written folder appear, and it is what lets a copy land under
+  a name of our choosing when the answer to a collision is "keep both". Coming
+  back, the bytes stage locally and are then placed by the same local code that
+  places any other copy, so the naming and replacing rules are written once.
+- **Previewing** is one `head -c`, sized against the limit. The file's size and
+  type come from the row that was clicked — the tree already listed them — so
+  reading a file is one round trip rather than a `stat` and then a `cat`.
+
+None of this happens on the UI thread. The tree does no I/O at all: it holds
+what has been read and says what it still wants, and the panel fetches that on a
+worker. Every load carries a generation, so a slow listing answering about a
+workspace you have since left is discarded rather than filed under the new one.
+
+### What a remote workspace cannot do
+
+**Dragging a file out of the pane into another application** is offered for a
+local workspace only. The desktop's drag protocol wants a path the receiving
+application can open, and a file on the far side of an SSH connection has none
+until it has been fetched — which cannot be done inside the gesture without
+freezing the window on a transfer of unknown size. *Copy out of the workspace…*
+in the row menu does the same job with the destination chosen first and the
+transfer on a worker.
+
+Everything else is unchanged: dropping files in from another application, the
+file chooser, the row menu, the preview and the collision prompt all work on a
+remote workspace exactly as they do on a local one.
 
 ## How it is put together
 
@@ -27,7 +68,9 @@ Two crates, and the split between them is the point:
   client and its on-disk configuration, remote SSH workspaces, git, the chat
   pipeline (markdown, syntax highlighting, the transcript model), the terminal
   engine, the dock's layout rules, the file tree and the rules a copy in or out
-  of it obeys. It is unit-tested without a display.
+  of it obeys (on either machine). It is unit-tested without a display — and,
+  because the tree does no I/O of its own, the whole of it is testable by
+  handing it invented listings.
 - **`crates/pupo-qt`** — the interface: a thin layer of `QObject` bridges over
   that core, and the QML that draws it. The QML tree, the fonts and the icons
   are compiled into the binary, so a checkout and a packaged AppImage both find
