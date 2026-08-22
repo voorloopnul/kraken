@@ -537,7 +537,7 @@ fn one_run(text: &str, color: &str) -> QVariantList {
     runs
 }
 
-fn push_run(runs: &mut QVariantList, text: &str, color: &str, italic: bool) {
+pub fn push_run(runs: &mut QVariantList, text: &str, color: &str, italic: bool) {
     if text.is_empty() {
         return;
     }
@@ -558,7 +558,7 @@ fn push_run(runs: &mut QVariantList, text: &str, color: &str, italic: bool) {
 /// only the coloured stretches would draw a line with holes in it, since the
 /// view lays the pieces out one after another rather than positioning each at
 /// its own column.
-fn runs_for(body: &str, spans: &[Span], base: &str) -> QVariantList {
+pub fn runs_for(body: &str, spans: &[Span], base: &str) -> QVariantList {
     let mut runs = QVariantList::default();
     let mut column = 0usize;
     for span in spans {

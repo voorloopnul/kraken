@@ -10,6 +10,7 @@ pub mod app;
 pub mod browser;
 pub mod diff;
 pub mod dock;
+pub mod files;
 pub mod git;
 pub mod history;
 pub mod remotes;
