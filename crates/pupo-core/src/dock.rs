@@ -39,7 +39,7 @@ pub fn preferred_width(key: &str) -> i32 {
 /// History's width, which is not a preference but a constant: the panel is a
 /// list of session titles and a button, it has nothing to do with more room,
 /// and it is the one column a drag cannot resize.
-pub const HISTORY_WIDTH: i32 = 200;
+pub const HISTORY_WIDTH: i32 = 260;
 
 /// The narrowest a column may be dragged.
 ///
@@ -976,8 +976,8 @@ mod tests {
         };
         assert_eq!(by_key("left"), f64::from(HISTORY_WIDTH));
         assert_eq!(by_key("right"), 460.0);
-        // 1360 - two dividers - 200 - 460
-        assert_eq!(by_key("center"), 698.0);
+        // 1360 - two dividers - 260 - 460
+        assert_eq!(by_key("center"), 638.0);
         assert_eq!(widths.iter().map(|(_, w)| w).sum::<f64>() + 2.0, 1360.0);
     }
 
@@ -1101,8 +1101,8 @@ mod tests {
         assert_eq!(side_columns_that_fit(1440, true, &mins), 3);
     }
 
-    /// 900 is the window's own minimum. History takes 200 and the conversation
-    /// 400, which leaves 300 — room for one side panel at its floor, not three.
+    /// 900 is the window's own minimum. History takes 260 and the conversation
+    /// 350, which leaves 290 — room for one side panel at its floor, not three.
     /// The other two have to close rather than be laid out off the screen.
     #[test]
     fn the_narrowest_window_keeps_one_side_panel() {
@@ -1126,10 +1126,14 @@ mod tests {
     #[test]
     fn a_wider_column_is_counted_at_its_own_floor() {
         // A column whose first panel has a larger minimum takes more of the
-        // budget, so fewer fit beside it.
+        // budget, so fewer fit beside it. Measured from the anchors rather than
+        // from a literal width, so widening History moves these thresholds
+        // instead of breaking the test.
         let mins = [400, 240];
-        assert_eq!(side_columns_that_fit(1000, true, &mins), 1);
-        assert_eq!(side_columns_that_fit(1240, true, &mins), 2);
+        let anchors = min_width("center") + HISTORY_WIDTH;
+        assert_eq!(side_columns_that_fit(anchors + 400, true, &mins), 1);
+        assert_eq!(side_columns_that_fit(anchors + 399, true, &mins), 0);
+        assert_eq!(side_columns_that_fit(anchors + 640, true, &mins), 2);
     }
 
     #[test]
