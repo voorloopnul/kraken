@@ -209,9 +209,10 @@ Rectangle {
                 Session.focus_session(key)
                 return
             }
-            // A persisted row's key is its file path.
-            const row = History.sessions.find((entry) => entry.key === key)
-            if (row && !row.live)
+            // A persisted row's key is its file path, and the bridge is asked
+            // rather than the row lists: a persisted session may be listed
+            // under Recents or under Pinned, and this does not care which.
+            if (History.session_id_for(key) !== "")
                 Session.load_session(key)
         }
         function onNew_session_requested() { Session.new_session() }

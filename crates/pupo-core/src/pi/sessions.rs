@@ -59,6 +59,34 @@ pub fn archive_session(session_id: &str) {
     state::set("archived_sessions", json!(archived));
 }
 
+/// The session ids the user has pinned to the top of the history.
+pub fn pinned_ids() -> HashSet<String> {
+    state::string_list("pinned_sessions").into_iter().collect()
+}
+
+/// Whether a pinned session keeps its own place above the rest.
+///
+/// Kept sorted so the stored list is stable between writes; the order a reader
+/// sees comes from the listing, not from the order things were pinned.
+pub fn pin_session(session_id: &str) {
+    let mut pinned: Vec<String> = pinned_ids().into_iter().collect();
+    if pinned.iter().any(|id| id == session_id) {
+        return;
+    }
+    pinned.push(session_id.to_string());
+    pinned.sort();
+    state::set("pinned_sessions", json!(pinned));
+}
+
+/// Drop a session back among the rest. Unpinning something that was never
+/// pinned is not an error — the end state is what was asked for either way.
+pub fn unpin_session(session_id: &str) {
+    let mut pinned: Vec<String> = pinned_ids().into_iter().collect();
+    pinned.retain(|id| id != session_id);
+    pinned.sort();
+    state::set("pinned_sessions", json!(pinned));
+}
+
 /// Permanently remove a session's file from disk.
 pub fn delete_session(path: impl AsRef<Path>) {
     let _ = fs::remove_file(path);

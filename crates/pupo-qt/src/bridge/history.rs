@@ -27,8 +27,14 @@ pub struct HistoryBridge {
     base: qt_base_class!(trait QObject),
 
     /// One entry per row: `{ key, title, subtitle, tooltip, session_id, live,
-    /// status }`, where `status` is "running", "unseen" or "".
+    /// status, pinned }`, where `status` is "running", "unseen" or "".
+    ///
+    /// The pinned rows are not in here — they are their own list, under their
+    /// own heading, so the pane can show the two groups without asking the
+    /// delegate to know which group it is in.
     sessions: qt_property!(QVariantList; NOTIFY sessions_changed READ get_sessions),
+    /// The pinned rows, same shape, newest first among themselves.
+    pinned: qt_property!(QVariantList; NOTIFY sessions_changed READ get_pinned),
     /// The row that is open, by key, or "".
     selected: qt_property!(QString; NOTIFY selection_changed READ get_selected),
 
@@ -48,6 +54,10 @@ pub struct HistoryBridge {
     activate: qt_method!(fn(&mut self, key: QString)),
     request_new_session: qt_method!(fn(&mut self)),
     archive: qt_method!(fn(&mut self, key: QString)),
+    /// Pin a session above the rest, or drop it back among them. Both take the
+    /// row key (a path), since that is what the row has to hand.
+    pin: qt_method!(fn(&mut self, key: QString)),
+    unpin: qt_method!(fn(&mut self, key: QString)),
     remove: qt_method!(fn(&mut self, key: QString)),
     clear_selection: qt_method!(fn(&mut self)),
     /// The workspace's live sessions, as `Session.live_sessions` publishes them:
@@ -69,6 +79,9 @@ pub struct HistoryBridge {
 
     cwd: String,
     rows: Vec<PiSession>,
+    /// Read once per reload rather than per row: the ids live in the state file
+    /// and every row would otherwise re-read it.
+    pinned_ids: std::collections::HashSet<String>,
     live: Vec<Live>,
     running: Vec<String>,
     unseen: Vec<String>,
@@ -154,6 +167,7 @@ impl HistoryBridge {
         } else {
             sessions::sessions_for(&self.cwd)
         };
+        self.pinned_ids = sessions::pinned_ids();
         self.sessions_changed();
     }
 
@@ -208,35 +222,61 @@ impl HistoryBridge {
             row.insert("live".into(), true.into());
             row.insert("status".into(), text(self.status_of(&live.key)));
             row.insert("selected".into(), (live.key == self.selected_key).into());
+            // Nothing to pin until pi has written the file that carries the id.
+            row.insert("pinned".into(), false.into());
             list.push(row.into());
         }
 
         for session in &self.rows {
-            let path = session.path.to_string_lossy().into_owned();
-            let noun = if session.message_count == 1 {
-                "message"
-            } else {
-                "messages"
-            };
-            let mut row = QVariantMap::default();
-            row.insert("key".into(), text(&path));
-            row.insert("title".into(), text(&session.title));
-            row.insert(
-                "subtitle".into(),
-                text(&format!(
-                    "{} · {} {noun}",
-                    started_label(session.started),
-                    session.message_count
-                )),
-            );
-            row.insert("tooltip".into(), text(&path));
-            row.insert("session_id".into(), text(&session.session_id));
-            row.insert("live".into(), false.into());
-            row.insert("status".into(), text(self.status_of(&path)));
-            row.insert("selected".into(), (path == self.selected_key).into());
-            list.push(row.into());
+            if self.is_pinned(session) {
+                continue; // it has its own list, above
+            }
+            list.push(self.row_for(session).into());
         }
         list
+    }
+
+    fn get_pinned(&self) -> QVariantList {
+        let mut list = QVariantList::default();
+        for session in &self.rows {
+            if self.is_pinned(session) {
+                list.push(self.row_for(session).into());
+            }
+        }
+        list
+    }
+
+    fn is_pinned(&self, session: &PiSession) -> bool {
+        self.pinned_ids.contains(&session.session_id)
+    }
+
+    /// One persisted session's row, the same shape in either list.
+    fn row_for(&self, session: &PiSession) -> QVariantMap {
+        let text = |value: &str| QVariant::from(QString::from(value));
+        let path = session.path.to_string_lossy().into_owned();
+        let noun = if session.message_count == 1 {
+            "message"
+        } else {
+            "messages"
+        };
+        let mut row = QVariantMap::default();
+        row.insert("key".into(), text(&path));
+        row.insert("title".into(), text(&session.title));
+        row.insert(
+            "subtitle".into(),
+            text(&format!(
+                "{} · {} {noun}",
+                started_label(session.started),
+                session.message_count
+            )),
+        );
+        row.insert("tooltip".into(), text(&path));
+        row.insert("session_id".into(), text(&session.session_id));
+        row.insert("live".into(), false.into());
+        row.insert("status".into(), text(self.status_of(&path)));
+        row.insert("selected".into(), (path == self.selected_key).into());
+        row.insert("pinned".into(), self.is_pinned(session).into());
+        row
     }
 
     fn get_selected(&self) -> QString {
@@ -269,6 +309,22 @@ impl HistoryBridge {
         sessions::archive_session(&id);
         self.reload();
         self.session_removed(key.as_str().into());
+    }
+
+    fn pin(&mut self, key: QString) {
+        let Some(id) = self.id_for(&key.to_string()) else {
+            return; // a live row has no file to pin
+        };
+        sessions::pin_session(&id);
+        self.reload();
+    }
+
+    fn unpin(&mut self, key: QString) {
+        let Some(id) = self.id_for(&key.to_string()) else {
+            return;
+        };
+        sessions::unpin_session(&id);
+        self.reload();
     }
 
     fn remove(&mut self, key: QString) {
