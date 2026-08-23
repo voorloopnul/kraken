@@ -268,6 +268,25 @@ impl Terminal {
         self.vt.screen().selection_text()
     }
 
+    /// Wipe the screen and the scrollback.
+    ///
+    /// Fed to the engine rather than sent to the child: `clear` is a command
+    /// only a shell sitting at a prompt would take, and the child is as likely
+    /// to be halfway through a build. So the terminal erases its own display
+    /// and the shell is never told — the next prompt prints into an empty
+    /// screen.
+    ///
+    /// The alt screen is the one place this must not be called: what is drawn
+    /// there belongs to a full-screen program that will not know to redraw it.
+    pub fn clear(&mut self) {
+        // Home the cursor, erase the screen, erase the scrollback. Home first,
+        // so what the child prints next starts at the top rather than wherever
+        // the cursor was left standing.
+        self.vt.feed(b"\x1b[H\x1b[2J\x1b[3J");
+        self.vt.screen_mut().selection_clear();
+        self.vt.screen_mut().scroll_to_bottom();
+    }
+
     /// Stop the shell and reap it. Idempotent, so wiring it to both a tab close
     /// and the window's teardown is safe.
     pub fn shutdown(&mut self) {
@@ -480,6 +499,27 @@ mod tests {
         assert_eq!(terminal.theme_name(), "light");
         let after = terminal.render().rows[0].runs[0].fg;
         assert_ne!(before, after, "the theme change did not reach the palette");
+        terminal.shutdown();
+    }
+
+    #[test]
+    fn clearing_takes_the_screen_and_the_history_with_it() {
+        let mut terminal = cat_terminal();
+        // More lines than the eight-row grid holds, so some of them are in the
+        // scrollback and not only on the screen.
+        for line in 0..20 {
+            terminal.feed(format!("line {line}\r\n").as_bytes());
+        }
+        assert!(terminal.screen().scrollback_len() > 0);
+        terminal.screen_mut().selection_start(0, 0, SelectionMode::Line);
+
+        terminal.clear();
+
+        assert_eq!(terminal.screen().scrollback_len(), 0);
+        assert_eq!(terminal.screen().viewport_text().trim(), "");
+        // A selection that outlived the text it named would still be painted,
+        // over rows that no longer say anything.
+        assert!(!terminal.screen().has_selection());
         terminal.shutdown();
     }
 

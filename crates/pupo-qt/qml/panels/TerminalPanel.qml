@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import "../common"
 
 // The terminal: a tab strip in the panel's header, and the grid under it.
@@ -206,7 +207,7 @@ Item {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.IBeamCursor
-            acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+            acceptedButtons: Qt.LeftButton | Qt.MiddleButton | Qt.RightButton
 
             // How many clicks the current press is part of. Qt gives QML a
             // doubleClicked but no tripleClicked, so the run is counted here.
@@ -222,6 +223,12 @@ Item {
 
             onPressed: function (event) {
                 surface.forceActiveFocus()
+                if (event.button === Qt.RightButton) {
+                    // The selection is left exactly as it was: the menu's own
+                    // first item is about to act on it.
+                    menu.openHere()
+                    return
+                }
                 if (event.button === Qt.MiddleButton) {
                     // X11's other clipboard. Qt exposes it to QML only through a
                     // TextEdit's paste, which has no selection buffer of its
@@ -239,7 +246,11 @@ Item {
             }
 
             onPositionChanged: function (event) {
-                if (!pressed)
+                // The left button specifically: a menu that came up under the
+                // right one takes the grab and gives no release back, and a
+                // plain `pressed` would have the pointer dragging a selection
+                // around long after the click that opened it.
+                if (!(pressedButtons & Qt.LeftButton))
                     return
                 const at = cell(event.x, event.y)
                 TerminalTabs.select_extend(at.col, at.row)
@@ -248,7 +259,9 @@ Item {
                 autoscroll.lines = event.y < 0 ? -1 : event.y > height ? 1 : 0
             }
 
-            onReleased: {
+            onReleased: function (event) {
+                if (event.button !== Qt.LeftButton)
+                    return
                 autoscroll.lines = 0
                 // Straight to the clipboard, the way every terminal does it:
                 // the selection is the copy, and a second gesture to confirm it
@@ -260,6 +273,47 @@ Item {
 
             onWheel: function (event) {
                 TerminalTabs.wheel(event.angleDelta.y)
+            }
+        }
+
+        // Right-click: the three things a terminal is asked for by pointer.
+        //
+        // What each item can do is read when the menu opens rather than bound
+        // to it — both answers come from methods on the bridge, and a binding
+        // over a method call records no dependency and would keep whatever was
+        // true the first time the menu was built.
+        Menu {
+            id: menu
+
+            property bool hasSelection: false
+            property bool canClear: false
+
+            function openHere() {
+                hasSelection = TerminalTabs.has_selection()
+                canClear = !TerminalTabs.on_alt_screen()
+                popup()
+            }
+
+            // The menu takes the focus while it is up, and the grid is what
+            // keys belong to.
+            onClosed: surface.forceActiveFocus()
+
+            MenuItem {
+                text: qsTr("Copy")
+                enabled: menu.hasSelection
+                onTriggered: clipboard.copy(TerminalTabs.copy_selection())
+            }
+            MenuItem {
+                text: qsTr("Paste")
+                onTriggered: TerminalTabs.paste(clipboard.paste())
+            }
+            MenuSeparator {}
+            MenuItem {
+                text: qsTr("Clear")
+                // Off while a full-screen program owns the screen: what is
+                // drawn there is vim's, and vim will not know to redraw it.
+                enabled: menu.canClear
+                onTriggered: TerminalTabs.clear()
             }
         }
 

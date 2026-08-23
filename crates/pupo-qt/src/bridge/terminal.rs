@@ -130,6 +130,15 @@ pub struct TerminalBridge {
     /// The selected text, for the panel to put on the clipboard. Qt's clipboard
     /// has no binding here, so the copy itself happens in QML.
     copy_selection: qt_method!(fn(&self) -> QString),
+    /// Whether there is anything selected, for the context menu to grey its
+    /// copy out by. A method rather than a property: it is read when the menu
+    /// opens, and a property would mean a notify on every drag of the mouse.
+    has_selection: qt_method!(fn(&self) -> bool),
+    /// Whether a full-screen program owns the screen. The menu reads it to
+    /// keep "Clear" off what vim is drawing.
+    on_alt_screen: qt_method!(fn(&self) -> bool),
+    /// Erase the screen and the scrollback of the current tab.
+    clear: qt_method!(fn(&mut self)),
 
     /// The grid, measured by the panel from the font it actually rendered. Only
     /// it knows what the glyphs came out as, and a shell told a size that does
@@ -520,6 +529,17 @@ impl TerminalBridge {
         Some(action(&mut tab.terminal))
     }
 
+    /// The current workspace's current tab, for the reads that only have
+    /// `&self` to work with — `with_current` needs the pane mutably.
+    fn current_terminal(&self) -> Option<&Terminal> {
+        let pane = self.panes.get(&self.workspace)?;
+        let current = pane.current;
+        pane.tabs
+            .iter()
+            .find(|tab| tab.id == current)
+            .map(|tab| &tab.terminal)
+    }
+
     fn key(&mut self, key: i32, modifiers: i32, text: QString) {
         let text = text.to_string();
         let event = KeyEvent::new(key as u32, modifiers as u32, &text);
@@ -552,14 +572,28 @@ impl TerminalBridge {
     }
 
     fn copy_selection(&self) -> QString {
-        let Some(pane) = self.panes.get(&self.workspace) else {
-            return QString::default();
-        };
-        let current = pane.current;
-        match pane.tabs.iter().find(|tab| tab.id == current) {
-            Some(tab) => tab.terminal.selection_text().as_str().into(),
+        match self.current_terminal() {
+            Some(terminal) => terminal.selection_text().as_str().into(),
             None => QString::default(),
         }
+    }
+
+    fn has_selection(&self) -> bool {
+        self.current_terminal()
+            .is_some_and(|terminal| terminal.screen().has_selection())
+    }
+
+    fn on_alt_screen(&self) -> bool {
+        self.current_terminal()
+            .is_some_and(|terminal| terminal.screen().on_alt_screen())
+    }
+
+    fn clear(&mut self) {
+        if self.on_alt_screen() {
+            return;
+        }
+        self.with_current(|terminal| terminal.clear());
+        self.refresh(true);
     }
 
     // ---- geometry ------------------------------------------------------
