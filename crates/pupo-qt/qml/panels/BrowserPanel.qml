@@ -218,6 +218,27 @@ Item {
             page = null
             return false
         }
+        // What a page with no background of its own is painted on.
+        //
+        // Left unsaid, Chromium takes that colour from the *desktop's*
+        // light-or-dark setting rather than from this app's theme, so a light
+        // window could end up holding a dark blank page. Bound rather than
+        // assigned, so it follows the theme the way every other surface in the
+        // app does.
+        //
+        // This is not what leaves the pane black after the window has been away
+        // for a while, however much it looks like the same fault. That is a
+        // frame Chromium threw out, and `repaint` below is what asks for
+        // another; a background colour is only ever seen where Chromium paints,
+        // and a pane with no frame at all is not painted by it.
+        page.backgroundColor = Qt.binding(() => Theme.colors.card)
+        // Pages themselves are drawn as they were written. Chromium's dark
+        // mode is an inversion applied to somebody else's colours, and a
+        // browser pane is not the place to decide a site looks better
+        // repainted; this is set rather than left alone so that it, too, does
+        // not follow the desktop.
+        page.settings.forceDarkMode = false
+
         page.urlChanged.connect(report)
         page.titleChanged.connect(report)
         page.renderProcessTerminated.connect(function () {
