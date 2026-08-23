@@ -5,12 +5,21 @@ import "../common"
 // Git pane's two views of the repository.
 //
 // One component for all of them, because a tab is a tab: the same height, the
-// same rounded current tab, the same close affordance that only appears where it
-// can be used. Strips written separately are strips that drift.
+// same rounded current tab, the same place to close one. Strips written
+// separately are strips that drift.
 //
 // It mounts into the dock's own panel header rather than sitting under it (see
 // DockPanel.qml), so a panel with tabs has one strip across its top instead of a
 // title bar with a second bar beneath it.
+//
+// Closing is deliberately not a button inside the tab. A tab is a target you
+// aim at to *switch* to it, and a per-tab close button puts a destructive
+// control inside that target — on a numbered terminal tab it was half of it, so
+// half of every click at a shell was a click that killed one. Instead the
+// closing lives at the far end of the strip and acts on the tab you are already
+// looking at: you cannot destroy a shell you have not read, and no aim at a tab
+// can miss into it. Middle-click closes a tab outright for anyone who wants the
+// short way; it is not a gesture that happens by accident.
 Item {
     id: strip
 
@@ -32,8 +41,14 @@ Item {
 
     Row {
         id: row
-        anchors { left: parent.left; top: parent.top; bottom: parent.bottom }
+        anchors {
+            left: parent.left; top: parent.top; bottom: parent.bottom
+            // Never under the close button: a tab hidden behind it is a tab
+            // whose click lands on closing something else.
+            right: closeCurrent.visible ? closeCurrent.left : parent.right
+        }
         anchors.bottomMargin: 1
+        clip: true
         spacing: 2
 
         Repeater {
@@ -47,12 +62,11 @@ Item {
 
                 readonly property bool isCurrent: modelData.id === strip.current
 
-                // Wide enough to read a shell's title, narrow enough that four
-                // tabs still fit in a docked column. A fixed tab pays for no
-                // close button, so it keeps only its own padding.
-                width: Math.min(160, Math.max(strip.fixed ? 0 : 72,
-                                              label.implicitWidth
-                                              + (strip.fixed ? 18 : 34)))
+                // The label and its padding, and nothing else: with no button
+                // sharing the tab, a terminal's bare number gets a tab the size
+                // of a number. The cap is there so one long page title cannot
+                // push the rest of the strip off the panel.
+                width: Math.min(160, label.implicitWidth + 18)
                 height: strip.height - 1
                 radius: 5
                 color: tab.isCurrent ? Theme.colors.card
@@ -77,12 +91,8 @@ Item {
                     anchors {
                         left: bell.visible ? bell.right : parent.left
                         leftMargin: bell.visible ? 5 : 9
-                        // Keyed on the strip, not on whether the close button
-                        // happens to be showing: on a closable tab it comes and
-                        // goes with the pointer, and a label that re-anchored
-                        // with it would slide about under hovering.
-                        right: strip.fixed ? parent.right : close.left
-                        rightMargin: strip.fixed ? 9 : 2
+                        right: parent.right
+                        rightMargin: 9
                         verticalCenter: parent.verticalCenter
                     }
                     text: tab.modelData.title
@@ -97,29 +107,21 @@ Item {
                     elide: Text.ElideRight
                 }
 
-                // Only on the tab you are pointing at or the one you are in: a
-                // close button on every tab is a row of buttons, and the one you
-                // want is no easier to find.
-                IconButton {
-                    id: close
-                    anchors { right: parent.right; rightMargin: 3; verticalCenter: parent.verticalCenter }
-                    implicitWidth: 16
-                    implicitHeight: 16
-                    glyphSize: 10
-                    radius: 4
-                    glyph: "x"
-                    visible: !strip.fixed
-                             && (tab.isCurrent || tabMouse.containsMouse)
-                    onClicked: strip.closed(tab.modelData.id)
-                }
-
+                // The whole tab selects — there is nothing else in it to hit.
                 MouseArea {
                     id: tabMouse
                     anchors.fill: parent
-                    anchors.rightMargin: close.visible ? close.width + 4 : 0
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onPressed: strip.selected(tab.modelData.id)
+                    acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+                    onPressed: function (mouse) {
+                        if (mouse.button === Qt.MiddleButton) {
+                            if (!strip.fixed)
+                                strip.closed(tab.modelData.id)
+                            return
+                        }
+                        strip.selected(tab.modelData.id)
+                    }
 
                     // Reorder by dragging past a neighbour's middle. The tab
                     // itself never moves under the pointer — the list is
@@ -149,5 +151,24 @@ Item {
             tooltip: qsTr("New tab")
             onClicked: strip.added()
         }
+    }
+
+    // Close the tab you are looking at, pinned to the strip's far end — the
+    // width of the whole strip away from the tabs, so nothing aimed at one can
+    // land on it.
+    //
+    // A minus rather than a cross: it is the answer to the plus beside the
+    // tabs, one fewer where that one is one more, and a cross at the right end
+    // of a panel's header would read as closing the panel.
+    IconButton {
+        id: closeCurrent
+        visible: !strip.fixed && strip.current >= 0
+        anchors { right: parent.right; verticalCenter: parent.verticalCenter }
+        implicitWidth: 22
+        implicitHeight: 22
+        glyphSize: 12
+        glyph: "minus"
+        tooltip: qsTr("Close tab")
+        onClicked: strip.closed(strip.current)
     }
 }

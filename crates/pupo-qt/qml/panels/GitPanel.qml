@@ -10,8 +10,8 @@ import "../common"
 //
 // The views are built once and switched by visibility, which is also what makes
 // them refresh: each re-reads git when it comes into view, so the one behind
-// runs no subprocess and the one in front is never stale. See ChangesView and
-// CommitsView, which is where all the actual pane is.
+// runs no subprocess and the one in front is never stale. ChangesView and
+// CommitsView are the panes themselves; this file only chooses between them.
 Item {
     id: panel
 
@@ -44,7 +44,7 @@ Item {
         }
 
         // One Refresh for both views, because there is one repository behind
-        // them. Which command that means is the view's business.
+        // them; which of its two questions to ask again is whichever view is up.
         //
         // A character rather than an icon: the vendored Lucide set has no
         // reload glyph, and a rotated arrow from it points somewhere and so
@@ -54,8 +54,12 @@ Item {
             text: "↻"
             fontSize: 14
             tooltip: qsTr("Refresh")
-            onClicked: panel.current === panel.changesTab ? Diff.refresh()
-                                                          : Git.refresh()
+            onClicked: {
+                if (panel.current === panel.changesTab)
+                    Diff.refresh()
+                else
+                    Git.refresh()
+            }
         }
     }
 

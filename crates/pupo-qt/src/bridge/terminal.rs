@@ -47,8 +47,11 @@ struct Tab {
 struct Pane {
     tabs: Vec<Tab>,
     current: u32,
-    /// Numbers the labels: the first tab is "Terminal", the rest "Terminal#N".
-    /// It counts opens rather than tabs, so closing #2 does not hand the next
+    /// Numbers the labels, which are the numbers themselves: a shell has no
+    /// title worth the width in a docked column, and the only thing anyone
+    /// needs of a tab strip is which of them they are looking at.
+    ///
+    /// It counts opens rather than tabs, so closing 2 does not hand the next
     /// one its name, and resets only once the pane is empty.
     counter: u32,
 }
@@ -289,11 +292,7 @@ impl TerminalBridge {
         let workspace = self.workspace.clone();
         let pane = self.panes.entry(workspace).or_default();
         pane.counter += 1;
-        let label = if pane.counter == 1 {
-            "Terminal".to_string()
-        } else {
-            format!("Terminal#{}", pane.counter)
-        };
+        let label = pane.counter.to_string();
         let mut tab = Tab {
             id,
             terminal,
