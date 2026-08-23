@@ -98,9 +98,9 @@ pub struct FilesBridge {
     theme: qt_property!(QString; NOTIFY theme_changed READ get_theme WRITE set_theme),
 
     /// One entry per visible line: `{ path, name, depth, is_dir, expanded,
-    /// loading, size_label, symlink }`. Rebuilt whole rather than patched — the
-    /// tree is a few hundred rows at the sizes anyone reads, and a list rebuilt
-    /// whole is one that cannot disagree with itself.
+    /// loading, size_label, symlink, executable }`. Rebuilt whole rather than
+    /// patched — the tree is a few hundred rows at the sizes anyone reads, and
+    /// a list rebuilt whole is one that cannot disagree with itself.
     rows: qt_property!(QVariantList; NOTIFY rows_changed READ get_rows),
     /// The one sentence shown instead of rows: no workspace, an empty folder, a
     /// folder that would not be read. Empty while there are rows.
@@ -163,6 +163,15 @@ pub struct FilesBridge {
     /// What a refusal is written in — the same red the diff sheet marks a
     /// removed line with, because it is the same "this did not happen".
     alert_color: qt_property!(QString; NOTIFY theme_changed READ get_alert_color),
+
+    /// The three colours a row is drawn in, by what it is. Properties rather
+    /// than a `color(kind)` method for the reason the Theme object is written
+    /// that way: QML records a dependency on a property it reads and none at
+    /// all on a method it calls, so a row bound to a method would keep its old
+    /// colour through a theme change.
+    dir_color: qt_property!(QString; NOTIFY theme_changed READ get_dir_color),
+    exec_color: qt_property!(QString; NOTIFY theme_changed READ get_exec_color),
+    file_color: qt_property!(QString; NOTIFY theme_changed READ get_file_color),
 
     workspace_changed: qt_signal!(),
     theme_changed: qt_signal!(),
@@ -414,6 +423,7 @@ impl FilesBridge {
             map.insert("expanded".into(), row.expanded.into());
             map.insert("loading".into(), row.loading.into());
             map.insert("symlink".into(), row.symlink.into());
+            map.insert("executable".into(), row.executable.into());
             // A directory's size is the size of the directory entry itself,
             // which is a number about the filesystem rather than about the
             // project. The column stays empty for one.
@@ -925,6 +935,18 @@ impl FilesBridge {
 
     fn get_alert_color(&self) -> QString {
         diff::viewer_color(&self.theme_name(), "del").into()
+    }
+
+    fn get_dir_color(&self) -> QString {
+        files::kind_color(&self.theme_name(), "dir").into()
+    }
+
+    fn get_exec_color(&self) -> QString {
+        files::kind_color(&self.theme_name(), "exec").into()
+    }
+
+    fn get_file_color(&self) -> QString {
+        files::kind_color(&self.theme_name(), "file").into()
     }
 
     fn get_preview_scrim(&self) -> QString {

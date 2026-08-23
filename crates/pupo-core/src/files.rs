@@ -33,6 +33,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
@@ -65,6 +66,29 @@ pub const MAX_PREVIEW_LINES: usize = 4_000;
 const SNIFF_BYTES: usize = 8192;
 
 // ---------------------------------------------------------------------------
+// Colours
+// ---------------------------------------------------------------------------
+
+/// What a row is drawn in, by what it is: `dir`, `exec`, `file`.
+///
+/// Three kinds and no more. Everything else about a row is already said by its
+/// shape — the indent, the twisty, the icon, the leaning name of a symlink —
+/// and colour is spent on the one question the shape does not answer: is this a
+/// folder, something that runs, or a file to read. The blue and the green are
+/// the two the diff pane already marks a moved and an added file with, so the
+/// same two colours mean the same two things in both panes, and a plain file
+/// keeps the pane's own text colour so most of the tree stays quiet.
+pub fn kind_color(theme: &str, key: &str) -> &'static str {
+    let dark = theme == "dark";
+    match key {
+        "dir" => if dark { "#61afef" } else { "#0184bc" },
+        "exec" => if dark { "#98c379" } else { "#50a14f" },
+        "file" => if dark { "#c8cad0" } else { "#4a4d55" },
+        _ => "#ff00ff",
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Entries
 // ---------------------------------------------------------------------------
 
@@ -78,6 +102,11 @@ pub struct Entry {
     pub is_dir: bool,
     pub size: u64,
     pub symlink: bool,
+    /// Whether it runs: an execute bit set on whatever the name resolves to.
+    /// Asked only of files — on a directory the same bit means "may be entered"
+    /// and every readable one has it, so colouring by it would light up the
+    /// whole tree.
+    pub executable: bool,
 }
 
 /// Whether a name is one the tree hides unless asked. Dotfiles, by the same
@@ -123,18 +152,23 @@ pub fn read_dir(dir: &Path) -> io::Result<Vec<Entry>> {
             .file_type()
             .map(|kind| kind.is_symlink())
             .unwrap_or(false);
-        let (is_dir, size) = match item.metadata() {
-            Ok(meta) => (meta.is_dir(), meta.len()),
+        let (is_dir, size, executable) = match item.metadata() {
+            Ok(meta) => (
+                meta.is_dir(),
+                meta.len(),
+                meta.permissions().mode() & 0o111 != 0,
+            ),
             // A broken symlink: it has a name and nothing behind it. Listing it
             // as a zero-byte file is the honest row — dropping it would leave a
             // name visible in every other tool missing from this one.
-            Err(_) => (false, 0),
+            Err(_) => (false, 0, false),
         };
         entries.push(Entry {
             name,
             is_dir,
             size,
             symlink: link,
+            executable,
         });
     }
     sort_entries(&mut entries);
@@ -198,17 +232,23 @@ pub const REMOTE_LIST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The shell command that lists one directory on the far side.
 ///
-/// One `find`, so one round trip. The fields are the entry's own type, the type
-/// of whatever it points at, the size and the basename, NUL-terminated per
-/// entry — a name may contain a newline or a tab, and NUL is the one byte a
-/// path cannot hold.
+/// One `find`, so one round trip. The fields are whether the entry runs, the
+/// entry's own type, the type of whatever it points at, the size and the
+/// basename, NUL-terminated per entry — a name may contain a newline or a tab,
+/// and NUL is the one byte a path cannot hold.
 ///
 /// `%y` is `l` for a symlink while `%Y` is what it resolves to, which is how a
 /// link to a folder comes to open like a folder and a broken one still gets a
 /// row.
+///
+/// The execute flag is a predicate rather than a `%m` field on purpose: `-perm`
+/// and `%m` both describe the link itself, and a symlink's own mode is `777` —
+/// every link in the tree would come back executable. `-executable` asks about
+/// what the name resolves to, which is what the row is about.
 pub fn list_command(dir: &Path) -> String {
     format!(
-        "find {} -mindepth 1 -maxdepth 1 -printf '%y\\t%Y\\t%s\\t%f\\0'",
+        "find {} -mindepth 1 -maxdepth 1 \\( -executable -printf 'x' -o -printf '-' \\) \
+         -printf '\\t%y\\t%Y\\t%s\\t%f\\0'",
         shell_quote(&dir.to_string_lossy())
     )
 }
@@ -223,10 +263,11 @@ pub fn parse_listing(stdout: &str) -> Vec<Entry> {
         if record.is_empty() {
             continue;
         }
-        // Four fields, and the name is last because it is the one that can
+        // Five fields, and the name is last because it is the one that can
         // contain a tab.
-        let mut fields = record.splitn(4, '\t');
-        let (Some(kind), Some(target), Some(size), Some(name)) = (
+        let mut fields = record.splitn(5, '\t');
+        let (Some(runs), Some(kind), Some(target), Some(size), Some(name)) = (
+            fields.next(),
             fields.next(),
             fields.next(),
             fields.next(),
@@ -242,6 +283,7 @@ pub fn parse_listing(stdout: &str) -> Vec<Entry> {
             is_dir: target == "d",
             size: size.parse().unwrap_or(0),
             symlink: kind == "l",
+            executable: runs == "x",
         });
     }
     sort_entries(&mut entries);
@@ -301,6 +343,8 @@ pub struct Row {
     pub loading: bool,
     pub size: u64,
     pub symlink: bool,
+    /// Whether the file runs. Always false for a directory; see [`Entry`].
+    pub executable: bool,
 }
 
 /// Why a directory has no rows under it, when it is open and shows none.
@@ -595,6 +639,7 @@ impl Tree {
                 loading,
                 size: entry.size,
                 symlink: entry.symlink,
+                executable: !entry.is_dir && entry.executable,
             });
             if !expanded {
                 continue;
@@ -1499,6 +1544,7 @@ mod tests {
             is_dir,
             size: 0,
             symlink: false,
+            executable: false,
         }
     }
 
@@ -1963,11 +2009,39 @@ mod tests {
         assert!(rows.len() < 10);
     }
 
+    #[test]
+    fn a_file_that_runs_is_told_apart_from_one_that_does_not() {
+        // What the pane colours a row from. A directory carries the same
+        // execute bit — it is how "may be entered" is written — so a folder
+        // must not come back marked, or the whole tree would be green.
+        let root = tempdir();
+        fs::create_dir(root.join("bin")).unwrap();
+        fs::write(root.join("build.sh"), b"#!/bin/sh\n").unwrap();
+        fs::write(root.join("notes.txt"), b"hi").unwrap();
+        fs::set_permissions(root.join("build.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+
+        let rows = settle(&mut Tree::new(&root));
+        let runs = |name: &str| rows.iter().find(|row| row.name == name).unwrap().executable;
+        assert!(runs("build.sh"));
+        assert!(!runs("notes.txt"));
+        assert!(!runs("bin"));
+    }
+
     // ---- Listing another machine ------------------------------------------
 
-    /// One record as the remote `find` prints it.
+    /// One record as the remote `find` prints it, for something that does not
+    /// run.
     fn record(kind: &str, target: &str, size: &str, name: &str) -> String {
-        format!("{kind}\t{target}\t{size}\t{name}\0")
+        flagged("-", kind, target, size, name)
+    }
+
+    /// The same, for one the far side reported as executable.
+    fn runnable(kind: &str, target: &str, size: &str, name: &str) -> String {
+        flagged("x", kind, target, size, name)
+    }
+
+    fn flagged(runs: &str, kind: &str, target: &str, size: &str, name: &str) -> String {
+        format!("{runs}\t{kind}\t{target}\t{size}\t{name}\0")
     }
 
     #[test]
@@ -2004,6 +2078,29 @@ mod tests {
         let dangling = entries.iter().find(|e| e.name == "dangling").unwrap();
         assert!(!dangling.is_dir);
         assert!(dangling.symlink);
+    }
+
+    #[test]
+    fn a_remote_listing_says_which_entries_run() {
+        // The flag is `-executable`, which asks about what the name resolves
+        // to: a link to a script is marked, a link to a text file is not.
+        let stdout = format!(
+            "{}{}{}",
+            record("f", "f", "10", "notes.txt"),
+            runnable("f", "f", "20", "build.sh"),
+            runnable("l", "f", "8", "link-to-build"),
+        );
+        let entries = parse_listing(&stdout);
+        let runs = |name: &str| {
+            entries
+                .iter()
+                .find(|entry| entry.name == name)
+                .unwrap()
+                .executable
+        };
+        assert!(runs("build.sh"));
+        assert!(runs("link-to-build"));
+        assert!(!runs("notes.txt"));
     }
 
     #[test]
@@ -2047,6 +2144,10 @@ mod tests {
         assert!(command.contains("-maxdepth 1"));
         // NUL-terminated records, name last.
         assert!(command.contains("%f"));
+        // The flag that dereferences, rather than a mode field that would
+        // report every symlink's own 777.
+        assert!(command.contains("-executable"), "{command}");
+        assert!(!command.contains("%m"), "{command}");
     }
 
     // ---- Listings arriving late -------------------------------------------

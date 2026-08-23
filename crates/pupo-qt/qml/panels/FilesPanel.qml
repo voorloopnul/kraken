@@ -128,6 +128,15 @@ Item {
             required property int index
 
             readonly property bool selected: Files.selected === modelData.path
+            // What the row is, said in colour: a folder, something that runs,
+            // or a file to read. The icon and the name carry the same one, so
+            // the kind reads whether the eye lands on the glyph or the word.
+            // A selected row drops it for the accent — the selection is what
+            // that row is saying at that moment.
+            readonly property string kindColor:
+                modelData.is_dir ? Files.dir_color
+              : modelData.executable ? Files.exec_color
+              : Files.file_color
             // The folder this drop would land in — which for a file row is the
             // folder holding it, so the row that lights up is the one the copy
             // actually goes into.
@@ -199,8 +208,7 @@ Item {
                     row.modelData.is_dir
                         ? (row.modelData.expanded ? "folder-open" : "folder")
                         : "file",
-                    row.selected ? Theme.colors.accent_text
-                                 : Files.dim_color)
+                    row.selected ? Theme.colors.accent_text : row.kindColor)
             }
 
             Text {
@@ -210,7 +218,7 @@ Item {
                     verticalCenter: parent.verticalCenter
                 }
                 text: row.modelData.name
-                color: row.selected ? Theme.colors.accent_text : Theme.colors.text
+                color: row.selected ? Theme.colors.accent_text : row.kindColor
                 font.family: Theme.sans_family
                 font.pixelSize: 11
                 // A symlink is worth saying so in the one way that costs no
