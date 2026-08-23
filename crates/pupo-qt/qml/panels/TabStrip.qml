@@ -12,13 +12,18 @@ import "../common"
 // DockPanel.qml), so a panel with tabs has one strip across its top instead of a
 // title bar with a second bar beneath it.
 //
-// Closing is deliberately not a button inside the tab. A tab is a target you
-// aim at to *switch* to it, and a per-tab close button puts a destructive
-// control inside that target — on a numbered terminal tab it was half of it, so
-// half of every click at a shell was a click that killed one. Instead the
-// closing lives at the far end of the strip and acts on the tab you are already
-// looking at: you cannot destroy a shell you have not read, and no aim at a tab
-// can miss into it. Middle-click closes a tab outright for anyone who wants the
+// Closing is a second gesture on the tab itself, never a button sitting in it.
+// A tab is a target you aim at to *switch* to it, and a close button inside that
+// target means half of every click at a shell is a click that kills one — which
+// is what a numbered terminal tab used to be. A button at the far end of the
+// strip missed the other way: a minus in a panel header reads as minimising the
+// panel, not as closing what is in it.
+//
+// So the tab arms itself. Right-click one and its label turns into a cross: the
+// tab you aimed at is now the close button, and the left-click that follows
+// closes it. Nothing is destroyed by a single click, the control appears where
+// the pointer already is, and moving off the tab or right-clicking it again puts
+// the label back. Middle-click still closes outright for anyone who wants the
 // short way; it is not a gesture that happens by accident.
 Item {
     id: strip
@@ -32,6 +37,17 @@ Item {
     // left is the one thing they are for, which is choosing between them.
     property bool fixed: false
 
+    // The tab showing its close cross instead of its label, or -1. One at a
+    // time: arming another disarms this one, so there is never a strip of
+    // tabs all offering to be destroyed.
+    //
+    // Held as an id rather than an index, and ids are never reused, so a tab
+    // that goes away while armed leaves this pointing at nothing rather than at
+    // whatever took its place. It survives the model being rebuilt on the way
+    // past — a bell in another shell rebuilds `tabs`, and disarming on that
+    // would take the cross away between the right-click and the left one.
+    property int armed: -1
+
     signal selected(int id)
     signal closed(int id)
     signal added()
@@ -43,9 +59,7 @@ Item {
         id: row
         anchors {
             left: parent.left; top: parent.top; bottom: parent.bottom
-            // Never under the close button: a tab hidden behind it is a tab
-            // whose click lands on closing something else.
-            right: closeCurrent.visible ? closeCurrent.left : parent.right
+            right: parent.right
         }
         anchors.bottomMargin: 1
         clip: true
@@ -61,6 +75,11 @@ Item {
                 required property int index
 
                 readonly property bool isCurrent: modelData.id === strip.current
+                // Armed: the label has stepped aside for the cross, and the
+                // next left-click on this tab closes it. Only ever a tab
+                // anybody opened — a panel's own views have nothing to close.
+                readonly property bool armed: !strip.fixed
+                                              && modelData.id === strip.armed
 
                 // The label and its padding, and nothing else: with no button
                 // sharing the tab, a terminal's bare number gets a tab the size
@@ -105,19 +124,51 @@ Item {
                     font.pixelSize: 11
                     font.italic: !!tab.modelData.closed
                     elide: Text.ElideRight
+                    // Kept in place rather than dropped, so the tab keeps the
+                    // width its title asks for: a tab that narrowed as it armed
+                    // would move its neighbours out from under the pointer.
+                    visible: !tab.armed
                 }
 
-                // The whole tab selects — there is nothing else in it to hit.
+                // The armed tab's cross, in the label's place. A vendored glyph
+                // rather than a character, and red, because the click that
+                // follows it destroys something.
+                Image {
+                    anchors.centerIn: parent
+                    width: 11
+                    height: 11
+                    sourceSize: Qt.size(22, 22)
+                    smooth: true
+                    visible: tab.armed
+                    source: Theme.icon("x", Theme.chat_colors.error)
+                }
+
+                // The whole tab selects, or closes once it is armed — there is
+                // nothing else in it to hit either way.
                 MouseArea {
                     id: tabMouse
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+                    acceptedButtons: Qt.LeftButton | Qt.MiddleButton | Qt.RightButton
+                    // The label comes back when the pointer leaves: an armed
+                    // tab is a state you are standing in, not one the strip
+                    // keeps for you to forget about and click into later.
+                    onExited: if (tab.armed) strip.armed = -1
                     onPressed: function (mouse) {
+                        if (mouse.button === Qt.RightButton) {
+                            if (!strip.fixed)
+                                strip.armed = tab.armed ? -1 : tab.modelData.id
+                            return
+                        }
                         if (mouse.button === Qt.MiddleButton) {
                             if (!strip.fixed)
                                 strip.closed(tab.modelData.id)
+                            return
+                        }
+                        if (tab.armed) {
+                            strip.closed(tab.modelData.id)
+                            strip.armed = -1
                             return
                         }
                         strip.selected(tab.modelData.id)
@@ -128,7 +179,7 @@ Item {
                     // rebuilt from the model, and the pointer is already over
                     // the tab's new place by the time it is.
                     onPositionChanged: function (mouse) {
-                        if (!pressed || strip.fixed)
+                        if (!pressed || strip.fixed || tab.armed)
                             return
                         const at = mapToItem(row, mouse.x, 0).x
                         const over = Math.floor(at / (tab.width + row.spacing))
@@ -151,24 +202,5 @@ Item {
             tooltip: qsTr("New tab")
             onClicked: strip.added()
         }
-    }
-
-    // Close the tab you are looking at, pinned to the strip's far end — the
-    // width of the whole strip away from the tabs, so nothing aimed at one can
-    // land on it.
-    //
-    // A minus rather than a cross: it is the answer to the plus beside the
-    // tabs, one fewer where that one is one more, and a cross at the right end
-    // of a panel's header would read as closing the panel.
-    IconButton {
-        id: closeCurrent
-        visible: !strip.fixed && strip.current >= 0
-        anchors { right: parent.right; verticalCenter: parent.verticalCenter }
-        implicitWidth: 22
-        implicitHeight: 22
-        glyphSize: 12
-        glyph: "minus"
-        tooltip: qsTr("Close tab")
-        onClicked: strip.closed(strip.current)
     }
 }
