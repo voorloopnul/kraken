@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Window
 import "../common"
 import "../settings"
 
@@ -304,6 +305,42 @@ Item {
     // ---- Wiring ---------------------------------------------------------------
 
     onVisibleChanged: if (visible) start()
+
+    // Chromium throws the page's last frame away while the window is off
+    // screen, and hands the surface back empty when it returns. A page with
+    // something happening on it paints another by itself; `about:blank` has
+    // nothing to paint, so the pane came back as a black rectangle and stayed
+    // one. Typing an address appeared to cure it, but only because a navigation
+    // makes a new frame — as does dragging the panel's edge, which is what
+    // proved the page was still there and merely unpainted.
+    //
+    // So the geometry is changed on purpose: a pixel of margin, given back a
+    // frame later. Cheaper than a reload, which would throw away a real page's
+    // scroll position to fix a blank one.
+    function repaint() {
+        if (!page)
+            return
+        page.anchors.bottomMargin = 1
+        restore.restart()
+    }
+
+    // Long enough to be laid out at the nudged size rather than coalesced away
+    // with the margin that takes it back.
+    Timer {
+        id: restore
+        interval: 32
+        onTriggered: if (panel.page) panel.page.anchors.bottomMargin = 0
+    }
+
+    // Coming back to the window is the moment a missing frame is about to be
+    // looked at.
+    Connections {
+        target: panel.Window.window
+        function onActiveChanged() {
+            if (panel.Window.window && panel.Window.window.active)
+                panel.repaint()
+        }
+    }
 
     function start() {
         if (!visible)
