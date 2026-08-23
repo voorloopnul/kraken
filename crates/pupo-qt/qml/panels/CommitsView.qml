@@ -19,7 +19,7 @@ Item {
         text: Git.message
         color: Git.message_color
         font.family: Theme.mono_family
-        font.pixelSize: 11
+        font.pixelSize: 13
         wrapMode: Text.Wrap
     }
 
@@ -57,7 +57,7 @@ Item {
                 textFormat: Text.RichText
                 text: row.modelData.html
                 font.family: Theme.mono_family
-                font.pixelSize: 11
+                font.pixelSize: 13
                 elide: Text.ElideRight
             }
 
@@ -112,7 +112,7 @@ Item {
             text: refused.message
             color: Theme.colors.text
             font.family: Theme.mono_family
-            font.pixelSize: 11
+            font.pixelSize: 13
         }
     }
 

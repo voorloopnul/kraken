@@ -29,7 +29,7 @@ Item {
             textFormat: Text.RichText
             text: Diff.summary
             font.family: Theme.mono_family
-            font.pixelSize: 11
+            font.pixelSize: 13
             wrapMode: Text.Wrap
         }
 
@@ -60,7 +60,7 @@ Item {
                     text: row.modelData.letter
                     color: row.modelData.letter_color
                     font.family: Theme.mono_family
-                    font.pixelSize: 11
+                    font.pixelSize: 13
                     font.weight: Font.DemiBold
                 }
 
@@ -73,7 +73,7 @@ Item {
                     text: row.modelData.path
                     color: row.modelData.path_color
                     font.family: Theme.mono_family
-                    font.pixelSize: 11
+                    font.pixelSize: 13
                     // Eat into the leading directories: a path's tail is the
                     // informative end, and hiding the filename hides the row.
                     elide: Text.ElideLeft
@@ -90,13 +90,13 @@ Item {
                         text: row.modelData.adds
                         color: row.modelData.adds_color
                         font.family: Theme.mono_family
-                        font.pixelSize: 11
+                        font.pixelSize: 13
                     }
                     Text {
                         text: row.modelData.dels
                         color: row.modelData.dels_color
                         font.family: Theme.mono_family
-                        font.pixelSize: 11
+                        font.pixelSize: 13
                     }
                 }
 

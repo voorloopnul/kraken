@@ -220,7 +220,7 @@ Item {
                 text: row.modelData.name
                 color: row.selected ? Theme.colors.accent_text : row.kindColor
                 font.family: Theme.sans_family
-                font.pixelSize: 11
+                font.pixelSize: 13
                 // A symlink is worth saying so in the one way that costs no
                 // room: the name leans.
                 font.italic: row.modelData.symlink
@@ -236,7 +236,7 @@ Item {
                 text: row.modelData.size_label
                 color: Files.dim_color
                 font.family: Theme.mono_family
-                font.pixelSize: 10
+                font.pixelSize: 12
             }
 
             // What a drag out of the panel carries. `Drag.Automatic` is what
