@@ -16,7 +16,7 @@ Rectangle {
     property color titleColor
     property color subtitleColor
 
-    height: rowText.implicitHeight + 24
+    height: rowText.implicitHeight + 12
     radius: 6
     color: modelData.selected ? Theme.colors.accent_soft
          : rowMouse.containsMouse ? Theme.colors.hover
@@ -28,7 +28,7 @@ Rectangle {
         id: dot
         anchors {
             left: parent.left
-            leftMargin: pinMark.visible ? 24 : 6
+            leftMargin: pinMark.visible ? 22 : 5
             verticalCenter: parent.verticalCenter
         }
         width: 8; height: 8; radius: 4
@@ -42,7 +42,7 @@ Rectangle {
     Image {
         id: pinMark
         visible: row.modelData.pinned
-        anchors { left: parent.left; leftMargin: 6; verticalCenter: parent.verticalCenter }
+        anchors { left: parent.left; leftMargin: 5; verticalCenter: parent.verticalCenter }
         width: 14
         height: 14
         // Rendered at twice the logical size so the strokes stay clean where
@@ -58,12 +58,12 @@ Rectangle {
             left: parent.left
             right: parent.right
             verticalCenter: parent.verticalCenter
-            // Clear of whichever markers are showing: 10 on its own, plus the
+            // Clear of whichever markers are showing: 8 on its own, plus the
             // room the pin and the dot each take when they are there.
-            leftMargin: 10 + (pinMark.visible ? 18 : 0) + (dot.visible ? 10 : 0)
-            rightMargin: 10
+            leftMargin: 8 + (pinMark.visible ? 18 : 0) + (dot.visible ? 10 : 0)
+            rightMargin: 8
         }
-        spacing: 2
+        spacing: 1
 
         Text {
             width: parent.width
@@ -71,6 +71,7 @@ Rectangle {
             color: row.modelData.selected ? Theme.colors.accent_text : row.titleColor
             font.family: Theme.sans_family
             font.pixelSize: 14
+            lineHeight: 1.15
             wrapMode: Text.Wrap
             maximumLineCount: 2
             elide: Text.ElideRight

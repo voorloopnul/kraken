@@ -20,13 +20,13 @@ Rectangle {
 
     Column {
         anchors.fill: parent
-        anchors.margins: 12
-        spacing: 10
+        anchors.margins: 8
+        spacing: 6
 
         Rectangle {
             id: newButton
             width: parent.width
-            height: 30
+            height: 28
             radius: 6
             color: newMouse.containsMouse ? Theme.colors.hover : Theme.colors.header
             border.width: 1
@@ -71,7 +71,7 @@ Rectangle {
             // sessions must not push the recent ones off the bottom.
             height: Math.min(contentHeight, panel.height / 3)
             clip: true
-            spacing: 2
+            spacing: 1
             model: History.pinned
             boundsBehavior: Flickable.StopAtBounds
 
@@ -106,7 +106,7 @@ Rectangle {
                     - (pinnedList.visible ? pinnedList.height + parent.spacing : 0)
                     - (recentsLabel.visible ? recentsLabel.height + parent.spacing : 0)
             clip: true
-            spacing: 2
+            spacing: 1
             model: History.sessions
             boundsBehavior: Flickable.StopAtBounds
 
