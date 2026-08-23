@@ -263,7 +263,7 @@ mod tests {
     fn every_icon_the_chrome_asks_for_is_vendored() {
         let icons = icons();
         for name in [
-            "square-terminal", "globe", "diff", "git-branch", "camera", "settings",
+            "square-terminal", "globe", "git-branch", "camera", "settings",
             "sun", "moon", "power", "plus", "minus", "x", "square", "copy",
             "search", "panel-left", "arrow-left", "ellipsis", "maximize-2",
             "minimize-2", "folder", "folder-open", "folder-tree", "file",

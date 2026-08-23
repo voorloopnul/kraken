@@ -2,7 +2,8 @@ import QtQuick
 import QtQuick.Controls
 import "../common"
 
-// The columns, the dividers between them, and the drop indicator over the lot.
+// The columns, the dividers between them, the seams inside the stacked ones,
+// and the drop indicator over the lot.
 //
 // The arrangement is `Dock`'s (in Rust); this lays it out and reports back
 // where everything landed. Panels are built once and kept: a panel that was
@@ -147,6 +148,26 @@ Item {
                 readonly property int paintedWidth:
                     dock.fitted[index] !== undefined ? dock.fitted[index] : userWidth
 
+                // The share of the column its top panel takes, when two are
+                // stacked in it. Held here while a drag on the seam is in
+                // flight, the way `userWidth` is, and written back on release.
+                property real split: DockModel.column_split(modelData[0])
+
+                // Where the panels sit, and the bands the divider beside them
+                // is painted from. Both are recomputed rather than derived in
+                // QML so that one description of a split column serves the
+                // layout and the paint, and neither can drift from the other.
+                readonly property var rows: JSON.parse(DockModel.stack_rows(
+                    height, split, modelData.length, dock.dividerWidth))
+                readonly property var bands: JSON.parse(DockModel.stack_bands(
+                    height, split, modelData.length, dock.dividerWidth))
+
+                // A row or band the numbers have not caught up with is nothing
+                // at all rather than an error: the panels and the arithmetic
+                // describing them are separate bindings, and for an instant
+                // after a re-dock only one of the two has been re-evaluated.
+                function slot(list, at) { return list[at] || [0, 0] }
+
                 width: isStretch ? dock.stretchWidth : paintedWidth
                 height: parent.height
 
@@ -156,55 +177,140 @@ Item {
 
                 onWidthChanged: Qt.callLater(dock.reportGeometry)
 
-                Column {
-                    anchors.fill: parent
-                    spacing: 0
+                // Laid out by hand rather than by a Column positioner: the
+                // seam between two stacked panels has to be placed against the
+                // same numbers the panels are, and a positioner would only hand
+                // back positions it had already decided on its own.
+                Repeater {
+                    model: column.modelData
+                    delegate: DockPanel {
+                        required property var modelData
+                        required property int index
+                        key: modelData
+                        title: dock.titles[modelData] || modelData
+                        draggable: dock.anchored.indexOf(modelData) < 0
+                        dragging: DockModel.dragging === modelData
+                        width: column.width
+                        y: column.slot(column.rows, index)[0]
+                        height: column.slot(column.rows, index)[1]
 
-                    Repeater {
-                        model: column.modelData
-                        delegate: DockPanel {
-                            required property var modelData
-                            key: modelData
-                            title: dock.titles[modelData] || modelData
-                            draggable: dock.anchored.indexOf(modelData) < 0
-                            dragging: DockModel.dragging === modelData
-                            width: column.width
-                            // A stacked column splits its height evenly.
-                            height: column.height / column.modelData.length
+                        onDragStarted: function (pos) {
+                            DockModel.begin_drag(key, pos.x, pos.y)
+                        }
+                        onDragMoved: function (pos) {
+                            const local = dock.mapFromGlobal(pos.x, pos.y)
+                            DockModel.update_drag(local.x, local.y)
+                        }
+                        onDragEnded: function (pos) {
+                            const local = dock.mapFromGlobal(pos.x, pos.y)
+                            DockModel.end_drag(local.x, local.y)
+                        }
 
-                            onDragStarted: function (pos) {
-                                DockModel.begin_drag(key, pos.x, pos.y)
+                        // Adopting a panel is a reparent, never a rebuild:
+                        // a panel destroyed and recreated on every re-dock
+                        // would lose its terminals, its browser and its
+                        // scroll position.
+                        Component.onCompleted: adopt()
+                        onKeyChanged: adopt()
+
+                        function adopt() {
+                            const content = dock.panels[key]
+                            if (!content)
+                                return
+                            content.parent = contentArea
+                            content.anchors.fill = contentArea
+                            // A panel that carries tabs hands them up into
+                            // the header, so it wears one strip rather than
+                            // a title bar with a second bar under it.
+                            headerTabs = content.tabStrip !== undefined
+                                         ? content.tabStrip : null
+                            headerTools = content.headerTools !== undefined
+                                          ? content.headerTools : null
+                        }
+                    }
+                }
+
+                // The seam between two stacked panels, and the grip that moves
+                // it. Unlike the divider between columns this one takes room of
+                // its own: the panel below a seam opens with its header strip,
+                // and a band painted over the top of that strip would cut it in
+                // two.
+                //
+                // It runs the column's full width and is declared before the
+                // divider, so where the two cross the divider is the one that
+                // paints — the gutter between columns reads as continuous, and
+                // the seam stops at it.
+                Repeater {
+                    model: Math.max(0, column.modelData.length - 1)
+
+                    delegate: Item {
+                        id: seam
+                        required property int index
+
+                        y: column.slot(column.rows, index)[0]
+                           + column.slot(column.rows, index)[1]
+                        width: column.width
+                        height: dock.dividerWidth
+
+                        // The half above is the panel above it; the half below
+                        // is the top of that panel's header strip, which is a
+                        // shade off its surface. One colour for both would put
+                        // a band of the wrong shade against whichever lost.
+                        Rectangle {
+                            anchors { left: parent.left; right: parent.right; top: parent.top }
+                            height: dock.dividerWidth / 2
+                            color: dock.surfaceOf(column.modelData[seam.index])
+                        }
+
+                        Rectangle {
+                            anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+                            height: dock.dividerWidth - dock.dividerWidth / 2
+                            color: Theme.colors.header
+                        }
+
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: parent.width
+                            height: 1
+                            color: Theme.colors.card_border
+                        }
+
+                        // The same wider grab area the column dividers get: a
+                        // five-pixel target is a hairline to aim at.
+                        MouseArea {
+                            anchors.fill: parent
+                            anchors.topMargin: -3
+                            anchors.bottomMargin: -3
+                            cursorShape: Qt.SplitVCursor
+
+                            property real pressY: 0
+                            property int startAbove: 0
+                            property int startBelow: 0
+
+                            onPressed: function (mouse) {
+                                pressY = mapToItem(column, 0, mouse.y).y
+                                startAbove = column.slot(column.rows, seam.index)[1]
+                                startBelow = column.slot(column.rows, seam.index + 1)[1]
                             }
-                            onDragMoved: function (pos) {
-                                const local = dock.mapFromGlobal(pos.x, pos.y)
-                                DockModel.update_drag(local.x, local.y)
-                            }
-                            onDragEnded: function (pos) {
-                                const local = dock.mapFromGlobal(pos.x, pos.y)
-                                DockModel.end_drag(local.x, local.y)
-                            }
 
-                            // Adopting a panel is a reparent, never a rebuild:
-                            // a panel destroyed and recreated on every re-dock
-                            // would lose its terminals, its browser and its
-                            // scroll position.
-                            Component.onCompleted: adopt()
-                            onKeyChanged: adopt()
-
-                            function adopt() {
-                                const content = dock.panels[key]
-                                if (!content)
+                            onPositionChanged: function (mouse) {
+                                if (!pressed)
                                     return
-                                content.parent = contentArea
-                                content.anchors.fill = contentArea
-                                // A panel that carries tabs hands them up into
-                                // the header, so it wears one strip rather than
-                                // a title bar with a second bar under it.
-                                headerTabs = content.tabStrip !== undefined
-                                             ? content.tabStrip : null
-                                headerTools = content.headerTools !== undefined
-                                              ? content.headerTools : null
+                                const travel = mapToItem(column, 0, mouse.y).y - pressY
+                                const floor = DockModel.min_panel_height()
+                                const step = DockModel.resize_step(
+                                    travel, startAbove, floor, startBelow, floor)
+                                // A share rather than a height: the column is
+                                // resized by the window and by every divider
+                                // beside it, and a stored height would have to
+                                // be corrected after each of them.
+                                const total = startAbove + startBelow
+                                if (total > 0)
+                                    column.split = (startAbove + step) / total
                             }
+
+                            onReleased: DockModel.set_column_split(
+                                column.modelData[0], column.split)
                         }
                     }
                 }
@@ -245,30 +351,37 @@ Item {
                         DockModel.resizable(leftKey)
                         || (rightKey !== "" && DockModel.resizable(rightKey))
 
+                    // The column on the right splits its height its own way,
+                    // so its bands are asked for separately rather than read
+                    // off a sibling delegate a Repeater may not have built yet.
+                    readonly property var rightBands: JSON.parse(
+                        DockModel.stack_bands(divider.height,
+                                              DockModel.column_split(rightKey),
+                                              rightKeys.length,
+                                              dock.dividerWidth))
+
                     Repeater {
                         model: column.modelData
                         delegate: Rectangle {
                             required property var modelData
                             required property int index
                             x: 0
-                            y: index * (parent.height / column.modelData.length)
+                            y: column.slot(column.bands, index)[0]
                             width: dock.dividerWidth / 2
-                            height: parent.height / column.modelData.length
+                            height: column.slot(column.bands, index)[1]
                             color: dock.surfaceOf(modelData)
                         }
                     }
 
                     Repeater {
-                        model: DockModel.columns[column.index + 1] || []
+                        model: divider.rightKeys
                         delegate: Rectangle {
                             required property var modelData
                             required property int index
-                            readonly property int rows:
-                                (DockModel.columns[column.index + 1] || []).length
                             x: dock.dividerWidth / 2
-                            y: index * (parent.height / Math.max(1, rows))
+                            y: column.slot(divider.rightBands, index)[0]
                             width: dock.dividerWidth - x
-                            height: parent.height / Math.max(1, rows)
+                            height: column.slot(divider.rightBands, index)[1]
                             color: dock.surfaceOf(modelData)
                         }
                     }

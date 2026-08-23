@@ -1,154 +1,85 @@
 import QtQuick
-import QtQuick.Controls
 import "../common"
 
-// The Git pane: the repo's commit graph, newest first.
+// The Git pane: what has changed, and what has been committed.
 //
-// Each row arrives from the bridge as one piece of rich text, because a row is
-// not one colour — the hash is tinted for whether the commit is on the main line
-// and the graph columns are not, and a per-row layout here would have to know
-// that rule a second time.
+// Two views of one repository, so one panel with two tabs rather than two
+// panels side by side. They answer the same question a minute apart — what the
+// agent has been doing, and what of it has landed — and a workspace holding
+// both open paid a whole column for the half nobody was reading.
+//
+// The views are built once and switched by visibility, which is also what makes
+// them refresh: each re-reads git when it comes into view, so the one behind
+// runs no subprocess and the one in front is never stale. See ChangesView and
+// CommitsView, which is where all the actual pane is.
 Item {
     id: panel
 
+    // Both mount into the dock's panel header rather than sitting under it; see
+    // DockPanel.qml. The strip is the panel's title as well as its switch.
+    property Item tabStrip: strip
     property Item headerTools: tools
 
+    // Which view is up, by tab id.
+    property int current: 0
+
+    readonly property int changesTab: 0
+    readonly property int commitsTab: 1
+
     Item {
-        id: toolsHolder
+        id: chrome
         visible: false
 
-        // See DiffPanel: a character, because the icon set has no reload glyph.
+        TabStrip {
+            id: strip
+            // Two views the panel has always had, not tabs anyone opened: there
+            // is nothing to close, nothing to add and no order to put them in.
+            fixed: true
+            tabs: [
+                { id: panel.changesTab, title: qsTr("Changes") },
+                { id: panel.commitsTab, title: qsTr("Commits") }
+            ]
+            current: panel.current
+            onSelected: function (id) { panel.current = id }
+        }
+
+        // One Refresh for both views, because there is one repository behind
+        // them. Which command that means is the view's business.
+        //
+        // A character rather than an icon: the vendored Lucide set has no
+        // reload glyph, and a rotated arrow from it points somewhere and so
+        // says something else.
         TextButton {
             id: tools
             text: "↻"
             fontSize: 14
             tooltip: qsTr("Refresh")
-            onClicked: Git.refresh()
+            onClicked: panel.current === panel.changesTab ? Diff.refresh()
+                                                          : Git.refresh()
         }
     }
 
-    // Nothing to graph: no commits yet, or not a repository at all.
-    Text {
-        anchors { fill: parent; margins: 12 }
-        visible: Git.message !== ""
-        text: Git.message
-        color: Git.message_color
-        font.family: Theme.mono_family
-        font.pixelSize: 11
-        wrapMode: Text.Wrap
+    ChangesView {
+        anchors.fill: parent
+        visible: panel.current === panel.changesTab
     }
 
-    ListView {
-        id: list
-        anchors { fill: parent; margins: 10 }
-        visible: Git.message === ""
-        clip: true
-        model: Git.rows
-        boundsBehavior: Flickable.StopAtBounds
-
-        ScrollBar.vertical: ThinScrollBar {}
-
-        delegate: Rectangle {
-            id: row
-            required property var modelData
-            required property int index
-
-            // A pure graph line like `|/` carries no commit, so there is
-            // nothing on it to hover, click or copy.
-            readonly property bool actionable: modelData.short_hash !== ""
-
-            width: list.width
-            height: 17
-            radius: 4
-            color: (rowMouse.containsMouse && actionable) ? Theme.colors.hover
-                                                          : "transparent"
-
-            Text {
-                anchors {
-                    left: parent.left; right: parent.right
-                    leftMargin: 4; rightMargin: 12
-                    verticalCenter: parent.verticalCenter
-                }
-                textFormat: Text.RichText
-                text: row.modelData.html
-                font.family: Theme.mono_family
-                font.pixelSize: 11
-                elide: Text.ElideRight
-            }
-
-            MouseArea {
-                id: rowMouse
-                anchors.fill: parent
-                hoverEnabled: true
-                enabled: row.actionable
-                acceptedButtons: Qt.RightButton
-                cursorShape: Qt.ArrowCursor
-                onClicked: rowMenu.popup()
-
-                ToolTipLabel {
-                    text: row.modelData.tooltip
-                    visible: rowMouse.containsMouse && row.modelData.tooltip !== ""
-                }
-            }
-
-            Menu {
-                id: rowMenu
-                MenuItem {
-                    text: qsTr("Copy hash")
-                    onTriggered: clipboard.copy(row.modelData.full_hash)
-                }
-                MenuItem {
-                    text: qsTr("Check out")
-                    onTriggered: Git.checkout(row.modelData.short_hash)
-                }
-            }
-        }
-    }
-
-    Clipboard { id: clipboard }
-
-    // git refused the checkout — its own words, not a summary of them.
-    Dialog {
-        id: refused
-        property string message
-        parent: Overlay.overlay
-        anchors.centerIn: parent
-        modal: true
-        title: qsTr("Checkout failed")
-        standardButtons: Dialog.Ok
-        // Sized here rather than by its content: a Dialog takes its implicit
-        // width from what it holds, and content measured back off the dialog
-        // closes that into a loop.
-        implicitWidth: 420
-
-        Text {
-            width: parent.width
-            wrapMode: Text.Wrap
-            text: refused.message
-            color: Theme.colors.text
-            font.family: Theme.mono_family
-            font.pixelSize: 11
-        }
+    CommitsView {
+        anchors.fill: parent
+        visible: panel.current === panel.commitsTab
     }
 
     // ---- Wiring ---------------------------------------------------------------
 
-    onVisibleChanged: if (visible) Git.refresh()
-
+    // Both bridges read the same repository, so they are pointed at it once
+    // here rather than twice over in the views.
+    Binding { target: Diff; property: "workspace"; value: App.current }
     Binding { target: Git; property: "workspace"; value: App.current }
-    Binding { target: Git; property: "theme"; value: Theme.name }
-
-    Connections {
-        target: Git
-        function onCheckout_failed(message) {
-            refused.message = message
-            refused.open()
-        }
-        function onBranch_changed() { if (panel.visible) Git.refresh() }
-    }
 
     // HEAD can move from under us — a checkout in the terminal is the usual way
-    // — so it is re-read while the pane is up. Cheap: one small file.
+    // — so it is re-read while the panel is up, whichever view is showing:
+    // both of them answer a different question once HEAD has moved. Cheap: one
+    // small file.
     Timer {
         interval: 3000
         repeat: true

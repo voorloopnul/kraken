@@ -79,7 +79,7 @@ Item {
                 }
             }
 
-            // See DiffPanel: a character, because the icon set has no reload
+            // See GitPanel: a character, because the icon set has no reload
             // glyph.
             TextButton {
                 text: "↻"

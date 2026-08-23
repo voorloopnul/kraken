@@ -9,6 +9,10 @@
 //! number of side-panel columns; once that cap is reached, a newly shown panel
 //! fills the columns from right to left instead of making the workspace wider.
 //!
+//! Every boundary between two panels can be dragged: the divider between two
+//! columns moves width from one to the other, and the seam inside a stacked
+//! column moves height the same way.
+//!
 //! Only the *arrangement* lives here. The view reads this model and reparents
 //! the real panels, so a panel's own state — terminals, a browser, transcripts —
 //! survives a move untouched, and every rule below is testable without a
@@ -24,8 +28,9 @@ pub fn preferred_width(key: &str) -> i32 {
         "center" => 700,
         "browser" => 480,
         "files" => 300,
-        "diff" => 380,
-        "git" => 360,
+        // Wide enough for a changed file's path with its counts beside it,
+        // which is the wider of the two views the pane holds.
+        "git" => 380,
         "right" => 460,
         _ => 400,
     }
@@ -57,8 +62,10 @@ pub fn is_resizable(key: &str) -> bool {
     key != "left" && key != "center"
 }
 
-/// One side of a divider, as far as a drag is concerned: how wide it is now and
-/// how narrow it may get.
+/// One side of a divider, as far as a drag is concerned: how much room it has
+/// now and how little it may be left with. Widths for a divider between two
+/// columns, heights for the seam between two stacked panels: the arithmetic a
+/// drag obeys is the same either way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Side {
     pub width: i32,
@@ -74,12 +81,11 @@ impl Side {
 
 /// How far a divider actually moves when it is dragged `travel` pixels.
 ///
-/// A divider moves the boundary between the two columns it sits between, and
-/// the rule is the same whichever they are: to move right, the side on the
-/// right must give up that much width; to move left, the side on the left must.
-/// Whichever side is the conversation gives and takes through the stretch
-/// column instead of a width of its own, because that is the column with no
-/// stored width to change.
+/// A divider moves the boundary between the two panes it sits between, and the
+/// rule is the same whichever they are: to move towards a side, that side must
+/// give up that much room. Whichever side is the conversation gives and takes
+/// through the stretch column instead of a width of its own, because that is
+/// the column with no stored width to change.
 ///
 /// Getting this wrong is not obvious on screen — a divider that will not widen
 /// looks like a divider that is simply stuck — so the arithmetic lives here,
@@ -146,6 +152,77 @@ pub fn fit_columns(available: i32, stretch_min: i32, columns: &[Side]) -> Vec<i3
     (0..columns.len())
         .map(|i| pinned[i].unwrap_or(columns[i].width))
         .collect()
+}
+
+/// The shortest a stacked panel may be dragged to.
+///
+/// A panel is its header strip plus whatever it holds; much under this and the
+/// strip is nearly all that is left, which is a panel nobody can read and only
+/// a drag back can undo.
+pub const MIN_PANEL_HEIGHT: i32 = 120;
+
+/// The share of a stacked column the panel on top takes until someone drags
+/// the seam between them.
+pub const DEFAULT_SPLIT: f64 = 0.5;
+
+/// How the panels stacked in one column divide its height: `(y, height)` each,
+/// top to bottom, with `gap` pixels left between them for the seam.
+///
+/// `fraction` is the share of the room the top panel takes. Both floors are
+/// honoured until the column is too short to honour both at once, at which
+/// point it splits evenly: neither panel can have what it wants, and pushing
+/// one of them off the bottom edge would not change that.
+pub fn stack_rows(height: i32, fraction: f64, count: usize, gap: i32) -> Vec<(i32, i32)> {
+    let mut y = 0;
+    let mut rows = Vec::with_capacity(count);
+    for panel in split_heights(height - gap * (count as i32 - 1).max(0), fraction, count) {
+        rows.push((y, panel));
+        y += panel + gap;
+    }
+    rows
+}
+
+/// The same column cut across each seam instead of stopping short of it:
+/// `(y, height)` per panel, with no gap left between one band and the next.
+///
+/// This is what a strip running down the column's side — the gutter between two
+/// columns — is painted from. Painting it from [`stack_rows`] instead would
+/// leave the seam's own band unpainted, a notch of window colour in the gutter;
+/// cutting on the row the seam draws its hairline puts the change of surface
+/// exactly where the eye already sees a line.
+pub fn stack_bands(height: i32, fraction: f64, count: usize, gap: i32) -> Vec<(i32, i32)> {
+    let rows = stack_rows(height, fraction, count, gap);
+    // Where one band gives way to the next: the row the seam below it puts its
+    // hairline on, which is what centring a one-pixel line in the seam lands on.
+    let hairline = |i: usize| rows[i].0 + rows[i].1 + gap / 2;
+    (0..rows.len())
+        .map(|i| {
+            let top = if i == 0 { 0 } else { hairline(i - 1) };
+            let bottom = if i + 1 == rows.len() { height } else { hairline(i) };
+            (top, bottom - top)
+        })
+        .collect()
+}
+
+/// The heights themselves, with nothing set aside for the seams: `height` is
+/// what the panels have between them once the view has taken those out.
+fn split_heights(height: i32, fraction: f64, count: usize) -> Vec<i32> {
+    let height = height.max(0);
+    let fraction = if fraction.is_finite() { fraction } else { DEFAULT_SPLIT };
+    if count == 2 && height >= MIN_PANEL_HEIGHT * 2 {
+        let top = ((f64::from(height) * fraction).round() as i32)
+            .clamp(MIN_PANEL_HEIGHT, height - MIN_PANEL_HEIGHT);
+        return vec![top, height - top];
+    }
+    let count32 = i32::try_from(count).unwrap_or(1).max(1);
+    let each = height / count32;
+    let mut heights = vec![each; count];
+    // The rounding remainder goes on the last panel, so the parts still add up
+    // to the whole and the column has no unpainted strip along its bottom.
+    if let Some(last) = heights.last_mut() {
+        *last += height - each * count32;
+    }
+    heights
 }
 
 /// How many side columns fit, counted left to right, once the anchors have
@@ -652,7 +729,7 @@ mod tests {
     /// next to it, and at most three side columns beside them.
     fn workspace_dock() -> Dock {
         let mut dock = Dock::new(
-            &["left", "center", "browser", "diff", "git", "right"],
+            &["left", "center", "files", "browser", "git", "right"],
             "center",
             &["left"],
             &["center"],
@@ -678,11 +755,11 @@ mod tests {
     fn a_shown_panel_lands_where_the_canonical_order_puts_it() {
         let mut dock = workspace_dock();
         dock.show_panel("right");
-        dock.show_panel("diff");
-        // diff ranks before right, so it opens to the left of it.
+        dock.show_panel("files");
+        // files ranks before right, so it opens to the left of it.
         assert_eq!(
             keys(&dock),
-            vec![vec!["left"], vec!["center"], vec!["diff"], vec!["right"]]
+            vec![vec!["left"], vec!["center"], vec!["files"], vec!["right"]]
         );
     }
 
@@ -704,7 +781,7 @@ mod tests {
     #[test]
     fn past_the_side_column_cap_panels_stack_from_the_right() {
         let mut dock = workspace_dock();
-        for key in ["browser", "diff", "git"] {
+        for key in ["files", "browser", "git"] {
             dock.show_panel(key);
         }
         assert_eq!(dock.active_columns().len(), 5); // left, center, + three sides
@@ -716,8 +793,8 @@ mod tests {
             vec![
                 vec!["left"],
                 vec!["center"],
+                vec!["files"],
                 vec!["browser"],
-                vec!["diff"],
                 vec!["git", "right"],
             ]
         );
@@ -808,9 +885,9 @@ mod tests {
     fn a_column_will_not_take_a_third_panel() {
         let mut dock = workspace_dock();
         dock.show_panel("git");
-        dock.show_panel("diff");
+        dock.show_panel("files");
         dock.show_panel("right");
-        // Stack diff onto git, then try to add the terminal to the pair.
+        // Stack files onto git, then try to add the terminal to the pair.
         let rects = column_rects(&dock);
         let git_slot = dock
             .active_columns()
@@ -819,9 +896,9 @@ mod tests {
             .unwrap();
         let git = rects[git_slot];
         let target = dock
-            .hit_test("diff", git.x + git.width / 2.0, git.y + 10.0, &rects)
+            .hit_test("files", git.x + git.width / 2.0, git.y + 10.0, &rects)
             .expect("stacking onto git is allowed");
-        assert!(dock.apply_drop("diff", target));
+        assert!(dock.apply_drop("files", target));
         let rects = column_rects(&dock);
         let stacked = dock
             .active_columns()
@@ -920,7 +997,7 @@ mod tests {
 
     #[test]
     fn every_side_panel_can_be_dragged_and_stops_at_a_floor() {
-        for key in ["files", "browser", "diff", "git", "right"] {
+        for key in ["files", "browser", "git", "right"] {
             assert!(is_resizable(key), "{key} should be resizable");
             assert!(
                 min_width(key) <= preferred_width(key),
@@ -1072,5 +1149,79 @@ mod tests {
         // Both fall back to the default preferred width; no column grows to
         // fill, because none of them is the one that absorbs slack.
         assert_eq!(widths.iter().map(|(_, w)| *w).collect::<Vec<_>>(), vec![400.0, 400.0]);
+    }
+
+    #[test]
+    fn a_lone_panel_takes_the_whole_column() {
+        assert_eq!(stack_rows(800, 0.5, 1, 5), vec![(0, 800)]);
+        assert_eq!(stack_bands(800, 0.5, 1, 5), vec![(0, 800)]);
+    }
+
+    #[test]
+    fn a_stacked_column_gives_the_top_panel_its_share_and_the_seam_its_room() {
+        let rows = stack_rows(805, 0.5, 2, 5);
+        assert_eq!(rows, vec![(0, 400), (405, 400)]);
+        // The seam sits in the gap the rows leave, and nothing overlaps it.
+        assert_eq!(rows[0].0 + rows[0].1 + 5, rows[1].0);
+
+        let rows = stack_rows(805, 0.25, 2, 5);
+        assert_eq!(rows, vec![(0, 200), (205, 600)]);
+    }
+
+    #[test]
+    fn a_dragged_seam_stops_where_either_panel_reaches_its_floor() {
+        // Nothing the fraction says can push a panel under its floor.
+        let rows = stack_rows(805, 0.0, 2, 5);
+        assert_eq!(rows[0].1, MIN_PANEL_HEIGHT);
+        assert_eq!(rows[1].1, 800 - MIN_PANEL_HEIGHT);
+        let rows = stack_rows(805, 1.0, 2, 5);
+        assert_eq!(rows[1].1, MIN_PANEL_HEIGHT);
+    }
+
+    /// A column too short for both floors cannot satisfy either, and honouring
+    /// one of them would hang the other off the bottom of the window.
+    #[test]
+    fn a_column_shorter_than_both_floors_splits_evenly() {
+        let rows = stack_rows(105, 0.9, 2, 5);
+        assert_eq!(rows, vec![(0, 50), (55, 50)]);
+    }
+
+    #[test]
+    fn a_stored_split_that_is_not_a_number_falls_back_to_an_even_one() {
+        assert_eq!(stack_rows(805, f64::NAN, 2, 5), stack_rows(805, DEFAULT_SPLIT, 2, 5));
+    }
+
+    /// The gutter beside a stacked column is painted from these, so a band that
+    /// stopped where a panel does would leave the seam's own strip unpainted —
+    /// a notch of window colour down the side of the column.
+    #[test]
+    fn the_bands_beside_a_stacked_column_leave_no_strip_unpainted() {
+        for height in [200, 640, 805, 1000] {
+            let bands = stack_bands(height, 0.4, 2, 5);
+            assert_eq!(bands[0].0, 0);
+            assert_eq!(bands[0].0 + bands[0].1, bands[1].0, "a gap at {height}");
+            assert_eq!(bands[1].0 + bands[1].1, height, "short of the bottom at {height}");
+        }
+    }
+
+    #[test]
+    fn the_bands_change_over_where_the_seam_puts_its_hairline() {
+        let rows = stack_rows(805, 0.5, 2, 5);
+        let bands = stack_bands(805, 0.5, 2, 5);
+        // The seam runs from the bottom of the first row for `gap` pixels; the
+        // bands meet on the row its hairline is drawn at.
+        assert_eq!(bands[1].0, rows[0].0 + rows[0].1 + 5 / 2);
+    }
+
+    #[test]
+    fn the_rows_of_a_stacked_column_add_up_to_the_column() {
+        for height in [201, 640, 803, 1001] {
+            let rows = stack_rows(height, 0.37, 2, 5);
+            assert_eq!(
+                rows[1].0 + rows[1].1,
+                height,
+                "the rounding remainder went missing at {height}"
+            );
+        }
     }
 }

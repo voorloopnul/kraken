@@ -34,7 +34,6 @@ Rectangle {
                 { side: "files",   glyph: "folder-tree",     tip: qsTr("Files Panel") },
                 { side: "right",   glyph: "square-terminal", tip: qsTr("Terminal Panel") },
                 { side: "browser", glyph: "globe",           tip: qsTr("Browser Panel") },
-                { side: "diff",    glyph: "diff",            tip: qsTr("Diff Panel") },
                 { side: "git",     glyph: "git-branch",      tip: qsTr("Git Panel") }
             ]
             delegate: IconButton {

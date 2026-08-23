@@ -2,11 +2,11 @@ import QtQuick
 import QtQuick.Controls
 import "../common"
 
-// The Changes pane: what has changed in this workspace's repo since the last
-// commit, file by file.
+// The Changes tab of the Git pane: what has changed in this workspace's repo
+// since the last commit, file by file. GitPanel is what puts it on screen.
 //
 // One row per file with its own added and removed counts, not a split between
-// staged and unstaged — the question the pane answers is "what has the agent
+// staged and unstaged — the question the tab answers is "what has the agent
 // been doing", and a change that is half staged is still one change. Every row
 // is a click away from the full diff (see DiffViewer.qml).
 //
@@ -15,25 +15,6 @@ import "../common"
 // working that rule out twice is how the two copies of it drift.
 Item {
     id: panel
-
-    // Mounted into the dock's panel header; see DockPanel.qml.
-    property Item headerTools: tools
-
-    Item {
-        id: toolsHolder
-        visible: false
-
-        // A character rather than an icon: the vendored Lucide set has no
-        // reload glyph, and a rotated arrow from it points somewhere and so
-        // says something else.
-        TextButton {
-            id: tools
-            text: "↻"
-            fontSize: 14
-            tooltip: qsTr("Refresh")
-            onClicked: Diff.refresh()
-        }
-    }
 
     Column {
         anchors { fill: parent; margins: 10 }
@@ -159,15 +140,15 @@ Item {
     // ---- Wiring ---------------------------------------------------------------
 
     // Refreshed on first sight rather than on a timer: git is a subprocess (an
-    // SSH round trip on a remote workspace), and a pane nobody is looking at is
-    // not worth one.
+    // SSH round trip on a remote workspace), and a tab nobody is looking at is
+    // not worth one. Behind the Commits tab this is invisible and so silent,
+    // and coming back to it is what re-reads the repository.
     onVisibleChanged: if (visible) Diff.refresh()
 
-    Binding { target: Diff; property: "workspace"; value: App.current }
     Binding { target: Diff; property: "theme"; value: Theme.name }
 
     // A commit or a checkout changes what "since the last commit" means, so the
-    // pane's whole answer changes with HEAD.
+    // tab's whole answer changes with HEAD.
     Connections {
         target: Git
         function onBranch_changed() { if (panel.visible) Diff.refresh() }

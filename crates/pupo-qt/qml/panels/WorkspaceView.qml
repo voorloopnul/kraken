@@ -23,7 +23,6 @@ Rectangle {
         TerminalPanel { id: terminalPanel }
         FilesPanel { id: filesPanel }
         BrowserPanel { id: browserPanel }
-        DiffPanel { id: diffPanel }
         GitPanel { id: gitPanel }
     }
 
@@ -36,7 +35,6 @@ Rectangle {
             "right": terminalPanel,
             "files": filesPanel,
             "browser": browserPanel,
-            "diff": diffPanel,
             "git": gitPanel
         })
         titles: ({
@@ -45,7 +43,6 @@ Rectangle {
             "right": qsTr("Terminal"),
             "files": qsTr("Files"),
             "browser": qsTr("Browser"),
-            "diff": qsTr("Changes"),
             "git": qsTr("Git")
         })
     }
@@ -137,7 +134,7 @@ Rectangle {
     }
 
     function syncPanels() {
-        for (const side of ["left", "files", "browser", "diff", "git", "right"])
+        for (const side of ["left", "files", "browser", "git", "right"])
             DockModel.set_panel_visible(side, App.is_panel_visible(side))
     }
 

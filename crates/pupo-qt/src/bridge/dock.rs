@@ -19,7 +19,7 @@ use serde_json::Value;
 /// refuses stacking, but columns may open on either side of it. At most three
 /// side-panel columns sit beside the conversation; later toggles stack into
 /// those columns from right to left.
-const ORDER: [&str; 7] = ["left", "center", "files", "browser", "diff", "git", "right"];
+const ORDER: [&str; 6] = ["left", "center", "files", "browser", "git", "right"];
 const FIXED: [&str; 1] = ["left"];
 const NO_STACK: [&str; 1] = ["center"];
 const MAX_SIDE_COLUMNS: usize = 3;
@@ -57,6 +57,22 @@ pub struct DockModel {
     resizable: qt_method!(fn(&self, key: QString) -> bool),
     /// Take a width from a finished drag and remember it.
     set_column_width: qt_method!(fn(&mut self, key: QString, width: i32)),
+    /// The share of a stacked column its top panel takes, and the setter a
+    /// finished drag on the seam calls. A column is named by the panel on top
+    /// of it, the same key `column_width` uses.
+    column_split: qt_method!(fn(&self, key: QString) -> f64),
+    set_column_split: qt_method!(fn(&mut self, key: QString, fraction: f64)),
+    /// The shortest a panel in a stack may be dragged to.
+    min_panel_height: qt_method!(fn(&self) -> i32),
+    /// Where the panels stacked in one column sit, and the bands the gutter
+    /// beside them is painted from: `[[y, height], ...]` as JSON, for the same
+    /// reason `fit_columns` answers in JSON.
+    stack_rows: qt_method!(
+        fn(&self, height: i32, fraction: f64, count: i32, gap: i32) -> QString
+    ),
+    stack_bands: qt_method!(
+        fn(&self, height: i32, fraction: f64, count: i32, gap: i32) -> QString
+    ),
     /// How far a divider actually moves when dragged, given what the columns on
     /// either side can give. The rule itself is in `pupo_core::dock`.
     resize_step: qt_method!(
@@ -93,6 +109,9 @@ pub struct DockModel {
     /// Column widths the user has dragged to, by panel key. A key that is
     /// absent has never been dragged and falls back to its preferred width.
     widths: HashMap<String, i32>,
+    /// The same, for the seam in a stacked column: the share the top panel
+    /// takes, by that panel's key.
+    splits: HashMap<String, f64>,
 }
 
 impl Default for DockModel {
@@ -129,6 +148,11 @@ impl DockModel {
             min_width: Default::default(),
             resizable: Default::default(),
             set_column_width: Default::default(),
+            column_split: Default::default(),
+            set_column_split: Default::default(),
+            min_panel_height: Default::default(),
+            stack_rows: Default::default(),
+            stack_bands: Default::default(),
             resize_step: Default::default(),
             fit_columns: Default::default(),
             panels_that_do_not_fit: Default::default(),
@@ -143,6 +167,7 @@ impl DockModel {
             drag_active: false,
             target: None,
             widths: load_widths(),
+            splits: load_splits(),
         }
     }
 
@@ -262,6 +287,48 @@ impl DockModel {
         }
         self.widths.insert(key, width);
         save_widths(&self.widths);
+    }
+
+    fn column_split(&self, key: QString) -> f64 {
+        self.splits
+            .get(&key.to_string())
+            .copied()
+            .unwrap_or(pupo_core::dock::DEFAULT_SPLIT)
+    }
+
+    fn set_column_split(&mut self, key: QString, fraction: f64) {
+        if !fraction.is_finite() {
+            return;
+        }
+        let fraction = fraction.clamp(0.0, 1.0);
+        let key = key.to_string();
+        if self.splits.get(&key) == Some(&fraction) {
+            return;
+        }
+        self.splits.insert(key, fraction);
+        save_splits(&self.splits);
+    }
+
+    fn min_panel_height(&self) -> i32 {
+        pupo_core::dock::MIN_PANEL_HEIGHT
+    }
+
+    fn stack_rows(&self, height: i32, fraction: f64, count: i32, gap: i32) -> QString {
+        rows_json(pupo_core::dock::stack_rows(
+            height,
+            fraction,
+            count.max(0) as usize,
+            gap,
+        ))
+    }
+
+    fn stack_bands(&self, height: i32, fraction: f64, count: i32, gap: i32) -> QString {
+        rows_json(pupo_core::dock::stack_bands(
+            height,
+            fraction,
+            count.max(0) as usize,
+            gap,
+        ))
     }
 
     fn resize_step(
@@ -425,10 +492,35 @@ fn load_widths() -> HashMap<String, i32> {
         .collect()
 }
 
+fn rows_json(rows: Vec<(i32, i32)>) -> QString {
+    let rows: Vec<[i32; 2]> = rows.into_iter().map(|(y, height)| [y, height]).collect();
+    QString::from(serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into()))
+}
+
 fn save_widths(widths: &HashMap<String, i32>) {
     let map = widths
         .iter()
         .map(|(key, width)| (key.clone(), Value::from(*width)))
         .collect();
     state::set(WIDTHS_KEY, Value::Object(map));
+}
+
+/// The seams in stacked columns, kept beside the widths and for the same
+/// reason: how someone wants the terminal and the git log divided is a fact
+/// about those panels, not about the project open in front of them.
+const SPLITS_KEY: &str = "panel_splits";
+
+fn load_splits() -> HashMap<String, f64> {
+    state::object(SPLITS_KEY)
+        .into_iter()
+        .filter_map(|(key, value)| Some((key, value.as_f64()?)))
+        .collect()
+}
+
+fn save_splits(splits: &HashMap<String, f64>) {
+    let map = splits
+        .iter()
+        .map(|(key, fraction)| (key.clone(), Value::from(*fraction)))
+        .collect();
+    state::set(SPLITS_KEY, Value::Object(map));
 }
