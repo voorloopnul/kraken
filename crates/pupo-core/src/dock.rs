@@ -726,14 +726,14 @@ mod tests {
     use super::*;
 
     /// The workspace's own dock: History anchored far left, the conversation
-    /// next to it, and at most three side columns beside them.
+    /// next to it, and at most two side columns beside them.
     fn workspace_dock() -> Dock {
         let mut dock = Dock::new(
             &["left", "center", "files", "browser", "git", "right"],
             "center",
             &["left"],
             &["center"],
-            Some(3),
+            Some(2),
         );
         dock.set_layout(&[&["left"], &["center"]]);
         dock
@@ -781,21 +781,31 @@ mod tests {
     #[test]
     fn past_the_side_column_cap_panels_stack_from_the_right() {
         let mut dock = workspace_dock();
-        for key in ["files", "browser", "git"] {
+        for key in ["files", "browser"] {
             dock.show_panel(key);
         }
-        assert_eq!(dock.active_columns().len(), 5); // left, center, + three sides
-        dock.show_panel("right");
-        // No fourth side column: the terminal stacks into the rightmost one
-        // that will take it.
+        assert_eq!(dock.active_columns().len(), 4); // left, center, + two sides
+        dock.show_panel("git");
+        // No third side column: git stacks into the rightmost one that will
+        // take it.
         assert_eq!(
             keys(&dock),
             vec![
                 vec!["left"],
                 vec!["center"],
                 vec!["files"],
-                vec!["browser"],
-                vec!["git", "right"],
+                vec!["browser", "git"],
+            ]
+        );
+        // And the next one fills the only remaining space, on the left.
+        dock.show_panel("right");
+        assert_eq!(
+            keys(&dock),
+            vec![
+                vec!["left"],
+                vec!["center"],
+                vec!["files", "right"],
+                vec!["browser", "git"],
             ]
         );
     }
@@ -886,7 +896,6 @@ mod tests {
         let mut dock = workspace_dock();
         dock.show_panel("git");
         dock.show_panel("files");
-        dock.show_panel("right");
         // Stack files onto git, then try to add the terminal to the pair.
         let rects = column_rects(&dock);
         let git_slot = dock
@@ -899,6 +908,9 @@ mod tests {
             .hit_test("files", git.x + git.width / 2.0, git.y + 10.0, &rects)
             .expect("stacking onto git is allowed");
         assert!(dock.apply_drop("files", target));
+        // The pair leaves room for one more side column, so the terminal opens
+        // its own rather than stacking.
+        dock.show_panel("right");
         let rects = column_rects(&dock);
         let stacked = dock
             .active_columns()

@@ -16,13 +16,13 @@ use serde_json::Value;
 ///
 /// History is a fixed anchor on the far left: nothing may stack with it and no
 /// column may open to its left. The conversation is also un-draggable and
-/// refuses stacking, but columns may open on either side of it. At most three
+/// refuses stacking, but columns may open on either side of it. At most two
 /// side-panel columns sit beside the conversation; later toggles stack into
 /// those columns from right to left.
 const ORDER: [&str; 6] = ["left", "center", "files", "browser", "git", "right"];
 const FIXED: [&str; 1] = ["left"];
 const NO_STACK: [&str; 1] = ["center"];
-const MAX_SIDE_COLUMNS: usize = 3;
+const MAX_SIDE_COLUMNS: usize = 2;
 
 #[derive(QObject)]
 pub struct DockModel {
