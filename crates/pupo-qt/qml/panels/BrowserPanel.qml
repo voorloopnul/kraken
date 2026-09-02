@@ -84,13 +84,31 @@ Item {
                 id: address
                 anchors {
                     left: back.right; leftMargin: 6
-                    right: parent.right
+                    right: camera.left; rightMargin: 6
                     verticalCenter: parent.verticalCenter
                 }
                 width: undefined
                 placeholderText: qsTr("Search, or type a URL")
                 text: Browser.url
                 onAccepted: Browser.open_url(text)
+            }
+
+            // A picture of the page, into the conversation. It sits with the
+            // page it captures rather than in the window's side strip: from
+            // there it had to open the panel before it could photograph it,
+            // which is a button that changes the layout to do its job.
+            IconButton {
+                id: camera
+                anchors { right: parent.right; verticalCenter: parent.verticalCenter }
+                implicitWidth: 22
+                implicitHeight: 22
+                glyphSize: 13
+                glyph: "camera"
+                tooltip: qsTr("Attach a picture of this page")
+                // Nothing to photograph until the renderer is up — on a machine
+                // without QtWebEngine it never is.
+                enabled: panel.page !== null
+                onClicked: panel.capture()
             }
         }
 

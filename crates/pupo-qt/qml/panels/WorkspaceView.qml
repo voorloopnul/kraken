@@ -128,11 +128,6 @@ Rectangle {
         History.set_selected_key(Session.focused_key)
     }
 
-    // The side strip's camera, routed to the panel that has a page to capture.
-    function capturePage() {
-        browserPanel.capture()
-    }
-
     function syncPanels() {
         for (const side of ["left", "files", "browser", "git", "right"])
             DockModel.set_panel_visible(side, App.is_panel_visible(side))

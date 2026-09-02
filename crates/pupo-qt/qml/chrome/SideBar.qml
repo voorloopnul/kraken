@@ -2,7 +2,7 @@ import QtQuick
 import "../common"
 
 // The strip down the window's right edge, IDE tool-window style: the panel
-// toggles at the top and the screenshot action pinned to the bottom.
+// toggles, and nothing else.
 //
 // A button whose panel is open is filled with the accent and carries a white
 // glyph — the one thing in this strip that is not grey, because "which panels
@@ -11,7 +11,6 @@ Rectangle {
     id: bar
 
     property int cornerRadius: 0
-    signal screenshotRequested()
 
     width: 40
     color: Theme.colors.sidebar
@@ -55,19 +54,6 @@ Rectangle {
                     }
                 }
             }
-        }
-    }
-
-    Column {
-        anchors { bottom: parent.bottom; left: parent.left; right: parent.right }
-        anchors.margins: 4
-        anchors.bottomMargin: 8
-
-        IconButton {
-            anchors.horizontalCenter: parent.horizontalCenter
-            glyph: "camera"
-            tooltip: qsTr("Screenshot")
-            onClicked: bar.screenshotRequested()
         }
     }
 }

@@ -163,13 +163,6 @@ Window {
                     height: parent.height
                     visible: App.current !== ""
                     cornerRadius: root.cornerRadius
-                    // The camera captures the browser's page, so it shows the
-                    // panel first — a capture of a pane nobody has opened is a
-                    // capture of nothing.
-                    onScreenshotRequested: {
-                        App.set_panel_visible("browser", true)
-                        workspace.capturePage()
-                    }
                 }
             }
         }
