@@ -387,6 +387,33 @@ impl Dock {
         self.columns[index].iter().any(|k| self.shown.contains(k))
     }
 
+    /// How many of a column's panels are actually on screen.
+    ///
+    /// A hidden panel keeps its place in its column so that showing it again
+    /// restores it there, so a column can hold more than it shows — and it is
+    /// what it shows that a stack limit is about. Counting the places instead
+    /// left a column looking empty enough to take another panel while quietly
+    /// refusing every one, with nothing on screen to say why.
+    fn shown_in(&self, index: usize) -> usize {
+        self.columns[index].iter().filter(|k| self.shown.contains(*k)).count()
+    }
+
+    /// Give up a column's hidden places, so a panel being put there has one.
+    ///
+    /// Nothing is lost: a panel with no column of its own to go back to opens a
+    /// fresh one in canonical order the next time it is shown.
+    fn evict_hidden(&mut self, index: usize) {
+        while self.columns[index].len() >= MAX_STACK {
+            let Some(at) = self.columns[index]
+                .iter()
+                .position(|k| !self.shown.contains(k))
+            else {
+                break;
+            };
+            self.columns[index].remove(at);
+        }
+    }
+
     /// Active columns belonging to draggable, right-side panels.
     fn active_side_columns(&self) -> Vec<usize> {
         self.active_columns()
@@ -415,7 +442,7 @@ impl Dock {
             if keys.iter().any(|k| self.no_stack.contains(k)) {
                 continue;
             }
-            if keys.len() < MAX_STACK {
+            if self.shown_in(index) < MAX_STACK {
                 return Some(index);
             }
         }
@@ -501,6 +528,7 @@ impl Dock {
 
         if let Some(stack) = stack {
             self.detach(key);
+            self.evict_hidden(stack);
             self.columns[stack].push(key.to_string());
         } else if source.is_none() {
             let at = self.insertion_index(key);
@@ -571,9 +599,10 @@ impl Dock {
         }
 
         // Middle band: stack into this column, unless it refuses stacking or
-        // already holds two panels other than the one being dragged. The limit
-        // counts every panel in the column — a hidden co-panel still occupies it.
-        if nostack_col || (keys.len() >= MAX_STACK && !keys.iter().any(|k| k == dragged)) {
+        // already shows two panels other than the one being dragged.
+        if nostack_col
+            || (self.shown_in(index) >= MAX_STACK && !keys.iter().any(|k| k == dragged))
+        {
             return None;
         }
         let rel_y = (y - rect.y) / rect.height.max(1.0);
@@ -638,6 +667,7 @@ impl Dock {
                     return false; // already the lone panel here; nothing to reorder
                 }
                 self.detach(key);
+                self.evict_hidden(target.column);
                 let at = if target.mode == DropMode::StackTop {
                     0
                 } else {
@@ -921,6 +951,52 @@ mod tests {
         assert_eq!(
             dock.hit_test("right", rect.x + rect.width / 2.0, rect.y + 10.0, &rects),
             None
+        );
+    }
+
+    #[test]
+    fn a_hidden_panel_does_not_hold_a_seat_in_a_column() {
+        let mut dock = workspace_dock();
+        dock.show_panel("git");
+        dock.show_panel("files");
+        let rects = column_rects(&dock);
+        let git_slot = dock
+            .active_columns()
+            .iter()
+            .position(|(_, keys)| keys.iter().any(|k| k == "git"))
+            .unwrap();
+        let git = rects[git_slot];
+        let target = dock
+            .hit_test("files", git.x + git.width / 2.0, git.y + 10.0, &rects)
+            .expect("stacking onto git is allowed");
+        assert!(dock.apply_drop("files", target));
+        // Close git. What is left is a column showing one panel, and it has to
+        // behave like one: the half git used to occupy is free.
+        dock.hide_panel("git");
+        dock.show_panel("right");
+        let rects = column_rects(&dock);
+        let files_slot = dock
+            .active_columns()
+            .iter()
+            .position(|(_, keys)| keys.iter().any(|k| k == "files"))
+            .unwrap();
+        let files = rects[files_slot];
+        let target = dock
+            .hit_test(
+                "right",
+                files.x + files.width / 2.0,
+                files.y + files.height * 0.8,
+                &rects,
+            )
+            .expect("the terminal stacks under files");
+        assert!(dock.apply_drop("right", target));
+        assert_eq!(keys(&dock), vec![vec!["left"], vec!["center"], vec!["files", "right"]]);
+        // Git gave its place up rather than being carried along as a third
+        // panel, so showing it again opens a column of its own.
+        dock.show_panel("git");
+        assert_eq!(
+            keys(&dock),
+            vec![vec!["left"], vec!["center"], vec!["files", "right"], vec!["git"]]
         );
     }
 
