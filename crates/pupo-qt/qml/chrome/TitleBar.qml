@@ -7,7 +7,7 @@ import "../common"
 // lights at the far left, then the History toggle, then two stacked lines
 // naming what is open — the focused conversation's title over the workspace
 // folder and its git branch. Memory sits at the right. Dragging the bar moves
-// the window; double-clicking toggles maximize.
+// the window; double-clicking zooms it.
 //
 // The bar sits on the base surface rather than on the shade the panel headers
 // and the side strips wear: those run along one edge of the content and frame
@@ -146,9 +146,31 @@ Rectangle {
         }
     }
 
+    // Dragging the bar moves the window and double-clicking it zooms, and the
+    // two must not both start from the press. Handing the press straight to the
+    // window manager gives it the pointer grab, so the second click of a double
+    // never arrives here — and the interactive move it begins un-fills a
+    // maximized window on the way, leaving a size neither gesture asked for. So
+    // the move waits until the pointer has actually travelled.
     MouseArea {
         anchors.fill: parent
-        onPressed: bar.moveRequested()
+
+        property point origin
+        property bool moving: false
+
+        onPressed: function (event) {
+            origin = Qt.point(event.x, event.y)
+            moving = false
+        }
+        onPositionChanged: function (event) {
+            if (moving || !pressed)
+                return
+            const travelled = Math.hypot(event.x - origin.x, event.y - origin.y)
+            if (travelled < Application.styleHints.startDragDistance)
+                return
+            moving = true
+            bar.moveRequested()
+        }
         onDoubleClicked: bar.maximizeRequested()
     }
 

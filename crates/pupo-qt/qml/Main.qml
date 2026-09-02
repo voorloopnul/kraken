@@ -58,6 +58,20 @@ Window {
                                         || visibility === Window.FullScreen
     readonly property int cornerRadius: fillsScreen ? 0 : 10
 
+    // Maximize, which is what a double-click on a title bar does everywhere
+    // else on this desktop — not full screen, which hides the panel and the
+    // other windows and is the window manager's own key to give. The green
+    // light and the double-click both come here, so the window alternates
+    // between exactly two sizes however it is asked.
+    //
+    // Both states are spelled out rather than left to `showNormal` and
+    // `showMaximized`, so a window that arrived in one of them by some other
+    // route — a snap, a session restored maximized — is toggled out of it by
+    // the same single gesture.
+    function toggleZoom() {
+        root.visibility = root.fillsScreen ? Window.Windowed : Window.Maximized
+    }
+
     // JetBrains Mono is the face for the whole interface, so it looks the same
     // on every machine; Roboto covers the places a mono grid reads wrong.
     FontLoader { id: monoFont; source: "qrc:/assets/fonts/JetBrainsMono-Regular.ttf" }
@@ -101,10 +115,7 @@ Window {
                 memoryLabel: App.memory_label
 
                 onMinimizeRequested: root.showMinimized()
-                // Zoom, as the platform's own green button is — not maximize,
-                // which is the *other* thing that button can do.
-                onMaximizeRequested: root.fillsScreen ? root.showNormal()
-                                                      : root.showFullScreen()
+                onMaximizeRequested: root.toggleZoom()
                 onCloseRequested: root.close()
                 onMoveRequested: root.startSystemMove()
                 onMemoryRequested: processDialog.open()
