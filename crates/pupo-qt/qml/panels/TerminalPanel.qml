@@ -87,7 +87,7 @@ Item {
             // a resize, the contents change on every frame, and only the first
             // of those should cost a rebuild.
             Repeater {
-                model: TerminalTabs.rows.length
+                model: panel.frameRows.length
 
                 Item {
                     id: line
@@ -353,13 +353,24 @@ Item {
 
     // ---- Frame reading -------------------------------------------------------
 
+    // The frame's rows, read from the bridge once and shared by the three
+    // helpers below.
+    //
+    // `TerminalTabs.rows` is built on every read — the bridge converts the whole
+    // grid into lists of maps each time it is asked — and the helpers run once
+    // per row apiece, so reading it in each of them rebuilt the grid three times
+    // per row. Bound here it is rebuilt once per frame, and the binding still
+    // invalidates on exactly the same signal, so every row repaints when it did
+    // before.
+    readonly property var frameRows: TerminalTabs.rows
+
     // Row markup, built from the runs the engine already collapsed.
     //
     // Spaces become `&nbsp;`: rich text folds runs of whitespace away, and a
     // terminal's alignment is entirely made of them. In a monospace face the two
     // have the same advance, so the grid is unaffected.
     function markupFor(index) {
-        const row = TerminalTabs.rows[index]
+        const row = panel.frameRows[index]
         if (!row)
             return ""
         let out = ""
@@ -386,7 +397,7 @@ Item {
 
     // The runs whose background differs from the screen's, as `{col, cols, bg}`.
     function backgroundsFor(index) {
-        const row = TerminalTabs.rows[index]
+        const row = panel.frameRows[index]
         if (!row)
             return []
         const base = TerminalTabs.background.toLowerCase()
@@ -402,7 +413,7 @@ Item {
     // The selected span of one row, as `{col, cols}`; `cols` is 0 for none. The
     // bridge reports an inclusive range, which is one cell wider than it counts.
     function selectionFor(index) {
-        const row = TerminalTabs.rows[index]
+        const row = panel.frameRows[index]
         if (!row || row.sel_start < 0)
             return { col: 0, cols: 0 }
         return { col: row.sel_start, cols: row.sel_end - row.sel_start + 1 }

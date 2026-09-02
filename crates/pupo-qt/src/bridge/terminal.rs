@@ -656,10 +656,14 @@ impl TerminalBridge {
         self.refresh(false);
     }
 
+    /// No `refresh` of its own, unlike its neighbours here: this is called for
+    /// every mouse move of a drag, and pointer events arrive far faster than
+    /// frames. Marking the screen dirty is enough — the panel's pump is already
+    /// running, and it coalesces a burst of moves into the one frame that is
+    /// all the display could have shown anyway.
     fn select_extend(&mut self, col: i32, row: i32) {
         let (col, row) = (col.max(0) as usize, row.max(0) as usize);
         self.with_current(|terminal| terminal.screen_mut().selection_extend(col, row));
-        self.refresh(false);
     }
 
     fn select_clear(&mut self) {
