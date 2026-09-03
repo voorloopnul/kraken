@@ -1,17 +1,20 @@
 # Kraken
 
 Kraken is a native desktop front end for the [Pi coding agent](https://github.com/earendil-works/pi-coding-agent),
-written in Rust with a Qt/QML interface. It is a port of **Kraken**, and keeps
-its shape: a chat transcript beside the panes you need while the agent works.
+written in Rust with a Qt/QML interface: a chat transcript beside the panes you
+need while the agent works.
 
 **Main features:**
 
 - a chat / agent transcript
+- a history pane — the Pi sessions recorded for this workspace folder, and the
+  one running now; pin the ones you keep coming back to
 - an embedded terminal
 - an embedded browser
-- a diff pane — the files changed since the last commit, with the lines added
-  and removed in each; click a file to read its diff, syntax highlighted, over
-  the dimmed app
+- a git pane, in two tabs: **Changes**, the files touched since the last commit
+  with the lines added and removed in each — click one to read its diff, syntax
+  highlighted, over the dimmed app — and **Commits**, the repository's commit
+  graph, newest first
 - a files pane — the workspace as a tree, the way an editor draws one; click a
   file to read it over the dimmed app, and copy files in and out of the project.
   A name that is already taken stops the copy and asks: replace, keep both, or
@@ -76,22 +79,20 @@ Two crates, and the split between them is the point:
   are compiled into the binary, so a checkout and a packaged AppImage both find
   them without assuming anything about the layout around them.
 
-One piece of Kraken is deliberately not ported the same way:
+Two things inside that core are worth naming, because neither is written here:
 
-- Syntax highlighting is `syntect` rather than pygments, with the palette mapped
-  onto the same colours.
+- Syntax highlighting is `syntect`, with its palette mapped onto the theme's own
+  colours, so a diff and a preview are lit the same way as the transcript.
+- The terminal is **libghostty-vt** — Ghostty's VT core, reached through the
+  `libghostty-vt` crate, which builds it from Ghostty's source with Zig and links
+  it statically, so there is no shared object to ship beside the binary. The
+  engine is drivable from a test by feeding it a byte string, which is how every
+  escape sequence in `terminal::vt` is checked.
 
-The terminal, like Kraken's, is **libghostty-vt** — Ghostty's own VT core. Where
-Kraken reached it through ctypes, Kraken goes through the `libghostty-vt` crate,
-which builds it from Ghostty's source with Zig and links it statically, so there
-is no shared object to ship beside the binary. The engine is still drivable from
-a test by feeding it a byte string, which is how every escape sequence in
-`terminal::vt` is checked.
-
-What that buys over the hand-written engine it replaced: the escape sequences
-Ghostty knows and this tree never implemented, history that reflows when the
-window is resized, selection that understands wrapped lines, and scrollback that
-costs a **memory budget** rather than a line count — three terminals holding
+What that buys over a hand-written engine: the escape sequences Ghostty knows
+and nobody here would have implemented, history that reflows when the window is
+resized, selection that understands wrapped lines, and scrollback that costs a
+**memory budget** rather than a line count — three terminals holding
 about 4,500 rows of history each cost ~26 MB, where fixed-width cells cost ~47 MB
 for the same depth no matter how short the lines were.
 
@@ -101,7 +102,7 @@ for the same depth no matter how short the lines were.
 - Rust 1.90+
 - **Zig 0.15.2**, on `PATH`, to build the terminal engine
 - Qt 6.5 or newer: QtQuick, QtQuick Controls, Layouts, Dialogs
-- `pi` on `PATH` for the agent, and `git` for the diff and git panes
+- `pi` on `PATH` for the agent, and `git` for the git pane
 
 Ubuntu/Debian:
 
@@ -116,13 +117,18 @@ only to build; nothing links to it at runtime:
 
 ```sh
 curl -LO https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz
+mkdir -p ~/.local/share/zig
 tar xf zig-x86_64-linux-0.15.2.tar.xz -C ~/.local/share/zig
 export PATH="$HOME/.local/share/zig/zig-x86_64-linux-0.15.2:$PATH"
 ```
 
-The version is not a preference: `libghostty-vt-sys` pins a Ghostty commit, and
-that commit's `build.zig` refuses anything but 0.15.x. The first build clones
-Ghostty and compiles it, which takes a minute; after that it is cached.
+The version is not a preference: `libghostty-vt-sys` pins a Ghostty commit whose
+`build.zig.zon` sets a `minimum_zig_version` of 0.15.2, and whose source does not
+compile under 0.16 — a newer toolchain gets past the check and then fails in the
+build. Neither is caught before the dependency graph is compiled: a missing or
+wrong `zig` surfaces as a build-script panic from `libghostty-vt-sys`, minutes
+in. The first build clones Ghostty and compiles it, which takes a minute; after
+that it is cached.
 `.cargo/config.toml` pins the Zig optimize mode to `ReleaseFast` even in debug
 builds, because a `Debug` build of the VT core makes feeding a terminal roughly
 a hundred times slower.
@@ -150,7 +156,12 @@ Kraken stores its own state in:
 - `~/.kraken/state.json` — workspaces, SSH hosts, panel layout, font sizes
 - `~/.kraken/screenshots` — captures of the browser pane, attached to a prompt
 - `~/.kraken/remotes` — the local anchor folder for each remote workspace
+- `~/.kraken/ssh` — the control sockets multiplexing each remote's connection
+- `~/.kraken/ext` — the pi extension, unpacked
 - `~/.kraken/logs` — diagnostic traces, when `--debug` asks for one
+
+`KRAKEN_HOME` moves all of it somewhere else, which is how the tests keep off a
+developer's own `~/.kraken`.
 
 Pi's own configuration and sessions are read from `~/.pi/agent/`, which Kraken
 shares with `pi` rather than duplicating.
@@ -165,7 +176,8 @@ cargo run --release -- --debug        # ~/.kraken/logs/kraken-<date>-<pid>.log
 ```
 
 A log that stops without its `exit  clean shutdown` marker ended in a crash, and
-the last `action` line before it is the suspect.
+the last `action` line before it is the suspect. [DEBUG.md](DEBUG.md) covers what
+goes into the trace and how to read it.
 
 ## Tests
 
