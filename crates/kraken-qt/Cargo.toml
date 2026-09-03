@@ -1,0 +1,19 @@
+[package]
+name = "kraken-qt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Kraken's Qt/QML front end."
+
+[[bin]]
+name = "kraken"
+path = "src/main.rs"
+
+[dependencies]
+kraken-core.workspace = true
+qmetaobject.workspace = true
+cstr.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+dirs.workspace = true
+libc.workspace = true

@@ -30,14 +30,14 @@ fetch "https://github.com/AppImage/appimagetool/releases/download/continuous/app
 
 QMAKE=${QMAKE:-$(command -v qmake6 || command -v qmake)} cargo build --release
 rm -rf "$APPDIR"
-rm -f "$ROOT"/Pupo-*.AppImage
+rm -f "$ROOT"/Kraken-*.AppImage
 
 export PATH="$TOOLS:$PATH"
 export QMAKE=${QMAKE:-$(command -v qmake6 || command -v qmake)}
 # The QML tree is compiled into the binary through qrc, so there is nothing on
 # disk for the plugin to scan. It still needs a path to look at to decide which
 # QML modules to bundle, and the sources are where the imports are written.
-export QML_SOURCES_PATHS="$ROOT/crates/pupo-qt/qml"
+export QML_SOURCES_PATHS="$ROOT/crates/kraken-qt/qml"
 # The browser's engine, which the plugin cannot infer.
 #
 # `BrowserPanel.qml` builds its `WebEngineView` with `Qt.createQmlObject`, so
@@ -57,9 +57,9 @@ export APPIMAGE_EXTRACT_AND_RUN=1
 
 "$TOOLS/linuxdeploy-${ARCH}.AppImage" \
     --appdir "$APPDIR" \
-    --executable "$ROOT/target/release/pupo" \
-    --desktop-file "$ROOT/packaging/pupo.desktop" \
-    --icon-file "$ROOT/packaging/pupo.svg" \
+    --executable "$ROOT/target/release/kraken" \
+    --desktop-file "$ROOT/packaging/kraken.desktop" \
+    --icon-file "$ROOT/packaging/kraken.svg" \
     --plugin qt
 
 # The QtWebEngine QML module, and the plugin's own dependencies.
@@ -100,11 +100,11 @@ copy_host_lib libGLX.so.0
 copy_host_lib libEGL.so.1
 
 "$TOOLS/appimagetool-${ARCH}.AppImage" --runtime-file "$TOOLS/runtime-${ARCH}" \
-    "$APPDIR" "$ROOT/dist/Pupo-${ARCH}.AppImage"
+    "$APPDIR" "$ROOT/dist/Kraken-${ARCH}.AppImage"
 
-if [[ ! -f "$ROOT/dist/Pupo-${ARCH}.AppImage" ]]; then
+if [[ ! -f "$ROOT/dist/Kraken-${ARCH}.AppImage" ]]; then
     echo "AppImage output was not created" >&2
     exit 1
 fi
-chmod +x "$ROOT/dist/Pupo-${ARCH}.AppImage"
-echo "Created dist/Pupo-${ARCH}.AppImage"
+chmod +x "$ROOT/dist/Kraken-${ARCH}.AppImage"
+echo "Created dist/Kraken-${ARCH}.AppImage"

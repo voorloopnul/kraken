@@ -253,6 +253,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
+name = "kraken-core"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "libc",
+ "libghostty-vt",
+ "once_cell",
+ "pulldown-cmark",
+ "serde",
+ "serde_json",
+ "syntect",
+]
+
+[[package]]
+name = "kraken-qt"
+version = "0.1.0"
+dependencies = [
+ "cstr",
+ "dirs",
+ "kraken-core",
+ "libc",
+ "qmetaobject",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -393,33 +420,6 @@ name = "pulldown-cmark-escape"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "007d8adb5ddab6f8e3f491ac63566a7d5002cc7ed73901f72057943fa71ae1ae"
-
-[[package]]
-name = "pupo-core"
-version = "0.1.0"
-dependencies = [
- "dirs",
- "libc",
- "libghostty-vt",
- "once_cell",
- "pulldown-cmark",
- "serde",
- "serde_json",
- "syntect",
-]
-
-[[package]]
-name = "pupo-qt"
-version = "0.1.0"
-dependencies = [
- "cstr",
- "dirs",
- "libc",
- "pupo-core",
- "qmetaobject",
- "serde",
- "serde_json",
-]
 
 [[package]]
 name = "qmetaobject"

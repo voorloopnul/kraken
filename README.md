@@ -1,6 +1,6 @@
-# Pupo
+# Kraken
 
-Pupo is a native desktop front end for the [Pi coding agent](https://github.com/earendil-works/pi-coding-agent),
+Kraken is a native desktop front end for the [Pi coding agent](https://github.com/earendil-works/pi-coding-agent),
 written in Rust with a Qt/QML interface. It is a port of **Kraken**, and keeps
 its shape: a chat transcript beside the panes you need while the agent works.
 
@@ -63,7 +63,7 @@ remote workspace exactly as they do on a local one.
 
 Two crates, and the split between them is the point:
 
-- **`crates/pupo-core`** — everything the app knows how to *do*, with no
+- **`crates/kraken-core`** — everything the app knows how to *do*, with no
   dependency on Qt: the theme and type scales, persistent state, the Pi RPC
   client and its on-disk configuration, remote SSH workspaces, git, the chat
   pipeline (markdown, syntax highlighting, the transcript model), the terminal
@@ -71,7 +71,7 @@ Two crates, and the split between them is the point:
   of it obeys (on either machine). It is unit-tested without a display — and,
   because the tree does no I/O of its own, the whole of it is testable by
   handing it invented listings.
-- **`crates/pupo-qt`** — the interface: a thin layer of `QObject` bridges over
+- **`crates/kraken-qt`** — the interface: a thin layer of `QObject` bridges over
   that core, and the QML that draws it. The QML tree, the fonts and the icons
   are compiled into the binary, so a checkout and a packaged AppImage both find
   them without assuming anything about the layout around them.
@@ -82,7 +82,7 @@ One piece of Kraken is deliberately not ported the same way:
   onto the same colours.
 
 The terminal, like Kraken's, is **libghostty-vt** — Ghostty's own VT core. Where
-Kraken reached it through ctypes, Pupo goes through the `libghostty-vt` crate,
+Kraken reached it through ctypes, Kraken goes through the `libghostty-vt` crate,
 which builds it from Ghostty's source with Zig and links it statically, so there
 is no shared object to ship beside the binary. The engine is still drivable from
 a test by feeding it a byte string, which is how every escape sequence in
@@ -145,14 +145,14 @@ cargo run --release
 
 ## Storage
 
-Pupo stores its own state in:
+Kraken stores its own state in:
 
-- `~/.pupo/state.json` — workspaces, SSH hosts, panel layout, font sizes
-- `~/.pupo/screenshots` — captures of the browser pane, attached to a prompt
-- `~/.pupo/remotes` — the local anchor folder for each remote workspace
-- `~/.pupo/logs` — diagnostic traces, when `--debug` asks for one
+- `~/.kraken/state.json` — workspaces, SSH hosts, panel layout, font sizes
+- `~/.kraken/screenshots` — captures of the browser pane, attached to a prompt
+- `~/.kraken/remotes` — the local anchor folder for each remote workspace
+- `~/.kraken/logs` — diagnostic traces, when `--debug` asks for one
 
-Pi's own configuration and sessions are read from `~/.pi/agent/`, which Pupo
+Pi's own configuration and sessions are read from `~/.pi/agent/`, which Kraken
 shares with `pi` rather than duplicating.
 
 ## Debugging a crash
@@ -161,7 +161,7 @@ shares with `pi` rather than duplicating.
 Qt's own warnings — and what it cost in memory:
 
 ```sh
-cargo run --release -- --debug        # ~/.pupo/logs/pupo-<date>-<pid>.log
+cargo run --release -- --debug        # ~/.kraken/logs/kraken-<date>-<pid>.log
 ```
 
 A log that stops without its `exit  clean shutdown` marker ended in a crash, and
@@ -184,4 +184,4 @@ repositories built in a temp directory.
 ```
 
 If FUSE is unavailable, launch the result with
-`APPIMAGE_EXTRACT_AND_RUN=1 ./dist/Pupo-x86_64.AppImage`.
+`APPIMAGE_EXTRACT_AND_RUN=1 ./dist/Kraken-x86_64.AppImage`.

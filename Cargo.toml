@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/pupo-core", "crates/pupo-qt"]
+members = ["crates/kraken-core", "crates/kraken-qt"]
 resolver = "2"
 
 [workspace.package]
@@ -9,7 +9,7 @@ license = "MIT"
 rust-version = "1.90"
 
 [workspace.dependencies]
-pupo-core = { path = "crates/pupo-core" }
+kraken-core = { path = "crates/kraken-core" }
 qmetaobject = "0.2"
 cstr = "0.2"
 serde = { version = "1", features = ["derive"] }

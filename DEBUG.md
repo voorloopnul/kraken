@@ -1,6 +1,6 @@
-# Debugging Pupo
+# Debugging Kraken
 
-Pupo drives a lot of machinery it does not own — a `pi` process per session, a
+Kraken drives a lot of machinery it does not own — a `pi` process per session, a
 pty and a shell per terminal tab, an ssh client per remote command, and Qt's
 scene graph under all of it. When it goes wrong it usually goes wrong in one of
 those, and the interesting evidence is what the app was doing at the time and
@@ -12,11 +12,11 @@ atomic load when off.
 ## Turning it on
 
 ```sh
-pupo --debug                        # ~/.pupo/logs/pupo-<date>-<pid>.log
-pupo --debug /tmp/pupo.log          # a specific file
-pupo --debug -                      # stderr, to pipe
-pupo --debug --debug-heartbeat 10   # sample memory every 10s
-pupo --debug --debug-trace          # also record every key and click
+kraken --debug                        # ~/.kraken/logs/kraken-<date>-<pid>.log
+kraken --debug /tmp/kraken.log          # a specific file
+kraken --debug -                      # stderr, to pipe
+kraken --debug --debug-heartbeat 10   # sample memory every 10s
+kraken --debug --debug-trace          # also record every key and click
 ```
 
 From a checkout, `cargo run --release -- --debug`.
@@ -26,11 +26,11 @@ where passing arguments is awkward:
 
 | Variable | Effect |
 | --- | --- |
-| `PUPO_DEBUG=1` | log to the default path |
-| `PUPO_DEBUG=/path/to/file` | log there (`-` for stderr) |
-| `PUPO_DEBUG=0` *(or unset)* | off |
-| `PUPO_DEBUG_TRACE=1` | also trace raw input |
-| `PUPO_DEBUG_HEARTBEAT=10` | sample every 10 s (`0` disables) |
+| `KRAKEN_DEBUG=1` | log to the default path |
+| `KRAKEN_DEBUG=/path/to/file` | log there (`-` for stderr) |
+| `KRAKEN_DEBUG=0` *(or unset)* | off |
+| `KRAKEN_DEBUG_TRACE=1` | also trace raw input |
+| `KRAKEN_DEBUG_HEARTBEAT=10` | sample every 10 s (`0` disables) |
 
 The flag wins where both are given. The chosen path is printed to stderr at
 start-up. Logs are appended, so a path reused across runs keeps every run, each
@@ -39,14 +39,14 @@ starting with a `boot` banner.
 ## What a log looks like
 
 ```
-00:14:08.063     0.000 boot     pupo pid=856118 argv=["/usr/bin/pupo", "--debug"]
+00:14:08.063     0.000 boot     kraken pid=856118 argv=["/usr/bin/kraken", "--debug"]
 00:14:08.063     0.000 boot     session=wayland platform=default desktop=ubuntu:GNOME
 00:14:08.078     0.016 event    app.started
 00:14:08.206     0.143 proc     terminal.spawn pid=856126 program=/bin/bash remote=false  | rss=104.7MB tree=108.8MB d=+108.8MB procs=2 fds=10 threads=5
 00:14:08.214     0.151 proc     terminal.tab-opened id=1  | rss=104.9MB tree=110.5MB d=+1.7MB procs=2 fds=11 threads=6
 00:14:09.072     1.010 mem      heartbeat idle=1s  | rss=121.0MB tree=129.2MB d=+18.7MB procs=2 fds=11 threads=6
 00:14:10.320     2.257 action   chat.submit chars=42 images=0 files=0  | rss=121.2MB tree=129.4MB d=+0.2MB procs=2 fds=11 threads=6
-00:14:10.402     2.339 proc     pi.start pid=856140 cwd=/home/pascal/Workspace/pupo remote=false  | rss=121.4MB tree=268.0MB d=+138.6MB procs=3 fds=13 threads=6
+00:14:10.402     2.339 proc     pi.start pid=856140 cwd=/home/pascal/Workspace/kraken remote=false  | rss=121.4MB tree=268.0MB d=+138.6MB procs=3 fds=13 threads=6
 00:14:11.295     3.232 proc     terminal.shutdown pid=856126  | rss=126.1MB tree=134.1MB d=-133.9MB procs=2 fds=11 threads=6
 00:14:11.338     3.276 exit     clean shutdown code=0  | rss=126.2MB tree=125.7MB d=-8.3MB procs=1 fds=9 threads=5
 ```
@@ -76,14 +76,14 @@ Appended to `action`, `proc`, `mem` and `exit` records, after the `|`:
 
 | Field | Meaning |
 | --- | --- |
-| `rss` | resident set size of the Pupo process alone |
+| `rss` | resident set size of the Kraken process alone |
 | `tree` | **this process and every descendant** — `pi`, shells, ssh |
 | `d` | change in `tree` since the previous snapshot |
 | `procs` | how many processes that tree covers |
 | `fds` | open file descriptors |
 | `threads` | live threads |
 
-`tree` is the number worth watching. Most of Pupo's footprint lives in child
+`tree` is the number worth watching. Most of Kraken's footprint lives in child
 processes, so a per-process reading would miss almost all of it — a `pi` spawn
 shows as `+138.6MB` in `tree` while `rss` barely moves.
 
@@ -109,7 +109,7 @@ long unattended run (~1400 records a day, which stays readable). At 60 s the
 samples make a clean series to plot:
 
 ```sh
-grep " mem " pupo.log | grep -o "tree=[0-9.]*" | cut -d= -f2 > tree.txt
+grep " mem " kraken.log | grep -o "tree=[0-9.]*" | cut -d= -f2 > tree.txt
 ```
 
 A flat line is health. A staircase that only climbs is the leak, and the
@@ -122,8 +122,8 @@ A flat line is health. A staircase that only climbs is the leak, and the
 down, and the last `action` before the end is the suspect.
 
 ```sh
-tail -5 ~/.pupo/logs/pupo-*.log            # did it end cleanly?
-grep " action " pupo.log | tail -20        # what was happening just before?
+tail -5 ~/.kraken/logs/kraken-*.log            # did it end cleanly?
+grep " action " kraken.log | tail -20        # what was happening just before?
 ```
 
 **Leaks show up as unpaired records.** These come in pairs, and each should give
@@ -138,8 +138,8 @@ A spawn with no matching exit, a `procs` count that only climbs, or a `tree`
 that never comes back down after a teardown is the leak.
 
 ```sh
-grep -E "pi\.(start|terminate|kill|exit)" pupo.log   # balanced?
-grep -o "procs=[0-9]*" pupo.log | uniq -c            # monotonic?
+grep -E "pi\.(start|terminate|kill|exit)" kraken.log   # balanced?
+grep -o "procs=[0-9]*" kraken.log | uniq -c            # monotonic?
 ```
 
 **`pi.kill` is worth reading on its own.** It means a `pi` ignored `SIGTERM`
@@ -169,7 +169,7 @@ identical from outside to one that never arrived at all.
 
 ## What is *not* in here
 
-Pupo is Rust: a panic already prints its own backtrace to stderr (set
+Kraken is Rust: a panic already prints its own backtrace to stderr (set
 `RUST_BACKTRACE=1` for the full one), and there is no equivalent of a Python
 faulthandler dump to fold into the log. A crash inside Qt or a child process
 shows here only as the log stopping — which is exactly what the last `action`
