@@ -99,6 +99,58 @@ copy_host_lib libGLdispatch.so.0
 copy_host_lib libGLX.so.0
 copy_host_lib libEGL.so.1
 
+# The Pi coding agent, and the Node runtime that runs it.
+#
+# `PiAgent` spawns a bare `pi` (crates/kraken-core/src/pi/rpc.rs), so without
+# this the AppImage only talks to an agent on machines where the user has
+# already installed one. Pi ships as an npm package of JavaScript, so the whole
+# package — its bundled `node_modules` included — is copied next to a copy of
+# the build host's `node`, and `usr/bin/pi` is a launcher that pairs the two.
+PI_PACKAGE=${PI_PACKAGE:-$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent}
+NODE_BIN=${NODE_BIN:-$(command -v node || true)}
+if [[ -d $PI_PACKAGE && -x ${NODE_BIN:-} ]]; then
+    mkdir -p "$APPDIR/usr/lib/pi"
+    cp -a "$PI_PACKAGE/." "$APPDIR/usr/lib/pi/"
+    cp -L "$NODE_BIN" "$APPDIR/usr/bin/node"
+    cat > "$APPDIR/usr/bin/pi" <<'LAUNCHER'
+#!/bin/sh
+here=$(dirname "$(readlink -f "$0")")
+exec "$here/node" "$here/../lib/pi/dist/cli.js" "$@"
+LAUNCHER
+    chmod +x "$APPDIR/usr/bin/pi"
+else
+    echo "note: pi not installed; the AppImage will have no coding agent" >&2
+fi
+
+# Everything Qt deployed that Kraken has no use for.
+#
+# The Qt plugin bundles all of QtWebEngine's locales and all of Qt's own
+# translations, on the assumption that the application is translated. Kraken is
+# not: its interface is English, so the one locale Chromium falls back to is the
+# only one worth carrying, and the `qtbase_*.qm` catalogues only ever translate
+# the standard dialog buttons. The devtools pack is Chromium's inspector UI,
+# which no panel opens.
+KEEP_LOCALE=${KEEP_LOCALE:-en-US}
+locales="$APPDIR/usr/translations/qtwebengine_locales"
+if [[ -d $locales ]]; then
+    find "$locales" -name '*.pak' ! -name "${KEEP_LOCALE}.pak" -delete
+fi
+rm -f "$APPDIR"/usr/translations/qtbase_*.qm
+rm -f "$APPDIR/usr/resources/qtwebengine_devtools_resources.pak"
+
+# linuxdeploy leaves AppRun as a symlink to the executable, which runs Kraken
+# with the host's PATH and so never finds the bundled `pi`. A launcher puts the
+# bundle's own bin directory first instead, so the agent that ships with the
+# AppImage is the agent it runs.
+rm -f "$APPDIR/AppRun"
+cat > "$APPDIR/AppRun" <<'APPRUN'
+#!/bin/sh
+here=$(dirname "$(readlink -f "$0")")
+export PATH="$here/usr/bin:$PATH"
+exec "$here/usr/bin/kraken" "$@"
+APPRUN
+chmod +x "$APPDIR/AppRun"
+
 "$TOOLS/appimagetool-${ARCH}.AppImage" --runtime-file "$TOOLS/runtime-${ARCH}" \
     "$APPDIR" "$ROOT/dist/Kraken-${ARCH}.AppImage"
 
