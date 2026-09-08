@@ -77,7 +77,11 @@ Two crates, and the split between them is the point:
 - **`crates/kraken-qt`** — the interface: a thin layer of `QObject` bridges over
   that core, and the QML that draws it. The QML tree, the fonts and the icons
   are compiled into the binary, so a checkout and a packaged AppImage both find
-  them without assuming anything about the layout around them.
+  them without assuming anything about the layout around them. One file in it is
+  C++ rather than Rust — `bridge/clipboard.rs` holds a `cpp!` block reaching
+  `QClipboard` for a pasted image, which neither QML nor the Rust bindings can
+  see — and it is the only one; anything else that wants Qt goes through the
+  bindings.
 
 Two things inside that core are worth naming, because neither is written here:
 

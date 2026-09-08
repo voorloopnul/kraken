@@ -8,6 +8,7 @@
 
 pub mod app;
 pub mod browser;
+pub mod clipboard;
 pub mod diff;
 pub mod dock;
 pub mod files;

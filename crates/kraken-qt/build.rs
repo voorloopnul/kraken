@@ -1,4 +1,5 @@
-//! Generates the qrc resource declaration from whatever is on disk.
+//! Generates the qrc resource declaration from whatever is on disk, and
+//! compiles the crate's own C++ against Qt.
 //!
 //! The QML tree and the vendored assets are compiled into the binary, so a
 //! source checkout and a packaged AppImage both find them without assuming
@@ -42,6 +43,25 @@ fn resource(manifest: &Path, dir: &str) -> String {
     )
 }
 
+/// Compile the `cpp!` blocks in this crate.
+///
+/// Qt's headers are found through `qttypes`, which owns the Qt build and hands
+/// its direct dependants the include path and the flags it was configured with.
+/// Using anything else would risk compiling our C++ against a different Qt from
+/// the one the rest of the binary links.
+fn compile_cpp() {
+    let mut config = cpp_build::Config::new();
+    for flag in env::var("DEP_QT_COMPILE_FLAGS")
+        .unwrap_or_default()
+        .split_terminator(';')
+    {
+        config.flag(flag);
+    }
+    config
+        .include(env::var("DEP_QT_INCLUDE_PATH").expect("qttypes found Qt"))
+        .build("src/main.rs");
+}
+
 fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -76,4 +96,6 @@ fn main() {
         table.join("\n")
     );
     fs::write(out.join("resources.rs"), generated).expect("write resources.rs");
+
+    compile_cpp();
 }

@@ -270,11 +270,14 @@ dependencies = [
 name = "kraken-qt"
 version = "0.1.0"
 dependencies = [
+ "cpp",
+ "cpp_build",
  "cstr",
  "dirs",
  "kraken-core",
  "libc",
  "qmetaobject",
+ "qttypes",
  "serde",
  "serde_json",
 ]

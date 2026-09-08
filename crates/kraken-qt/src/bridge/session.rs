@@ -28,15 +28,24 @@ use kraken_core::pi::controller::{available_levels, RequestKind, SessionControll
 use kraken_core::pi::rpc::{AgentRecord, Launch};
 use kraken_core::pi::sessions;
 use kraken_core::util::base64;
-use kraken_core::{debug, remote};
+use kraken_core::{debug, remote, state};
 use qmetaobject::*;
 use serde_json::{json, Value};
+
+use crate::bridge::clipboard;
 
 /// How long Stop waits for the agent to end its turn before offering to kill it
 /// outright. Generous, because a working abort still has to unwind an in-flight
 /// tool call and close out the turn, and offering to discard a turn that was
 /// about to finish on its own is the worse mistake.
 const STOP_GRACE: Duration = Duration::from_millis(8000);
+
+/// How long a pasted image is kept on disk after the paste.
+///
+/// A prompt is sent within seconds of the paste, so this is already generous —
+/// but the file is also what the chip's thumbnail loads from, and a prompt can
+/// sit in the composer unsent for as long as whoever is writing it likes.
+const PASTE_KEEP: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Image formats a provider accepts in the prompt payload, by the magic bytes
 /// that identify them. Sniffed from the content rather than trusted from the
@@ -316,6 +325,7 @@ pub struct SessionBridge {
     request_effort: qt_method!(fn(&mut self)),
     set_effort: qt_method!(fn(&mut self, level: QString)),
     attach_file: qt_method!(fn(&mut self, path: QString)),
+    paste_image: qt_method!(fn(&mut self) -> bool),
     remove_attachment: qt_method!(fn(&mut self, index: i32)),
     /// Route a transcript link to whoever shows web pages.
     open_link: qt_method!(fn(&mut self, url: QString)),
@@ -1043,6 +1053,25 @@ impl SessionBridge {
         self.attachments_changed();
     }
 
+    /// Attach whatever image is on the clipboard, and say whether there was
+    /// one. The answer is what lets the composer hand the keystroke back for a
+    /// plain text paste when the clipboard holds text.
+    fn paste_image(&mut self) -> bool {
+        let Some(png) = clipboard::image_png() else {
+            return false;
+        };
+        let Some(path) = write_pasted(&png) else {
+            return false;
+        };
+        debug::action("chat.paste-image", &[("bytes", png.len().to_string())]);
+        // Named for what it is rather than for the file underneath: the chip is
+        // a label, and the file exists only because an attachment is a path
+        // everywhere downstream.
+        self.attach_named(&path, "Pasted image");
+        self.attachments_changed();
+        true
+    }
+
     fn attach_path(&mut self, path: &str) {
         if path.is_empty() {
             return;
@@ -1052,6 +1081,15 @@ impl SessionBridge {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.to_string());
+        self.attach_named(path, &name);
+    }
+
+    /// The attach every route ends at. `name` is what the chip says: a file's
+    /// own name for anything that came from disk, a plain label for what did
+    /// not.
+    fn attach_named(&mut self, path: &str, name: &str) {
+        let file = std::path::Path::new(path);
+        let name = name.to_string();
         // Read once: the same bytes decide whether this is an image and, if it
         // is, become the payload. Unreadable — vanished between the dialog and
         // now — still attaches, as a path reference rather than a crash.
@@ -1186,6 +1224,47 @@ impl SessionBridge {
     }
 }
 
+/// Put a pasted image on disk, and return where.
+///
+/// It has to become a file: an attachment is a path everywhere below here — the
+/// payload is read back off one and the chip's thumbnail is loaded from one —
+/// and a clipboard is not somewhere either can point. The name is the
+/// millisecond it was pasted, so two pastes never land on the same file even in
+/// the same second.
+fn write_pasted(png: &[u8]) -> Option<String> {
+    let folder = state::config_dir().join("pasted");
+    std::fs::create_dir_all(&folder).ok()?;
+    sweep_pasted(&folder, PASTE_KEEP);
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_millis();
+    let path = folder.join(format!("pasted-{stamp}.png"));
+    std::fs::write(&path, png).ok()?;
+    Some(path.to_string_lossy().into_owned())
+}
+
+/// Drop pasted images older than [`PASTE_KEEP`].
+///
+/// Nothing else ever will: the file outlives the prompt it was attached to on
+/// purpose, so without a sweep the folder would keep every screenshot anyone
+/// ever pasted. Doing it on the way in costs one directory read per paste and
+/// needs no timer to be running for it to happen.
+fn sweep_pasted(folder: &std::path::Path, keep: Duration) {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for entry in entries.filter_map(Result::ok) {
+        let stale = entry
+            .metadata()
+            .and_then(|data| data.modified())
+            .ok()
+            .and_then(|at| now.duration_since(at).ok())
+            .is_some_and(|age| age > keep);
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// One attachment row per chip, as QML reads them.
 fn chips(attachments: &[Attachment]) -> QVariantList {
     let mut list = QVariantList::default();
@@ -1215,6 +1294,25 @@ fn local_path(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The sweep is the only thing that ever deletes a pasted image, so it has
+    /// to be sure about which ones: one that clears the folder every time takes
+    /// the thumbnail out from under a chip that is still on screen.
+    #[test]
+    fn the_sweep_keeps_what_is_still_recent() {
+        let folder = std::env::temp_dir().join("kraken-pasted-sweep");
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("pasted-1.png");
+        std::fs::write(&file, b"png").unwrap();
+
+        sweep_pasted(&folder, Duration::from_secs(60));
+        assert!(file.exists(), "a file pasted a moment ago was swept");
+
+        sweep_pasted(&folder, Duration::ZERO);
+        assert!(!file.exists(), "a file past its keep was left behind");
+        let _ = std::fs::remove_dir_all(&folder);
+    }
 
     #[test]
     fn a_reply_splits_into_prose_and_its_fences() {

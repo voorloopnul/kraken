@@ -154,6 +154,15 @@ Rectangle {
                 background: null
                 padding: 4
 
+                // Paste is a picture first and text second: a clipboard
+                // holding an image has no text to paste anyway, so asking the
+                // bridge costs the text case nothing and the keystroke falls
+                // through untouched when the answer is no.
+                Keys.onPressed: function (event) {
+                    if (event.matches(StandardKey.Paste) && Session.paste_image())
+                        event.accepted = true
+                }
+
                 // Enter sends and Shift+Enter breaks the line: the box is a
                 // prompt first and a text editor second, and the common case
                 // should not need a second key.

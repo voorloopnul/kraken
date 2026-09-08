@@ -12,8 +12,17 @@ path = "src/main.rs"
 [dependencies]
 kraken-core.workspace = true
 qmetaobject.workspace = true
+# Reached directly for the one thing QML has no API for: the clipboard's image.
+# `qttypes` owns the Qt build (`links = "qt"`), and only a direct dependent is
+# told where Qt's headers are — which is what `build.rs` needs to compile our
+# own C++ against them.
+qttypes.workspace = true
+cpp.workspace = true
 cstr.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 dirs.workspace = true
 libc.workspace = true
+
+[build-dependencies]
+cpp_build.workspace = true
