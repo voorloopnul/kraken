@@ -45,6 +45,14 @@ pub fn prompt(runner: &GitRunner, paths: &[String]) -> Result<String, String> {
         } else {
             read_content(runner, root, path, remaining)?
         };
+        // Binary before size: what a binary file spends is the placeholder that
+        // replaces it, not the bytes it never sends. Measuring the bytes would
+        // fail the whole draft over an icon checked in beside the code.
+        let content = if content.contains('\0') {
+            "[Binary file: contents omitted]".to_string()
+        } else {
+            content
+        };
         if content.len() > remaining {
             return Err(
                 "Selected files exceed 1 MiB. Select fewer files to generate a message.".into(),
@@ -55,7 +63,7 @@ pub fn prompt(runner: &GitRunner, paths: &[String]) -> Result<String, String> {
             "path": path,
             "status": entry.xy,
             "previous_path": entry.orig,
-            "content": if content.contains('\0') { "[Binary file: contents omitted]" } else { &content },
+            "content": content,
         }));
     }
     Ok(format!(
@@ -279,6 +287,12 @@ mod tests {
         assert!(prompt(&repo.runner(), &git::args(&["large"]))
             .unwrap_err()
             .contains("exceed 1 MiB"));
+        // A checked-in image is larger than the budget and costs none of it:
+        // its contents were never going to be sent.
+        repo.write("big-binary", &format!("\0{}", "x".repeat(MAX_CONTENT)));
+        let text = prompt(&repo.runner(), &git::args(&["big-binary", "binary"])).unwrap();
+        assert!(text.contains("Binary file"), "{text}");
+        assert!(text.len() < MAX_CONTENT, "{}", text.len());
     }
 
     #[cfg(unix)]
