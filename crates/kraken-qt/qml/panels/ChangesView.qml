@@ -1,341 +1,356 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Layouts
 import "../common"
 
 // The Changes tab of the Git pane: what has changed in this workspace's repo
-// since the last commit, file by file. GitPanel is what puts it on screen.
+// since the last commit, file by file — and the commit and push that publish it.
+// GitPanel is what puts it on screen.
 //
 // One row per file with its own added and removed counts, not a split between
 // staged and unstaged — the question the tab answers is "what has the agent
 // been doing", and a change that is half staged is still one change. Every row
-// is a click away from the full diff (see DiffViewer.qml).
+// is a click away from the full diff (see DiffViewer.qml), and a tick away from
+// the next commit.
+//
+// Checking a file is the only thing that puts it in a commit: the index is not
+// the selection, and a file staged from the terminal is committed here only if
+// it is ticked here too. The checked set is the Diff bridge's, the write is the
+// Git bridge's, and the paths travel from one to the other through the Commit
+// button — which is also what keeps a click from committing a selection the
+// reader can no longer see.
 //
 // The colours are the bridge's rather than this file's: a status letter, a
 // deleted path and a zero count each have a colour that means something, and
 // working that rule out twice is how the two copies of it drift.
-Flickable {
+Item {
     id: panel
-    contentWidth: width
-    contentHeight: layout.height + 20
-    clip: true
-    boundsBehavior: Flickable.StopAtBounds
-    // Read once per selection change, not once per visible checkbox.
-    readonly property var selectedPaths: Diff.selected_paths
 
-    // Normally only the file list scrolls. A very short dock stack can be
-    // smaller than the form itself; let the whole pane scroll in that case
-    // rather than clipping the Commit and Push buttons out of reach.
-    ScrollBar.vertical: ThinScrollBar {}
+    // The checked paths as a set: a delegate asks about one path, and asking a
+    // list would be a scan per row per change.
+    readonly property var checked: new Set(Diff.selected_paths)
+    readonly property int checkedCount: Diff.selected_paths.length
+    // Both halves of what a commit needs, and nothing running that it would
+    // race. The Git bridge checks all of this again; this is what greys the
+    // button rather than what enforces the rule.
+    readonly property bool committable: Git.workspace !== ""
+                                        && Git.workspace === Diff.workspace
+                                        && !Git.action_busy && !Diff.loading
+                                        && checkedCount > 0
+                                        && Git.commit_message.trim() !== ""
 
-    component ActionButton: Button {
-        id: control
-        implicitHeight: 30
+    // Totals, and the only place the empty and failed states are said. No
+    // placeholder row is faked into the list: a pane with one row in it that
+    // is not a file reads as a file.
+    Text {
+        id: summary
+        anchors { top: parent.top; left: parent.left; right: parent.right; margins: 10 }
+        textFormat: Text.RichText
+        text: Diff.summary
         font.family: Theme.mono_family
-        font.pixelSize: 12
-        opacity: enabled ? 1 : 0.45
-        contentItem: Text {
-            text: control.text
-            font: control.font
-            color: Theme.colors.text
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-        }
-        background: Rectangle {
-            radius: 5
-            color: control.down || control.hovered ? Theme.colors.hover : Theme.colors.header
-            border.width: 1
-            border.color: control.activeFocus ? Theme.colors.accent : Theme.colors.card_border
-        }
+        font.pixelSize: 13
+        wrapMode: Text.Wrap
     }
 
-    component FileCheckBox: CheckBox {
-        id: control
-        implicitHeight: 24
-        padding: 0
-        spacing: 6
-        enabled: !Git.action_busy && !Diff.loading
-        opacity: enabled ? 1 : 0.45
-        indicator: Rectangle {
-            x: 4
-            y: (control.height - height) / 2
-            width: 14
-            height: 14
-            radius: 3
-            color: control.checkState !== Qt.Unchecked ? Theme.colors.accent : Theme.colors.card
-            border.width: 1
-            border.color: control.activeFocus ? Theme.colors.accent : Theme.colors.card_border
-            Text {
-                anchors.centerIn: parent
-                text: control.checkState === Qt.PartiallyChecked ? "−"
-                      : control.checked ? "✓" : ""
-                color: Theme.colors.accent_on
-                font.pixelSize: 12
-            }
+    // The whole selection in one line: the box that takes all of it or none of
+    // it, and how much of it is taken. The count is on the right, where the
+    // per-row counts are, rather than trailing the label it is not part of.
+    Item {
+        id: picker
+        anchors {
+            top: summary.bottom; topMargin: 8
+            left: parent.left; right: parent.right
+            leftMargin: 10; rightMargin: 12
         }
-        contentItem: Text {
-            text: control.text
-            leftPadding: 24
-            verticalAlignment: Text.AlignVCenter
-            color: Theme.colors.text
-            font.family: Theme.mono_family
-            font.pixelSize: 11
-            elide: Text.ElideRight
+        height: 16
+        visible: list.count > 0
+
+        TickBox {
+            id: allBox
+            anchors { left: parent.left; leftMargin: 4; verticalCenter: parent.verticalCenter }
+            checked: Diff.all_selected
+            // Some but not all: the box says so rather than claiming either.
+            partial: !Diff.all_selected && panel.checkedCount > 0
+            enabled: !Git.action_busy && !Diff.loading
+            tooltip: qsTr("Check every listed file")
+            Accessible.name: qsTr("Select all changed files")
+            onToggled: function (on) { Diff.select_all(on) }
         }
-    }
 
-    ColumnLayout {
-        id: layout
-        x: 10
-        y: 10
-        width: panel.width - 20
-        height: Math.max(panel.height - 20, implicitHeight)
-        spacing: 6
-
-        // Totals, and the only place the empty and failed states are said. No
-        // placeholder row is faked into the list: a pane with one row in it that
-        // is not a file reads as a file.
         Text {
-            id: summary
-            Layout.fillWidth: true
-            textFormat: Text.RichText
-            text: Diff.summary
+            anchors { left: allBox.right; leftMargin: 8; verticalCenter: parent.verticalCenter }
+            text: qsTr("Select all")
+            color: Theme.chat_colors.dim
             font.family: Theme.mono_family
-            font.pixelSize: 13
-            wrapMode: Text.Wrap
+            font.pixelSize: 12
         }
 
-        RowLayout {
-            Layout.fillWidth: true
-            FileCheckBox {
-                Layout.fillWidth: true
-                text: qsTr("Select all")
-                enabled: !Git.action_busy && !Diff.loading && list.count > 0
-                tristate: true
-                checkState: panel.selectedPaths.length === 0 ? Qt.Unchecked
-                            : Diff.all_selected ? Qt.Checked : Qt.PartiallyChecked
-                nextCheckState: function () {
-                    return checkState === Qt.Checked ? Qt.Unchecked : Qt.Checked
-                }
-                onClicked: Diff.select_all(checkState === Qt.Checked)
+        Text {
+            anchors { right: parent.right; verticalCenter: parent.verticalCenter }
+            text: qsTr("%1 of %2 selected").arg(panel.checkedCount).arg(list.count)
+            color: Theme.chat_colors.dim
+            font.family: Theme.mono_family
+            font.pixelSize: 12
+        }
+    }
+
+    ListView {
+        id: list
+        anchors {
+            top: picker.visible ? picker.bottom : summary.bottom
+            bottom: composer.top
+            left: parent.left; right: parent.right
+            topMargin: 6; bottomMargin: 8
+            leftMargin: 10; rightMargin: 10
+        }
+        clip: true
+        model: Diff.files
+        boundsBehavior: Flickable.StopAtBounds
+
+        ScrollBar.vertical: ThinScrollBar {}
+
+        delegate: Rectangle {
+            id: row
+            required property var modelData
+            required property int index
+
+            width: list.width
+            height: 22
+            radius: 4
+            color: rowMouse.containsMouse ? Theme.colors.hover : "transparent"
+
+            TickBox {
+                id: tick
+                anchors { left: parent.left; leftMargin: 4; verticalCenter: parent.verticalCenter }
+                // A binding, not a state of its own: the bridge is what says
+                // whether this file is in the next commit, and a box that
+                // answered for itself would drift from it.
+                checked: panel.checked.has(row.modelData.path)
+                enabled: !Git.action_busy && !Diff.loading
+                tooltip: qsTr("Include this file in the commit")
+                Accessible.name: qsTr("Include %1 in commit").arg(row.modelData.path)
+                onToggled: function (on) { Diff.set_selected(row.modelData.path, on) }
             }
+
             Text {
-                text: qsTr("%1 selected").arg(panel.selectedPaths.length)
-                color: Theme.chat_colors.dim
+                id: letter
+                anchors { left: tick.right; leftMargin: 8; verticalCenter: parent.verticalCenter }
+                width: 12
+                text: row.modelData.letter
+                color: row.modelData.letter_color
                 font.family: Theme.mono_family
-                font.pixelSize: 11
+                font.pixelSize: 13
+                font.weight: Font.DemiBold
             }
-        }
 
-        ListView {
-            id: list
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            Layout.minimumHeight: 0
-            Layout.preferredHeight: 0
-            clip: true
-            model: Diff.files
-            boundsBehavior: Flickable.StopAtBounds
-
-            ScrollBar.vertical: ThinScrollBar {}
-
-            delegate: Rectangle {
-                id: row
-                required property var modelData
-                required property int index
-
-                width: list.width
-                height: 24
-                radius: 4
-                color: rowMouse.containsMouse ? Theme.colors.hover : "transparent"
-
-                FileCheckBox {
-                    id: includeFile
-                    anchors { left: parent.left; verticalCenter: parent.verticalCenter }
-                    width: 24
-                    checked: panel.selectedPaths.indexOf(row.modelData.path) >= 0
-                    Accessible.name: qsTr("Include %1 in commit").arg(row.modelData.path)
-                    onClicked: Diff.set_selected(row.modelData.path, checked)
+            Text {
+                anchors {
+                    left: letter.right; leftMargin: 4
+                    right: counts.left; rightMargin: 8
+                    verticalCenter: parent.verticalCenter
                 }
+                text: row.modelData.path
+                color: row.modelData.path_color
+                font.family: Theme.mono_family
+                font.pixelSize: 13
+                // Eat into the leading directories: a path's tail is the
+                // informative end, and hiding the filename hides the row.
+                elide: Text.ElideLeft
+            }
+
+            Row {
+                id: counts
+                // Clear of the scrollbar, which overlays the list's right
+                // edge rather than taking a column out of it.
+                anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter }
+                spacing: 6
 
                 Text {
-                    id: letter
-                    anchors { left: includeFile.right; leftMargin: 4; verticalCenter: parent.verticalCenter }
-                    width: 12
-                    text: row.modelData.letter
-                    color: row.modelData.letter_color
+                    text: row.modelData.adds
+                    color: row.modelData.adds_color
                     font.family: Theme.mono_family
                     font.pixelSize: 13
-                    font.weight: Font.DemiBold
                 }
-
                 Text {
-                    anchors {
-                        left: letter.right; leftMargin: 4
-                        right: counts.left; rightMargin: 8
-                        verticalCenter: parent.verticalCenter
-                    }
-                    text: row.modelData.path
-                    color: row.modelData.path_color
+                    text: row.modelData.dels
+                    color: row.modelData.dels_color
                     font.family: Theme.mono_family
                     font.pixelSize: 13
-                    // Eat into the leading directories: a path's tail is the
-                    // informative end, and hiding the filename hides the row.
-                    elide: Text.ElideLeft
+                }
+            }
+
+            // Everything right of the tick opens the diff. The box keeps its
+            // own clicks: choosing a file to commit and reading it are two
+            // different intentions, and one row cannot guess between them.
+            MouseArea {
+                id: rowMouse
+                anchors { fill: parent; leftMargin: tick.width + 8 }
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                onClicked: function (event) {
+                    if (event.button === Qt.RightButton) {
+                        rowMenu.popup()
+                        return
+                    }
+                    Diff.open_file(row.index)
                 }
 
-                Row {
-                    id: counts
-                    // Clear of the scrollbar, which overlays the list's right
-                    // edge rather than taking a column out of it.
-                    anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter }
-                    spacing: 6
-
-                    Text {
-                        text: row.modelData.adds
-                        color: row.modelData.adds_color
-                        font.family: Theme.mono_family
-                        font.pixelSize: 13
-                    }
-                    Text {
-                        text: row.modelData.dels
-                        color: row.modelData.dels_color
-                        font.family: Theme.mono_family
-                        font.pixelSize: 13
-                    }
+                ToolTipLabel {
+                    text: row.modelData.tooltip
+                    visible: rowMouse.containsMouse && row.modelData.tooltip !== ""
                 }
+            }
 
-                MouseArea {
-                    id: rowMouse
-                    // Leave the checkbox its own hit target. Clicking a name
-                    // still opens the diff; checking it never opens a sheet.
-                    anchors { left: includeFile.right; right: parent.right; top: parent.top; bottom: parent.bottom }
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    acceptedButtons: Qt.LeftButton | Qt.RightButton
-                    onClicked: function (event) {
-                        if (event.button === Qt.RightButton) {
-                            rowMenu.popup()
-                            return
-                        }
-                        Diff.open_file(row.index)
-                    }
-
-                    ToolTipLabel {
-                        text: row.modelData.tooltip
-                        visible: rowMouse.containsMouse && row.modelData.tooltip !== ""
-                    }
+            Menu {
+                id: rowMenu
+                MenuItem {
+                    text: qsTr("Copy path")
+                    onTriggered: clipboard.copy(Diff.path_at(row.index))
                 }
-
-                Menu {
-                    id: rowMenu
-                    MenuItem {
-                        text: qsTr("Copy path")
-                        onTriggered: clipboard.copy(Diff.path_at(row.index))
-                    }
-                    MenuItem {
-                        text: qsTr("Open diff")
-                        onTriggered: Diff.open_file(row.index)
-                    }
+                MenuItem {
+                    text: qsTr("Open diff")
+                    onTriggered: Diff.open_file(row.index)
                 }
             }
         }
+    }
 
-        // A fixed footer: the file list gives up height, not the message box,
-        // so committing never requires scrolling past the changed files.
-        ColumnLayout {
-            Layout.fillWidth: true
-            spacing: 6
+    // ---- The commit ------------------------------------------------------------
 
-            Rectangle {
-                Layout.fillWidth: true
-                implicitHeight: 1
-                color: Theme.colors.card_border
-            }
+    // The message, the two buttons, and whatever git last said. It sits at the
+    // bottom whatever the list is doing, so the reader can type while the list
+    // is still being read: the file list is what gives up height, never this.
+    Column {
+        id: composer
+        anchors { left: parent.left; right: parent.right; bottom: parent.bottom; margins: 10 }
+        spacing: 6
 
-            ScrollView {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 68
+        Rectangle {
+            width: parent.width
+            height: 1
+            color: Theme.colors.card_border
+        }
+
+        Rectangle {
+            width: parent.width
+            // Two lines and a bit: enough for a subject and the start of a
+            // body, and it scrolls past that rather than eating the file list.
+            height: 62
+            radius: 6
+            color: Theme.colors.card
+            border.width: 1
+            border.color: message.activeFocus ? Theme.colors.accent : Theme.colors.card_border
+
+            Flickable {
+                anchors { fill: parent; margins: 4 }
+                contentWidth: width
+                contentHeight: message.implicitHeight
+                boundsBehavior: Flickable.StopAtBounds
                 clip: true
 
-                TextArea {
-                    id: commitMessage
+                ScrollBar.vertical: ThinScrollBar {}
+
+                TextArea.flickable: TextArea {
+                    id: message
+                    // Two-way with the Git bridge, which keeps one draft per
+                    // workspace: switching projects and coming back finds the
+                    // half-written message where it was left.
                     text: Git.commit_message
                     onTextChanged: if (text !== Git.commit_message) Git.commit_message = text
                     placeholderText: qsTr("Commit message")
                     Accessible.name: qsTr("Commit message")
-                    enabled: !Git.action_busy
-                    selectByMouse: true
-                    wrapMode: TextEdit.Wrap
-                    color: Theme.colors.text
+                    color: Theme.chat_colors.text
                     placeholderTextColor: Theme.chat_colors.dim
                     font.family: Theme.mono_family
                     font.pixelSize: 12
-                    padding: 8
-                    background: Rectangle {
-                        radius: 5
-                        color: Theme.colors.card
-                        border.width: 1
-                        border.color: commitMessage.activeFocus ? Theme.colors.accent
-                                                                : Theme.colors.card_border
+                    wrapMode: TextArea.Wrap
+                    selectByMouse: true
+                    enabled: !Git.action_busy
+                    background: null
+                    padding: 2
+
+                    // Enter breaks the line — a commit message has a body — so
+                    // committing from the keyboard takes the modifier.
+                    Keys.onReturnPressed: function (event) {
+                        if (event.modifiers & Qt.ControlModifier) {
+                            if (panel.committable)
+                                Git.commit(Diff.workspace, Diff.selected_paths)
+                            return
+                        }
+                        event.accepted = false
                     }
                 }
             }
+        }
 
-            Text {
-                Layout.fillWidth: true
-                text: qsTr("Commit includes only checked files, with all their changes.")
-                color: Theme.chat_colors.dim
-                font.family: Theme.sans_family
-                font.pixelSize: 11
-                wrapMode: Text.Wrap
-            }
+        Text {
+            width: parent.width
+            text: qsTr("Commit includes only checked files, with all their changes.")
+            color: Theme.chat_colors.dim
+            font.family: Theme.sans_family
+            font.pixelSize: 11
+            wrapMode: Text.Wrap
+        }
 
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 6
+        Item {
+            width: parent.width
+            height: 22
 
-                ActionButton {
-                    Layout.fillWidth: true
+            Row {
+                anchors { right: parent.right; verticalCenter: parent.verticalCenter }
+                spacing: 4
+
+                TextButton {
                     text: qsTr("Commit")
-                    enabled: Git.workspace !== "" && Git.workspace === Diff.workspace
-                             && !Git.action_busy && !Diff.loading && list.count > 0
-                             && panel.selectedPaths.length > 0 && Git.commit_message.trim() !== ""
-                    onClicked: Git.commit(Diff.workspace, panel.selectedPaths)
-                    ToolTip.visible: hovered
-                    ToolTip.text: qsTr("Commit checked files only; unchecked staged files stay out")
+                    fontSize: 12
+                    enabled: panel.committable
+                    tooltip: panel.checkedCount === 0
+                             ? qsTr("Check the files to commit")
+                             : qsTr("Commit the checked files only  ·  Ctrl+Enter")
+                    onClicked: Git.commit(Diff.workspace, Diff.selected_paths)
                 }
-                ActionButton {
-                    Layout.fillWidth: true
+
+                TextButton {
                     text: qsTr("Push")
+                    fontSize: 12
                     enabled: Git.workspace !== "" && !Git.action_busy
+                    tooltip: qsTr("Push to where this repository already points")
                     onClicked: Git.push()
-                    ToolTip.visible: hovered
-                    ToolTip.text: qsTr("Push using Git's configured destination (no force)")
                 }
             }
+        }
 
-            // Git errors can be long (hooks, credentials, rejected pushes).
-            // Keep them selectable and scrollable without swallowing the list.
-            ScrollView {
-                Layout.fillWidth: true
-                Layout.preferredHeight: Math.min(80, statusText.implicitHeight)
-                visible: Git.action_status !== ""
+        // Git's errors can be long — a hook's output, a rejected push — so they
+        // are readable and selectable here rather than clipped to a line, and
+        // they still cannot grow into the file list.
+        Rectangle {
+            width: parent.width
+            height: visible ? Math.min(80, statusText.implicitHeight + 4) : 0
+            visible: Git.action_status !== ""
+            color: "transparent"
+
+            Flickable {
+                anchors.fill: parent
+                contentWidth: width
+                contentHeight: statusText.implicitHeight
+                boundsBehavior: Flickable.StopAtBounds
                 clip: true
 
-                TextArea {
+                ScrollBar.vertical: ThinScrollBar {}
+
+                TextArea.flickable: TextArea {
                     id: statusText
                     text: Git.action_status
                     textFormat: TextEdit.PlainText
+                    Accessible.name: qsTr("Git operation status")
                     readOnly: true
                     selectByMouse: true
-                    wrapMode: TextEdit.Wrap
+                    wrapMode: TextArea.Wrap
                     color: Git.action_error ? Theme.chat_colors.error : Theme.chat_colors.dim
                     font.family: Theme.mono_family
                     font.pixelSize: 11
-                    padding: 0
                     background: null
-                    Accessible.name: qsTr("Git operation status")
+                    padding: 0
                 }
             }
         }
@@ -354,7 +369,9 @@ Flickable {
     Binding { target: Diff; property: "theme"; value: Theme.name }
 
     // A commit or a checkout changes what "since the last commit" means, so the
-    // tab's whole answer changes with HEAD.
+    // tab's whole answer changes with HEAD. A write that failed can have
+    // changed the index on its way to failing, which is why the result of one
+    // is worth a refresh whichever way it went.
     Connections {
         target: Git
         function onBranch_changed() { if (panel.visible) Diff.refresh() }

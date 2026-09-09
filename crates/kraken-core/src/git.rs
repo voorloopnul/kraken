@@ -356,6 +356,9 @@ pub fn commit_selected(runner: &GitRunner, message: &str, paths: &[String]) -> R
     }
     let entries = crate::diff::parse_status(&status.stdout);
     let (stage, commit) = selected_paths(&entries, paths)?;
+    // Only files Git has never seen need this. `--only` takes a tracked path's
+    // working-tree contents by itself, so staging one first would write the
+    // index for nothing — and leave it written if a hook then refuses.
     if !stage.is_empty() {
         let mut argv = args(&["add", "--all", "--"]);
         argv.extend(stage.iter().map(|path| literal_path(path)));
@@ -388,9 +391,11 @@ fn selected_paths(
         .filter(|entry| selected.contains(entry.path.as_str()))
     {
         commit.insert(entry.path.clone());
-        // A staged deletion has already left the index, so `git add` would
-        // reject its path. `commit --only` can still find it in HEAD.
-        if entry.xy != "D " {
+        // Untracked is the one state `git commit -- <path>` cannot start from:
+        // the path is in neither the index nor HEAD, and Git rejects it. Every
+        // other shape — a modification, a deletion staged or not, either half
+        // of a rename — the commit below reads out of the working tree.
+        if entry.xy == "??" {
             stage.insert(entry.path.clone());
         }
         if entry.xy.contains('R') {
@@ -404,9 +409,6 @@ fn selected_paths(
                     ));
                 }
                 commit.insert(origin.clone());
-                if entry.xy.ends_with('R') {
-                    stage.insert(origin.clone());
-                }
             }
         }
         // A copy does not remove its source; do not pull in source edits.
@@ -957,7 +959,8 @@ pub(crate) mod tests {
     fn a_checked_copy_does_not_pull_in_its_unchecked_source() {
         let entries = crate::diff::parse_status("C  copy\0source\0 M source\0");
         let (stage, commit) = selected_paths(&entries, &args(&["copy"])).unwrap();
-        assert_eq!(stage, args(&["copy"]));
+        // Already in the index as a copy, so there is nothing to stage.
+        assert!(stage.is_empty(), "{stage:?}");
         assert_eq!(commit, args(&["copy"]));
     }
 
@@ -1012,6 +1015,36 @@ pub(crate) mod tests {
         assert!(error.contains("index was not reset"), "{error}");
         assert_eq!(repo.git(&["ls-files"]).stdout.trim(), "new.txt");
         assert!(!head_exists(&repo.runner()));
+    }
+
+    #[test]
+    fn a_refused_commit_of_tracked_files_leaves_the_index_untouched() {
+        use std::os::unix::fs::PermissionsExt;
+        let repo = writable_repo("commit-hook-tracked");
+        repo.write("tracked.txt", "original\n");
+        commit_all(&repo.runner(), "Initial").unwrap();
+        repo.write("tracked.txt", "edited\n");
+        repo.write(
+            ".git/test-hooks/pre-commit",
+            "#!/bin/sh\necho 'hook refused this commit'\nexit 1\n",
+        );
+        fs::set_permissions(
+            repo.path.join(".git/test-hooks/pre-commit"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+
+        let error = commit_selected(&repo.runner(), "Rejected", &args(&["tracked.txt"]))
+            .unwrap_err();
+        assert!(error.contains("hook refused this commit"), "{error}");
+        // Nothing was staged on the way in, so the refusal leaves the index as
+        // the reader left it: the edit is still only in the working tree.
+        assert!(
+            repo.git(&["diff", "--cached", "--name-only"]).stdout.is_empty(),
+            "{}",
+            repo.git(&["diff", "--cached", "--name-only"]).stdout
+        );
+        assert_eq!(repo.git(&["status", "--porcelain"]).stdout, " M tracked.txt\n");
     }
 
     #[test]

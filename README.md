@@ -40,9 +40,11 @@ an upstream and credentials in the terminal first if Git asks for them.
 
 Both actions run in the background, locally or over SSH, with their result
 shown below the buttons. A failed commit keeps the message and selection for
-retrying; it does not reset the index, so review any staged changes first.
-Drafts and in-flight results stay with their
-workspace when you switch away; drafts are kept for this app run, not on disk.
+retrying. Only files Git has never seen are staged on the way in — everything
+else is committed straight from the working tree — so a refusal leaves the rest
+of the index exactly as you left it. Drafts and in-flight results stay with
+their workspace when you switch away; drafts are kept for this app run, not on
+disk.
 
 ## The files pane over SSH
 
