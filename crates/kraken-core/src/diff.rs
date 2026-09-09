@@ -208,6 +208,55 @@ impl FileChange {
     }
 }
 
+/// The Changes tab's commit selection, keyed by repository-relative path so
+/// refreshing or sorting rows cannot move a checkmark onto a different file.
+/// New files start unchecked; a refresh never silently broadens a selection.
+#[derive(Default)]
+pub struct CommitSelection {
+    choices: BTreeMap<String, bool>,
+}
+
+impl CommitSelection {
+    pub fn sync(&mut self, files: &[FileChange]) {
+        self.choices = files
+            .iter()
+            .map(|file| {
+                let checked = self.choices.get(&file.path).copied().unwrap_or(false);
+                (file.path.clone(), checked)
+            })
+            .collect();
+    }
+
+    pub fn set(&mut self, path: &str, checked: bool) -> bool {
+        let Some(current) = self.choices.get_mut(path) else {
+            return false;
+        };
+        if *current == checked {
+            return false;
+        }
+        *current = checked;
+        true
+    }
+
+    pub fn select_all(&mut self, checked: bool) {
+        for value in self.choices.values_mut() {
+            *value = checked;
+        }
+    }
+
+    pub fn selected_paths(&self) -> Vec<String> {
+        self.choices
+            .iter()
+            .filter(|(_, checked)| **checked)
+            .map(|(path, _)| path.clone())
+            .collect()
+    }
+
+    pub fn all_selected(&self) -> bool {
+        !self.choices.is_empty() && self.choices.values().all(|checked| *checked)
+    }
+}
+
 /// What happened to the file, in words: "modified · not staged".
 pub fn describe(change: &FileChange) -> String {
     let name = letter_name(change.letter());
@@ -1015,6 +1064,50 @@ mod tests {
             dels: Some(1),
             binary: false,
         }
+    }
+
+    // ---- Commit selection -------------------------------------------------
+
+    #[test]
+    fn commit_selection_starts_unchecked_and_select_all_can_be_cleared() {
+        let mut selection = CommitSelection::default();
+        selection.sync(&[change(" M", "a"), change("??", "b")]);
+        assert!(selection.selected_paths().is_empty());
+        assert!(!selection.all_selected());
+        selection.select_all(true);
+        assert_eq!(selection.selected_paths(), vec!["a", "b"]);
+        assert!(selection.all_selected());
+        selection.set("a", false);
+        assert_eq!(selection.selected_paths(), vec!["b"]);
+        assert!(!selection.all_selected());
+        selection.select_all(false);
+        assert!(selection.selected_paths().is_empty());
+    }
+
+    #[test]
+    fn refreshing_keeps_selection_by_path_and_never_checks_new_files() {
+        let mut selection = CommitSelection::default();
+        selection.sync(&[change(" M", "b"), change(" M", "a")]);
+        selection.select_all(true);
+        selection.sync(&[change("??", "new"), change("MM", "a")]);
+        assert_eq!(selection.selected_paths(), vec!["a"]);
+        assert!(!selection.all_selected());
+        assert!(!selection.set("b", true));
+        assert!(!selection.set("not-in-the-list", true));
+        selection.sync(&[]);
+        assert!(selection.selected_paths().is_empty());
+        assert!(!selection.all_selected());
+    }
+
+    #[test]
+    fn selections_in_different_workspaces_are_independent() {
+        let mut first = CommitSelection::default();
+        let mut second = CommitSelection::default();
+        first.sync(&[change(" M", "same-name")]);
+        second.sync(&[change(" M", "same-name")]);
+        first.set("same-name", true);
+        assert!(first.all_selected());
+        assert!(second.selected_paths().is_empty());
     }
 
     // ---- Status -----------------------------------------------------------

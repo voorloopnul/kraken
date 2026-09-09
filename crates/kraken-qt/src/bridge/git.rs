@@ -8,11 +8,93 @@
 //!
 //! Like the diff pane, every git call runs on a worker thread: `git log` on a
 //! remote workspace is an SSH round trip, and a checkout is one that also
-//! writes files.
+//! writes files. Commit and push share that worker path and keep their draft,
+//! progress and result with the workspace that requested them.
+
+use std::collections::HashMap;
 
 use kraken_core::git::{self, GitRunner, LogData, LogRow, MAX_COMMITS};
 use kraken_core::theme::DEFAULT_THEME;
 use qmetaobject::*;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Mutation {
+    Commit {
+        message: String,
+        paths: Vec<String>,
+    },
+    Push,
+    Checkout(String),
+}
+
+impl Mutation {
+    fn progress(&self) -> &'static str {
+        match self {
+            Self::Commit { .. } => "Committing…",
+            Self::Push => "Pushing…",
+            Self::Checkout(_) => "Checking out…",
+        }
+    }
+
+    fn success(&self) -> &'static str {
+        match self {
+            Self::Commit { .. } => "Committed selected files.",
+            Self::Push => "Push completed.",
+            Self::Checkout(_) => "Checkout completed.",
+        }
+    }
+
+    fn run(&self, runner: &GitRunner) -> Result<(), String> {
+        match self {
+            Self::Commit { message, paths } => git::commit_selected(runner, message, paths),
+            Self::Push => git::push(runner),
+            Self::Checkout(target) => git::checkout(runner, target),
+        }
+    }
+}
+
+/// Per-workspace rather than per-view: switching away during a push must not
+/// clear another repository's draft or unlock a second write to the first one.
+#[derive(Default)]
+struct Actions {
+    draft: String,
+    active: Option<Mutation>,
+    status: String,
+    error: bool,
+}
+
+impl Actions {
+    fn begin(&mut self, operation: Mutation) -> bool {
+        if self.active.is_some() {
+            return false;
+        }
+        if matches!(&operation, Mutation::Commit { message, paths } if message.trim().is_empty() || paths.is_empty()) {
+            return false;
+        }
+        self.status = operation.progress().into();
+        self.error = false;
+        self.active = Some(operation);
+        true
+    }
+
+    fn finish(&mut self, outcome: &Result<(), String>) -> Option<Mutation> {
+        let operation = self.active.take()?;
+        self.error = outcome.is_err();
+        self.status = match outcome {
+            Ok(()) => {
+                if let Mutation::Commit { message, .. } = &operation {
+                    // Do not erase an edit made after the request was sent.
+                    if self.draft == *message {
+                        self.draft.clear();
+                    }
+                }
+                operation.success().into()
+            }
+            Err(error) => error.clone(),
+        };
+        Some(operation)
+    }
+}
 
 #[derive(QObject, Default)]
 pub struct GitBridge {
@@ -38,6 +120,19 @@ pub struct GitBridge {
     /// notice a branch switched from the terminal rather than from here.
     branch: qt_property!(QString; NOTIFY branch_changed READ get_branch),
 
+    // QML's property declaration needs a field, but its value lives in the
+    // per-workspace draft rather than in this generated storage slot.
+    #[allow(dead_code)]
+    commit_message: qt_property!(QString; NOTIFY action_changed READ get_commit_message WRITE set_commit_message),
+    action_busy: qt_property!(bool; NOTIFY action_changed READ get_action_busy),
+    action_status: qt_property!(QString; NOTIFY action_changed READ get_action_status),
+    action_error: qt_property!(bool; NOTIFY action_changed READ get_action_error),
+    action_changed: qt_signal!(),
+    /// A write completed, even if it failed after staging or a hook ran.
+    repository_changed: qt_signal!(),
+    commit: qt_method!(fn(&mut self, workspace: QString, paths: QVariantList)),
+    push: qt_method!(fn(&mut self)),
+
     workspace_changed: qt_signal!(),
     theme_changed: qt_signal!(),
     rows_changed: qt_signal!(),
@@ -59,6 +154,7 @@ pub struct GitBridge {
     entries: Vec<LogRow>,
     note: String,
     branch_name: String,
+    actions: HashMap<String, Actions>,
 }
 
 impl GitBridge {
@@ -97,6 +193,7 @@ impl GitBridge {
         // while the first gather runs.
         self.generation += 1;
         self.workspace_changed();
+        self.action_changed();
         self.rows_changed();
         self.poll_branch();
     }
@@ -230,31 +327,195 @@ impl GitBridge {
     }
 
     fn checkout(&mut self, target: QString) {
-        if self.cwd().is_empty() {
+        self.start_mutation(Mutation::Checkout(target.to_string()));
+    }
+
+    // ---- Commit and push -------------------------------------------------
+
+    fn get_commit_message(&self) -> QString {
+        self.actions
+            .get(&self.cwd())
+            .map_or("", |state| state.draft.as_str())
+            .into()
+    }
+
+    fn set_commit_message(&mut self, message: QString) {
+        let cwd = self.cwd();
+        if cwd.is_empty() {
             return;
         }
-        let target = target.to_string();
-        let runner = GitRunner::for_workspace(&self.cwd());
+        let state = self.actions.entry(cwd).or_default();
+        let message = message.to_string();
+        if state.draft != message {
+            state.draft = message;
+            self.action_changed();
+        }
+    }
+
+    fn get_action_busy(&self) -> bool {
+        self.actions
+            .get(&self.cwd())
+            .is_some_and(|state| state.active.is_some())
+    }
+
+    fn get_action_status(&self) -> QString {
+        self.actions
+            .get(&self.cwd())
+            .map_or("", |state| state.status.as_str())
+            .into()
+    }
+
+    fn get_action_error(&self) -> bool {
+        self.actions
+            .get(&self.cwd())
+            .is_some_and(|state| state.error)
+    }
+
+    fn commit(&mut self, workspace: QString, paths: QVariantList) {
+        if workspace.to_string() != self.cwd() {
+            return; // The selection must belong to the repository being committed.
+        }
+        let paths = (0..paths.len())
+            .map(|index| paths[index].to_qstring().to_string())
+            .collect();
+        self.start_mutation(Mutation::Commit {
+            message: self.get_commit_message().to_string(),
+            paths,
+        });
+    }
+
+    fn push(&mut self) {
+        self.start_mutation(Mutation::Push);
+    }
+
+    fn start_mutation(&mut self, operation: Mutation) {
+        let cwd = self.cwd();
+        if cwd.is_empty()
+            || !self
+                .actions
+                .entry(cwd.clone())
+                .or_default()
+                .begin(operation.clone())
+        {
+            return;
+        }
+        self.action_changed();
+        let runner = GitRunner::for_workspace(&cwd);
         let pointer = QPointer::from(&*self);
         let deliver = queued_callback(move |outcome: Result<(), String>| {
             if let Some(this) = pointer.as_pinned() {
-                this.borrow_mut().on_checkout(outcome);
+                this.borrow_mut().on_mutation(&cwd, outcome);
             }
         });
-        // A checkout writes the whole worktree; on a remote workspace it is an
-        // SSH round trip on top of that.
-        std::thread::spawn(move || deliver(git::checkout(&runner, &target)));
+        std::thread::spawn(move || deliver(operation.run(&runner)));
     }
 
-    fn on_checkout(&mut self, outcome: Result<(), String>) {
-        if let Err(message) = outcome {
-            self.checkout_failed(message.as_str().into());
-            return;
+    fn on_mutation(&mut self, cwd: &str, outcome: Result<(), String>) {
+        let operation = self
+            .actions
+            .get_mut(cwd)
+            .and_then(|state| state.finish(&outcome));
+        if cwd != self.cwd() {
+            return; // The result belongs to the workspace that started it.
         }
-        // HEAD moved: redraw so the (HEAD -> …) decoration follows, and tell
-        // the diff pane, whose answer is measured from HEAD.
+        self.action_changed();
+        if matches!(operation, Some(Mutation::Checkout(_))) {
+            if let Err(message) = &outcome {
+                self.checkout_failed(message.as_str().into());
+            }
+        }
+        // A failed hook may still have staged or written files. Refresh both
+        // views after any outcome, not just a successful change to HEAD.
         self.poll_branch();
-        self.branch_changed();
+        self.repository_changed();
         self.refresh();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn commit_request(message: &str) -> Mutation {
+        Mutation::Commit {
+            message: message.into(),
+            paths: vec!["file.txt".into()],
+        }
+    }
+
+    #[test]
+    fn writes_are_serialized_until_the_worker_finishes() {
+        let mut state = Actions::default();
+        assert!(state.begin(Mutation::Push));
+        assert_eq!(state.status, "Pushing…");
+        assert!(!state.begin(commit_request("message")));
+        assert!(!state.begin(Mutation::Checkout("main".into())));
+        state.finish(&Ok(()));
+        assert!(state.active.is_none());
+        assert!(state.begin(commit_request("message")));
+    }
+
+    #[test]
+    fn blank_messages_never_start_a_write() {
+        let mut state = Actions::default();
+        assert!(!state.begin(commit_request(" \n\t")));
+        assert!(!state.begin(Mutation::Commit {
+            message: "Message".into(),
+            paths: Vec::new(),
+        }));
+        assert!(state.active.is_none());
+    }
+
+    #[test]
+    fn only_a_successful_commit_clears_its_original_draft() {
+        let mut state = Actions {
+            draft: "Subject\n\nBody".into(),
+            ..Default::default()
+        };
+        state.begin(commit_request(&state.draft));
+        state.finish(&Err("hook rejected".into()));
+        assert_eq!(state.draft, "Subject\n\nBody");
+        assert!(state.error);
+        assert_eq!(state.status, "hook rejected");
+
+        state.begin(Mutation::Push);
+        assert!(!state.error);
+        state.finish(&Ok(()));
+        assert_eq!(state.draft, "Subject\n\nBody");
+
+        state.begin(commit_request(&state.draft));
+        state.finish(&Ok(()));
+        assert!(state.draft.is_empty());
+        assert_eq!(state.status, "Committed selected files.");
+    }
+
+    #[test]
+    fn a_completed_commit_does_not_erase_a_newer_draft() {
+        let mut state = Actions {
+            draft: "First".into(),
+            ..Default::default()
+        };
+        state.begin(commit_request(&state.draft));
+        state.draft = "Next".into();
+        state.finish(&Ok(()));
+        assert_eq!(state.draft, "Next");
+    }
+
+    #[test]
+    fn a_background_result_stays_with_its_workspace() {
+        let mut workspaces = HashMap::<String, Actions>::new();
+        let first = workspaces.entry("/first".into()).or_default();
+        first.draft = "First repository".into();
+        first.begin(commit_request(&first.draft));
+        let second = workspaces.entry("/second".into()).or_default();
+        second.draft = "Second repository".into();
+        second.begin(Mutation::Push);
+
+        workspaces.get_mut("/first").unwrap().finish(&Ok(()));
+        assert!(workspaces["/first"].draft.is_empty());
+        assert!(workspaces["/first"].active.is_none());
+        assert_eq!(workspaces["/second"].draft, "Second repository");
+        assert_eq!(workspaces["/second"].active, Some(Mutation::Push));
+        assert_eq!(workspaces["/second"].status, "Pushing…");
     }
 }

@@ -19,6 +19,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::remote::{self, RemoteTarget};
+use crate::util::shell_quote;
 
 /// The history pane walks this far back and no further; a repo with tens of
 /// thousands of commits would otherwise spend the whole refresh in `git log`.
@@ -28,6 +29,8 @@ pub const MAX_COMMITS: usize = 200;
 pub const QUICK: Duration = Duration::from_secs(5);
 /// What a command that touches file contents (a diff, a checkout) is given.
 pub const SLOW: Duration = Duration::from_secs(10);
+/// Hooks and a network push can take much longer than a read of the worktree.
+pub const WRITE_TIMEOUT: Duration = Duration::from_secs(120);
 /// A remote call carries a network round trip plus a login-shell spawn, so no
 /// remote timeout is ever shorter than this.
 pub const REMOTE_FLOOR: Duration = Duration::from_secs(15);
@@ -329,6 +332,149 @@ pub fn checkout(runner: &GitRunner, target: &str) -> Result<(), String> {
             })
         }
         None => Err("git checkout could not run".to_string()),
+    }
+}
+
+/// Commit the checked files' working-tree contents, not the entire index.
+/// Unchecked files stay out of the commit even if someone already staged them.
+/// Paths are repository-relative, just like the Changes tab's status rows.
+pub fn commit_selected(runner: &GitRunner, message: &str, paths: &[String]) -> Result<(), String> {
+    let message = message.trim();
+    if message.is_empty() {
+        return Err("Enter a commit message.".into());
+    }
+    if paths.is_empty() {
+        return Err("Select at least one changed file.".into());
+    }
+    // Read again at click time: a selected rename must include its old name,
+    // and a stale row must not silently commit a different set of paths.
+    let status = runner
+        .run(&crate::diff::status_argv(), QUICK)
+        .ok_or("Could not read Git status. Refresh the Changes tab and retry.")?;
+    if !status.ok() {
+        return Err(format!("Could not read Git status:\n{}", status.stderr.trim()));
+    }
+    let entries = crate::diff::parse_status(&status.stdout);
+    let (stage, commit) = selected_paths(&entries, paths)?;
+    if !stage.is_empty() {
+        let mut argv = args(&["add", "--all", "--"]);
+        argv.extend(stage.iter().map(|path| literal_path(path)));
+        write_command(runner, &argv, "Stage")?;
+    }
+    // --only is essential: staging checked files and doing a plain commit
+    // would also sweep in every unchecked file that was already staged.
+    write_command(runner, &commit_argv(message, &commit), "Commit").map_err(|error| {
+        format!("{error}\nThe index was not reset; review staged changes before retrying.")
+    })
+}
+
+fn selected_paths(
+    entries: &[crate::diff::StatusEntry],
+    paths: &[String],
+) -> Result<(Vec<String>, Vec<String>), String> {
+    let selected: HashSet<&str> = paths.iter().map(String::as_str).collect();
+    if selected
+        .iter()
+        .any(|path| !entries.iter().any(|entry| entry.path == *path))
+    {
+        return Err(
+            "Selected files have changed or disappeared. Refresh the Changes tab and retry.".into(),
+        );
+    }
+    let mut stage = std::collections::BTreeSet::new();
+    let mut commit = std::collections::BTreeSet::new();
+    for entry in entries
+        .iter()
+        .filter(|entry| selected.contains(entry.path.as_str()))
+    {
+        commit.insert(entry.path.clone());
+        // A staged deletion has already left the index, so `git add` would
+        // reject its path. `commit --only` can still find it in HEAD.
+        if entry.xy != "D " {
+            stage.insert(entry.path.clone());
+        }
+        if entry.xy.contains('R') {
+            if let Some(origin) = &entry.orig {
+                if entries.iter().any(|other| other.path == *origin)
+                    && !selected.contains(origin.as_str())
+                {
+                    return Err(format!(
+                        "The rename of {origin} overlaps an unchecked change at that path. \
+                         Select both changes or adjust the rename before committing."
+                    ));
+                }
+                commit.insert(origin.clone());
+                if entry.xy.ends_with('R') {
+                    stage.insert(origin.clone());
+                }
+            }
+        }
+        // A copy does not remove its source; do not pull in source edits.
+    }
+    Ok((stage.into_iter().collect(), commit.into_iter().collect()))
+}
+
+fn literal_path(path: &str) -> String {
+    // Neither a leading '-' nor Git's wildcard/pathspec syntax is an option
+    // to expand the selection. Anchor it at the root for nested workspaces.
+    format!(":(top,literal){path}")
+}
+
+/// Both the message and each literal path remain single arguments over SSH.
+pub fn commit_argv(message: &str, paths: &[String]) -> Vec<String> {
+    let mut argv = args(&["commit", "--only", "-m", message, "--"]);
+    argv.extend(paths.iter().map(|path| literal_path(path)));
+    argv
+}
+
+/// Use Git's configured push destination and refspec. Never infer a remote,
+/// set an upstream, force a push, or bypass hooks on the user's behalf.
+pub fn push(runner: &GitRunner) -> Result<(), String> {
+    write_command(runner, &args(&["push"]), "Push")
+}
+
+/// Do not ask for credentials in the terminal that happened to launch Kraken.
+/// `env` also applies these settings on the far side of an SSH workspace.
+fn write_argv(runner: &GitRunner, git_args: &[String]) -> Vec<String> {
+    let mut prefix = args(&["env", "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never"]);
+    match &runner.remote {
+        Some(target) => {
+            prefix.push("git".into());
+            prefix.extend(git_args.iter().cloned());
+            let command = prefix
+                .iter()
+                .map(|arg| shell_quote(arg))
+                .collect::<Vec<_>>()
+                .join(" ");
+            target.ssh_argv(&command, false)
+        }
+        None => {
+            prefix.extend(runner.argv(git_args));
+            prefix
+        }
+    }
+}
+
+fn write_command(runner: &GitRunner, argv: &[String], action: &str) -> Result<(), String> {
+    match run_argv(&write_argv(runner, argv), WRITE_TIMEOUT) {
+        Some(output) if output.ok() => Ok(()),
+        Some(output) => {
+            // Hooks and "nothing to commit" can report on stdout rather than
+            // stderr. Preserve both, as plain text, instead of hiding why.
+            let detail = [output.stderr.trim(), output.stdout.trim()]
+                .into_iter()
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            Err(if detail.is_empty() {
+                format!("{action} failed.")
+            } else {
+                format!("{action} failed:\n{detail}")
+            })
+        }
+        None => Err(format!(
+            "{action} could not start or timed out. Refresh the repository before retrying."
+        )),
     }
 }
 
@@ -658,6 +804,301 @@ pub(crate) mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
         }
+    }
+
+    // ---- Writes -----------------------------------------------------------
+
+    // Select every current row for fixtures that need a complete commit.
+    fn commit_all(runner: &GitRunner, message: &str) -> Result<(), String> {
+        let status = runner.run(&crate::diff::status_argv(), QUICK).unwrap();
+        let paths = crate::diff::parse_status(&status.stdout)
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect::<Vec<_>>();
+        commit_selected(runner, message, &paths)
+    }
+
+    fn writable_repo(name: &str) -> TestRepo {
+        let repo = TestRepo::new(name);
+        for (key, value) in [
+            ("user.name", "Test"),
+            ("user.email", "test@example.com"),
+            ("commit.gpgsign", "false"),
+            ("core.hooksPath", ".git/test-hooks"),
+            ("core.excludesFile", "/dev/null"),
+            ("push.default", "simple"),
+            ("push.autoSetupRemote", "false"),
+            ("push.gpgSign", "false"),
+        ] {
+            assert!(repo.git(&["config", "--local", key, value]).ok());
+        }
+        repo
+    }
+
+    #[test]
+    fn commit_all_handles_new_modified_deleted_and_partially_staged_files() {
+        let repo = writable_repo("commit-all");
+        repo.write("changed.txt", "original\n");
+        repo.write("gone.txt", "delete me\n");
+        commit_all(&repo.runner(), "Initial commit").expect("initial commit");
+        repo.write("changed.txt", "staged\n");
+        assert!(repo.git(&["add", "changed.txt"]).ok());
+        repo.write("changed.txt", "working copy\n");
+        fs::remove_file(repo.path.join("gone.txt")).unwrap();
+        repo.write("sub/new.txt", "new\n");
+        repo.write(".gitignore", "ignored.txt\n");
+        repo.write("ignored.txt", "leave me out\n");
+
+        // A workspace inside the repository still commits the whole Changes
+        // listing, not just the paths beneath that subdirectory.
+        let runner = GitRunner::local(repo.path.join("sub").to_string_lossy());
+        let message = "Fix 'quotes' and $variables\n\nKeep a detailed body; $(not a command).";
+        commit_all(&runner, message).expect("commit changes");
+        assert_eq!(
+            repo.git(&["log", "-1", "--format=%B"]).stdout.trim(),
+            message
+        );
+        assert_eq!(
+            repo.git(&["show", "HEAD:changed.txt"]).stdout,
+            "working copy\n"
+        );
+        assert_eq!(repo.git(&["show", "HEAD:sub/new.txt"]).stdout, "new\n");
+        assert!(!repo.git(&["cat-file", "-e", "HEAD:gone.txt"]).ok());
+        assert!(!repo.git(&["cat-file", "-e", "HEAD:ignored.txt"]).ok());
+        assert!(repo.git(&["status", "--porcelain"]).stdout.is_empty());
+    }
+
+    #[test]
+    fn unchecked_staged_and_unstaged_edits_stay_out_of_a_selected_commit() {
+        let repo = writable_repo("commit-subset");
+        repo.write("checked", "original\n");
+        repo.write("unchecked", "original\n");
+        commit_all(&repo.runner(), "Initial").unwrap();
+        repo.write("unchecked", "staged\n");
+        assert!(repo.git(&["add", "unchecked"]).ok());
+        repo.write("unchecked", "unstaged\n");
+        repo.write("checked", "checked edits\n");
+        repo.write("untracked", "leave out\n");
+
+        commit_selected(&repo.runner(), "Selected only", &args(&["checked"])).unwrap();
+        assert_eq!(repo.git(&["show", "HEAD:checked"]).stdout, "checked edits\n");
+        assert_eq!(repo.git(&["show", "HEAD:unchecked"]).stdout, "original\n");
+        assert_eq!(repo.git(&["show", ":unchecked"]).stdout, "staged\n");
+        assert_eq!(fs::read_to_string(repo.path.join("unchecked")).unwrap(), "unstaged\n");
+        assert!(!repo.git(&["cat-file", "-e", "HEAD:untracked"]).ok());
+    }
+
+    #[test]
+    fn an_initial_commit_also_excludes_unchecked_staged_files() {
+        let repo = writable_repo("commit-subset-initial");
+        repo.write("checked", "checked\n");
+        repo.write("unchecked", "unchecked\n");
+        assert!(repo.git(&["add", "unchecked"]).ok());
+        commit_selected(&repo.runner(), "First", &args(&["checked"])).unwrap();
+        assert_eq!(repo.git(&["ls-tree", "--name-only", "HEAD"]).stdout, "checked\n");
+        assert_eq!(repo.git(&["diff", "--cached", "--name-only"]).stdout, "unchecked\n");
+    }
+
+    #[test]
+    fn a_checked_rename_commits_both_names_but_not_other_staged_files() {
+        let repo = writable_repo("commit-selected-rename");
+        repo.write("old", "original\n");
+        repo.write("unchecked", "original\n");
+        commit_all(&repo.runner(), "Initial").unwrap();
+        assert!(repo.git(&["mv", "old", "new"]).ok());
+        repo.write("unchecked", "staged\n");
+        assert!(repo.git(&["add", "unchecked"]).ok());
+        commit_selected(&repo.runner(), "Rename", &args(&["new"])).unwrap();
+        assert!(!repo.git(&["cat-file", "-e", "HEAD:old"]).ok());
+        assert_eq!(repo.git(&["show", "HEAD:new"]).stdout, "original\n");
+        assert_eq!(repo.git(&["show", "HEAD:unchecked"]).stdout, "original\n");
+        assert_eq!(repo.git(&["show", ":unchecked"]).stdout, "staged\n");
+    }
+
+    #[test]
+    fn checked_deletions_work_whether_staged_or_not() {
+        let repo = writable_repo("commit-selected-deletions");
+        for path in ["staged-delete", "unstaged-delete", "unchecked-delete"] {
+            repo.write(path, "original\n");
+        }
+        commit_all(&repo.runner(), "Initial").unwrap();
+        assert!(repo.git(&["rm", "staged-delete", "unchecked-delete"]).ok());
+        fs::remove_file(repo.path.join("unstaged-delete")).unwrap();
+        commit_selected(&repo.runner(), "Delete selected", &args(&["staged-delete", "unstaged-delete"])).unwrap();
+        assert_eq!(repo.git(&["ls-tree", "--name-only", "HEAD"]).stdout, "unchecked-delete\n");
+        assert_eq!(repo.git(&["diff", "--cached", "--name-only"]).stdout, "unchecked-delete\n");
+    }
+
+    #[test]
+    fn pathspec_magic_and_unusual_names_cannot_expand_the_selection() {
+        let repo = writable_repo("commit-literal-selection");
+        let names = ["*.txt", "-leading[1].txt", ":(glob)**", "with space\tand\nnewline"];
+        for name in names { repo.write(name, "checked\n"); }
+        repo.write("other.txt", "unchecked\n");
+        commit_selected(&repo.runner(), "Literal names", &args(&names)).unwrap();
+        for name in names {
+            assert!(repo.git(&["cat-file", "-e", &format!("HEAD:{name}")]).ok());
+        }
+        assert!(!repo.git(&["cat-file", "-e", "HEAD:other.txt"]).ok());
+        assert!(!repo.git(&["cat-file", "-e", ":other.txt"]).ok());
+    }
+
+    #[test]
+    fn an_empty_or_stale_selection_never_stages_anything() {
+        let repo = writable_repo("commit-empty-selection");
+        repo.write("new", "new\n");
+        assert!(commit_selected(&repo.runner(), "Empty", &[]).unwrap_err().contains("Select at least one"));
+        assert!(commit_selected(&repo.runner(), "Stale", &args(&["new", "gone"])).unwrap_err().contains("Refresh"));
+        assert!(repo.git(&["ls-files"]).stdout.is_empty());
+        assert!(!head_exists(&repo.runner()));
+    }
+
+    #[test]
+    fn a_checked_copy_does_not_pull_in_its_unchecked_source() {
+        let entries = crate::diff::parse_status("C  copy\0source\0 M source\0");
+        let (stage, commit) = selected_paths(&entries, &args(&["copy"])).unwrap();
+        assert_eq!(stage, args(&["copy"]));
+        assert_eq!(commit, args(&["copy"]));
+    }
+
+    #[test]
+    fn a_rename_cannot_sweep_in_an_unchecked_recreated_source() {
+        let entries = crate::diff::parse_status("R  new\0old\0?? old\0");
+        assert!(selected_paths(&entries, &args(&["new"])).unwrap_err().contains("unchecked"));
+        assert!(selected_paths(&entries, &args(&["new", "old"])).is_ok());
+    }
+
+    #[test]
+    fn an_empty_message_does_not_even_stage_changes() {
+        let repo = writable_repo("commit-empty-message");
+        repo.write("new.txt", "new\n");
+        assert_eq!(
+            commit_all(&repo.runner(), " \n\t "),
+            Err("Enter a commit message.".into())
+        );
+        assert!(repo.git(&["ls-files"]).stdout.is_empty());
+        assert!(!head_exists(&repo.runner()));
+    }
+
+    #[test]
+    fn a_clean_tree_does_not_create_an_empty_commit() {
+        let repo = writable_repo("commit-clean");
+        repo.write("new.txt", "new\n");
+        commit_all(&repo.runner(), "First").unwrap();
+        let error = commit_all(&repo.runner(), "Nothing changed").unwrap_err();
+        assert!(error.contains("Select at least one changed file"), "{error}");
+        assert_eq!(
+            repo.git(&["rev-list", "--count", "HEAD"]).stdout.trim(),
+            "1"
+        );
+    }
+
+    #[test]
+    fn a_rejected_commit_keeps_the_index_and_reports_the_hook_output() {
+        use std::os::unix::fs::PermissionsExt;
+        let repo = writable_repo("commit-hook");
+        repo.write("new.txt", "new\n");
+        repo.write(
+            ".git/test-hooks/pre-commit",
+            "#!/bin/sh\necho 'hook refused this commit'\nexit 1\n",
+        );
+        fs::set_permissions(
+            repo.path.join(".git/test-hooks/pre-commit"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        let error = commit_all(&repo.runner(), "Rejected").unwrap_err();
+        assert!(error.contains("hook refused this commit"), "{error}");
+        assert!(error.contains("index was not reset"), "{error}");
+        assert_eq!(repo.git(&["ls-files"]).stdout.trim(), "new.txt");
+        assert!(!head_exists(&repo.runner()));
+    }
+
+    #[test]
+    fn a_staging_failure_never_attempts_a_commit() {
+        let repo = writable_repo("commit-index-lock");
+        repo.write("new.txt", "new\n");
+        repo.write(".git/index.lock", "held\n");
+        let error = commit_all(&repo.runner(), "Blocked").unwrap_err();
+        assert!(error.starts_with("Stage failed:"), "{error}");
+        assert!(!head_exists(&repo.runner()));
+        assert!(!repo.path.join(".git/index").exists());
+    }
+
+    #[test]
+    fn push_uses_the_configured_upstream_and_never_forces_a_rejection() {
+        let remote = writable_repo("push-remote");
+        assert!(remote.git(&["config", "core.bare", "true"]).ok());
+        let repo = writable_repo("push-local");
+        repo.write("file.txt", "first\n");
+        commit_all(&repo.runner(), "First").unwrap();
+        assert!(repo
+            .git(&[
+                "remote",
+                "add",
+                "origin",
+                remote.path.join(".git").to_str().unwrap()
+            ])
+            .ok());
+        assert!(repo.git(&["config", "branch.main.remote", "origin"]).ok());
+        assert!(repo
+            .git(&["config", "branch.main.merge", "refs/heads/main"])
+            .ok());
+        push(&repo.runner()).expect("initial push");
+        assert_eq!(
+            repo.git(&["rev-parse", "HEAD"]).stdout,
+            remote.git(&["rev-parse", "main"]).stdout
+        );
+
+        repo.write("file.txt", "second\n");
+        commit_all(&repo.runner(), "Second").unwrap();
+        push(&repo.runner()).expect("follow-up push");
+        let pushed = remote.git(&["rev-parse", "main"]).stdout;
+        assert!(repo.git(&["reset", "--hard", "HEAD~1"]).ok());
+        repo.write("file.txt", "divergent\n");
+        commit_all(&repo.runner(), "Divergent").unwrap();
+        let error = push(&repo.runner()).unwrap_err();
+        assert!(error.contains("rejected"), "{error}");
+        assert_eq!(remote.git(&["rev-parse", "main"]).stdout, pushed);
+    }
+
+    #[test]
+    fn push_without_a_destination_reports_gits_refusal() {
+        let repo = writable_repo("push-no-remote");
+        repo.write("file.txt", "first\n");
+        commit_all(&repo.runner(), "First").unwrap();
+        let error = push(&repo.runner()).unwrap_err();
+        assert!(error.starts_with("Push failed:"), "{error}");
+        assert!(error.contains("No configured push destination"), "{error}");
+    }
+
+    #[test]
+    fn a_remote_commit_quotes_the_message_and_disables_terminal_prompts() {
+        let runner = GitRunner::remote(
+            "/anchor",
+            RemoteTarget {
+                host: crate::remote::SshHost {
+                    host_id: "test".into(),
+                    hostname: "host".into(),
+                    user: "user".into(),
+                    port: 22,
+                    identity: None,
+                },
+                path: "/repo with spaces".into(),
+            },
+        );
+        let message = "-subject 'quoted'\n\n$(touch /tmp/should-not-exist); $HOME";
+        let paths = args(&["-file[1].txt"]);
+        let argv = write_argv(&runner, &commit_argv(message, &paths));
+        assert_eq!(argv[0], "ssh");
+        let command = argv.last().unwrap();
+        assert!(
+            command.contains("env GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git commit --only -m "),
+            "{command}"
+        );
+        assert!(command.contains(&shell_quote(message)), "{command}");
+        assert!(command.ends_with(&shell_quote(":(top,literal)-file[1].txt")), "{command}");
+        assert_eq!(commit_argv(message, &paths), args(&["commit", "--only", "-m", message, "--", ":(top,literal)-file[1].txt"]));
     }
 
     // ---- Argv -------------------------------------------------------------

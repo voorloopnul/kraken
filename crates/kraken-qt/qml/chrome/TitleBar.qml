@@ -119,6 +119,7 @@ Rectangle {
         id: branchItem
         MenuItem {
             property string branchName
+            enabled: !Git.action_busy
             onTriggered: {
                 const error = App.checkout(branchName)
                 if (error !== "") {

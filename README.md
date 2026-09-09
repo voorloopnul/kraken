@@ -21,6 +21,29 @@ need while the agent works.
   cancel. Works the same on a workspace reached over SSH (see below)
 - workspace/project switching, local and over SSH
 
+## Commit and push
+
+In the Git pane's **Changes** tab, check the files you want to commit, or use
+**Select all**. New rows start unchecked; your choices survive refreshes and
+workspace switches, and newly discovered files never join the selection on
+their own. Clicking a filename still opens its diff.
+
+Enter a commit message (with an optional multiline body) at the bottom and
+click **Commit**. This commits only checked files, including their unstaged
+edits, new files and deletions. Unchecked files stay out even if already staged,
+and their staged changes are preserved. A rename includes both its old and new
+names. Commit is disabled until at least one file and a message are supplied.
+
+**Push** runs a normal `git push` using the repository's configured destination.
+It does not choose a remote, set an upstream, or request a force push. Configure
+an upstream and credentials in the terminal first if Git asks for them.
+
+Both actions run in the background, locally or over SSH, with their result
+shown below the buttons. A failed commit keeps the message and selection for
+retrying; it does not reset the index, so review any staged changes first.
+Drafts and in-flight results stay with their
+workspace when you switch away; drafts are kept for this app run, not on disk.
+
 ## The files pane over SSH
 
 A remote workspace's files are read and written over the SSH connection the

@@ -84,6 +84,7 @@ Item {
                 }
                 MenuItem {
                     text: qsTr("Check out")
+                    enabled: !Git.action_busy
                     onTriggered: Git.checkout(row.modelData.short_hash)
                 }
             }

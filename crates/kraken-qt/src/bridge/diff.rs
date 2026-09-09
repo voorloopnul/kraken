@@ -14,6 +14,8 @@
 //! [`kraken_core::diff`]. What is here is the conversion: core data in, Qt
 //! properties out.
 
+use std::collections::HashMap;
+
 use kraken_core::chat::highlight::{line_spans, syntax_for_filename, Span};
 use kraken_core::debug;
 use kraken_core::diff::{self, DiffBody, DiffDocument, DiffLimits, FileChange, RowKind};
@@ -60,6 +62,14 @@ pub struct DiffBridge {
     summary: qt_property!(QString; NOTIFY files_changed READ get_summary),
     /// Whether a gather is in flight with nothing on screen to keep showing.
     loading: qt_property!(bool; NOTIFY files_changed READ get_loading),
+    /// Separate from the file model: toggling a checkbox must not replace all
+    /// ListView delegates or reset the reader's scroll position.
+    selected_paths: qt_property!(QVariantList; NOTIFY selection_changed READ get_selected_paths),
+    all_selected: qt_property!(bool; NOTIFY selection_changed READ get_all_selected),
+    selection_changed: qt_signal!(),
+    set_selected: qt_method!(fn(&mut self, path: QString, checked: bool)),
+    select_all: qt_method!(fn(&mut self, checked: bool)),
+    selections: HashMap<String, diff::CommitSelection>,
 
     /// Whether the sheet is up. Everything below it is only meaningful then.
     viewer_open: qt_property!(bool; NOTIFY viewer_changed READ get_viewer_open),
@@ -157,6 +167,7 @@ impl DiffBridge {
         self.generation += 1;
         self.workspace_changed();
         self.files_changed();
+        self.selection_changed();
         self.viewer_changed();
     }
 
@@ -246,7 +257,38 @@ impl DiffBridge {
                 self.entries = files;
             }
         }
+        self.selections.entry(self.cwd()).or_default().sync(&self.entries);
         self.files_changed();
+        self.selection_changed();
+    }
+
+    fn get_selected_paths(&self) -> QVariantList {
+        let mut paths = QVariantList::default();
+        if let Some(selection) = self.selections.get(&self.cwd()) {
+            for path in selection.selected_paths() {
+                paths.push(QVariant::from(QString::from(path.as_str())));
+            }
+        }
+        paths
+    }
+
+    fn get_all_selected(&self) -> bool {
+        self.selections.get(&self.cwd()).is_some_and(diff::CommitSelection::all_selected)
+    }
+
+    fn set_selected(&mut self, path: QString, checked: bool) {
+        let cwd = self.cwd();
+        if self.selections.entry(cwd).or_default().set(&path.to_string(), checked) {
+            self.selection_changed();
+        }
+    }
+
+    fn select_all(&mut self, checked: bool) {
+        let cwd = self.cwd();
+        if let Some(selection) = self.selections.get_mut(&cwd) {
+            selection.select_all(checked);
+            self.selection_changed();
+        }
     }
 
     fn get_loading(&self) -> bool {
