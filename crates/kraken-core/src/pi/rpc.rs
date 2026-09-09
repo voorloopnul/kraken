@@ -72,6 +72,8 @@ pub struct Launch {
     /// For an agent that is asked a question and stopped again, which has no
     /// conversation worth keeping and should leave no file behind.
     pub ephemeral: bool,
+    /// Disable agent tools for a text-only request supplied with all its context.
+    pub no_tools: bool,
     /// When set, tool execution is routed to this remote host over SSH; pi
     /// itself still runs locally in `cwd` (the workspace's local anchor).
     pub remote: Option<RemoteTarget>,
@@ -86,6 +88,7 @@ impl Launch {
             cwd: cwd.into(),
             session_path: None,
             ephemeral: false,
+            no_tools: false,
             remote: None,
             program: "pi".to_string(),
         }
@@ -98,6 +101,11 @@ impl Launch {
 
     pub fn ephemeral(mut self) -> Self {
         self.ephemeral = true;
+        self
+    }
+
+    pub fn no_tools(mut self) -> Self {
+        self.no_tools = true;
         self
     }
 
@@ -119,6 +127,9 @@ impl Launch {
             // described to it through the environment (see `env`).
             args.push("-e".to_string());
             args.push(ssh_extension_path().to_string_lossy().into_owned());
+        }
+        if self.no_tools {
+            args.push("--no-tools".to_string());
         }
         if self.ephemeral {
             args.push("--no-session".to_string());

@@ -34,6 +34,12 @@ edits, new files and deletions. Unchecked files stay out even if already staged,
 and their staged changes are preserved. A rename includes both its old and new
 names. Commit is disabled until at least one file and a message are supplied.
 
+The sparkle icon beside **Commit** generates a message from the checked files'
+contents using a throwaway Pi session (no saved history and no agent tools).
+It fills the draft for review, hard-wrapping body lines at 72 characters so they
+stay readable in `git log`; it never commits or pushes. Pi uses its configured
+model and credentials. Generation errors leave your existing draft untouched.
+
 **Push** runs a normal `git push` using the repository's configured destination.
 It does not choose a remote, set an upstream, or request a force push. Configure
 an upstream and credentials in the terminal first if Git asks for them.

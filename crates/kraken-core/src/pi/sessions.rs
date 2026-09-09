@@ -234,7 +234,8 @@ pub fn content_text(content: Option<&Value>) -> String {
     }
 }
 
-fn collapse(text: &str) -> String {
+/// One-line title text, shared by live and saved sessions.
+pub(super) fn collapse(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 

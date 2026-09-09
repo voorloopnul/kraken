@@ -3,6 +3,7 @@
 //! that turns a stream of agent events into a transcript.
 
 pub mod catalogue;
+pub mod commit_message;
 pub mod config;
 pub mod controller;
 pub mod rpc;

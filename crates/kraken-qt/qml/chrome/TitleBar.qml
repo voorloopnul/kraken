@@ -264,6 +264,7 @@ Rectangle {
                 Text {
                     text: App.conversation !== "" ? App.conversation
                                                   : qsTr("No session selected")
+                    textFormat: Text.PlainText
                     color: Theme.colors.text
                     font.family: Theme.mono_family
                     font.pixelSize: Theme.chat_font_size

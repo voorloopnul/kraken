@@ -19,6 +19,7 @@ use crate::chat::formatting::{
 };
 use crate::chat::transcript::Transcript;
 use crate::pi::rpc::{AgentRecord, Launch, PiAgent};
+use crate::pi::sessions::collapse;
 
 /// Pi's thinking levels, low to high. The extended two only appear when a
 /// model's `thinkingLevelMap` opts into them.
@@ -145,6 +146,10 @@ struct Turn {
     /// An error was already surfaced during this turn; keeps `agent_end` from
     /// reprinting the failure that streamed in as a `message_update`.
     had_error: bool,
+    /// The model produced text at some point in this turn. Tool calls do not
+    /// count: a turn that ran commands and then stopped without a word is the
+    /// case this exists to notice.
+    spoke: bool,
 }
 
 pub struct SessionController {
@@ -330,8 +335,8 @@ impl SessionController {
             "(image)".to_string()
         };
         if self.first_prompt.is_none() {
-            self.first_prompt = Some(display.clone());
-            let title = display.clone();
+            let title = collapse(&display);
+            self.first_prompt = Some(title.clone());
             self.emit(Signal::TitleKnown(title));
         }
         self.transcript.add_user(&display, Vec::new());
@@ -661,6 +666,10 @@ impl SessionController {
                         .unwrap_or_default();
                     for message in messages {
                         if let Some(error) = error_summary(&message) {
+                            // Whether or not this failure is new, the turn has
+                            // an explanation and does not also need the silent
+                            // one below.
+                            self.turn.had_error = true;
                             if self.mark_error_reported(&message) {
                                 self.transcript
                                     .add_info(&format!("Turn failed: {error}"), true);
@@ -672,6 +681,7 @@ impl SessionController {
                 // gets no footer; the retry's own agent_end carries the whole
                 // turn, since only agent_start resets the counters.
                 if event.get("willRetry").and_then(Value::as_bool) != Some(true) {
+                    self.note_silent_turn();
                     self.add_turn_footer();
                 }
                 self.set_streaming(false);
@@ -728,7 +738,12 @@ impl SessionController {
             .unwrap_or(Value::Null);
         let text = delta.get("delta").and_then(Value::as_str).unwrap_or_default();
         match delta.get("type").and_then(Value::as_str).unwrap_or_default() {
-            "text_delta" => self.transcript.append_assistant_delta(text),
+            "text_delta" => {
+                if !text.is_empty() {
+                    self.turn.spoke = true;
+                }
+                self.transcript.append_assistant_delta(text);
+            }
             "thinking_delta" => self.transcript.append_thinking_delta(text),
             "error" => {
                 self.turn.had_error = true;
@@ -756,6 +771,11 @@ impl SessionController {
         if let Some(started) = self.turn.message_started.take() {
             self.turn.generating += started.elapsed().as_secs_f64();
         }
+        // A message that arrived whole rather than as deltas still counts as
+        // the model having answered.
+        if message_has_text(message) {
+            self.turn.spoke = true;
+        }
         // A provider that reports something unexpected costs a footer's
         // accuracy, not a turn.
         if let Some(output) = message
@@ -765,6 +785,29 @@ impl SessionController {
         {
             self.turn.tokens += output;
         }
+    }
+
+    /// Say when a turn ended without the model answering.
+    ///
+    /// A request that comes back empty — no text, no tool call, nothing to
+    /// stream — ends the run as cleanly as a finished reply does: pi reports no
+    /// error, and the footer that follows is indistinguishable from the footer
+    /// under a real answer. Without this line the reader is left watching a
+    /// turn that looks complete and says nothing, with no way to tell whether
+    /// it is still thinking, has crashed, or is simply done.
+    ///
+    /// A turn that failed has already said why, and one the reader stopped
+    /// themselves is not a silence worth explaining; both land here with
+    /// `had_error` set. A run that never reached the model has no clock, and
+    /// gets no footer either.
+    fn note_silent_turn(&mut self) {
+        if self.turn.spoke || self.turn.had_error || self.turn.started.is_none() {
+            return;
+        }
+        self.transcript.add_info(
+            "The model ended the turn without a reply — send a follow-up to continue.",
+            false,
+        );
     }
 
     /// Close the reply with what it cost.
@@ -832,6 +875,25 @@ fn role_of(event: &Value) -> Option<&str> {
         .get("message")
         .and_then(|message| message.get("role"))
         .and_then(Value::as_str)
+}
+
+/// Whether a finished message carries any text of its own.
+///
+/// Tool calls are not text: a message holding nothing else is the model asking
+/// for a command, not answering. `content` is normally a list of parts, but a
+/// provider that sends one plain string is answering too.
+fn message_has_text(message: &Value) -> bool {
+    match message.get("content") {
+        Some(Value::String(text)) => !text.trim().is_empty(),
+        Some(Value::Array(parts)) => parts.iter().any(|part| {
+            part.get("type").and_then(Value::as_str) == Some("text")
+                && part
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| !text.trim().is_empty())
+        }),
+        _ => false,
+    }
 }
 
 /// The text parts of a tool result, joined and trimmed.
@@ -979,6 +1041,24 @@ mod tests {
         // A later prompt does not rename the session.
         controller.prompt("and a test", &[], &[]);
         assert_eq!(controller.title(), "add a parser");
+    }
+
+    #[test]
+    fn multiline_titles_are_collapsed_without_changing_the_prompt() {
+        let mut controller = controller();
+        let prompt = "  Add a parser\n\nwith\t tests\r\nand\u{2028}<examples>  ";
+        let title = "Add a parser with tests and <examples>";
+        let wire = controller.prompt(prompt, &[], &[]);
+        assert_eq!(controller.title(), title);
+        assert!(signals(&mut controller).contains(&Signal::TitleKnown(title.into())));
+        assert_eq!(wire, prompt);
+        match &controller.transcript.blocks()[0] {
+            Block::User { text, .. } => assert_eq!(text, prompt),
+            other => panic!("expected a user block, got {other:?}"),
+        }
+        controller.prompt("A later\nmessage", &[], &[]);
+        assert_eq!(controller.title(), title);
+        assert!(!signals(&mut controller).iter().any(|signal| matches!(signal, Signal::TitleKnown(_))));
     }
 
     #[test]
@@ -1216,6 +1296,142 @@ mod tests {
         }
     }
 
+
+    // ---- A turn that says nothing -----------------------------------------
+
+    /// The shape of a real stall: two tool calls, their results, and then a
+    /// request that came back empty. Pi reports no error, so without a line of
+    /// our own the reader gets a footer under silence.
+    fn ran_a_tool(controller: &mut SessionController) {
+        event(controller, json!({ "type": "message_start", "message": { "role": "assistant" } }));
+        event(
+            controller,
+            json!({
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": [{ "type": "toolCall", "id": "call_1", "name": "bash" }],
+                    "stopReason": "toolUse",
+                    "usage": { "output": 62 }
+                }
+            }),
+        );
+    }
+
+    #[test]
+    fn a_turn_that_ends_without_a_word_says_so() {
+        let mut controller = controller();
+        event(&mut controller, json!({ "type": "agent_start" }));
+        ran_a_tool(&mut controller);
+        ran_a_tool(&mut controller);
+        event(&mut controller, json!({ "type": "agent_end" }));
+
+        // The note comes before the footer: it explains the reply, and the
+        // footer closes it.
+        assert_eq!(kinds(&controller), ["info", "footer"]);
+        match &controller.transcript.blocks()[0] {
+            Block::Info { text, error } => {
+                assert!(text.contains("without a reply"), "{text}");
+                // Nothing failed — the turn simply had nothing in it.
+                assert!(!error, "an empty answer is not an error");
+            }
+            other => panic!("expected an info block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_turn_that_answered_is_left_alone() {
+        let mut controller = controller();
+        event(&mut controller, json!({ "type": "agent_start" }));
+        ran_a_tool(&mut controller);
+        event(
+            &mut controller,
+            json!({
+                "type": "message_update",
+                "assistantMessageEvent": { "type": "text_delta", "delta": "Done." }
+            }),
+        );
+        event(&mut controller, json!({ "type": "agent_end" }));
+        assert_eq!(kinds(&controller), ["assistant", "footer"]);
+    }
+
+    #[test]
+    fn an_answer_that_arrived_whole_counts_as_one() {
+        let mut controller = controller();
+        event(&mut controller, json!({ "type": "agent_start" }));
+        // No deltas at all: a provider that hands over the finished message.
+        event(
+            &mut controller,
+            json!({
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": [{ "type": "text", "text": "Done." }],
+                    "usage": { "output": 5 }
+                }
+            }),
+        );
+        event(&mut controller, json!({ "type": "agent_end" }));
+        assert_eq!(kinds(&controller), ["footer"]);
+    }
+
+    #[test]
+    fn a_turn_the_reader_stopped_is_not_called_silent() {
+        let mut controller = controller();
+        event(&mut controller, json!({ "type": "agent_start" }));
+        ran_a_tool(&mut controller);
+        event(
+            &mut controller,
+            json!({
+                "type": "message_update",
+                "assistantMessageEvent": { "type": "error", "reason": "aborted" }
+            }),
+        );
+        event(&mut controller, json!({ "type": "agent_end" }));
+        // "(aborted)" already says what happened.
+        assert_eq!(kinds(&controller), ["info", "footer"]);
+        match &controller.transcript.blocks()[0] {
+            Block::Info { text, .. } => assert_eq!(text, "(aborted)"),
+            other => panic!("expected an info block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_turn_that_failed_is_not_also_called_silent() {
+        let mut controller = controller();
+        let failed = json!({
+            "role": "assistant",
+            "stopReason": "error",
+            "responseId": "r1",
+            "errorMessage": "context length exceeded"
+        });
+        // Twice, because a replayed agent_end reports the failure only once and
+        // must not start explaining it as a silence instead.
+        for _ in 0..2 {
+            event(&mut controller, json!({ "type": "agent_start" }));
+            event(&mut controller, json!({ "type": "agent_end", "messages": [failed] }));
+        }
+        let notes: Vec<&String> = controller
+            .transcript
+            .blocks()
+            .iter()
+            .filter_map(|block| match block {
+                Block::Info { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("Turn failed"), "{notes:?}");
+    }
+
+    #[test]
+    fn a_turn_that_never_reached_the_model_is_not_called_silent() {
+        let mut controller = controller();
+        // No agent_start, so no clock and no footer — and nothing to explain.
+        event(&mut controller, json!({ "type": "agent_end" }));
+        assert!(kinds(&controller).is_empty());
+    }
+
     #[test]
     fn a_retried_run_gets_no_footer_of_its_own() {
         let mut controller = controller();
@@ -1223,8 +1439,10 @@ mod tests {
         event(&mut controller, json!({ "type": "agent_end", "willRetry": true }));
         assert!(kinds(&controller).is_empty());
         // The retry's own end carries the whole turn.
+        event(&mut controller, json!({ "type": "message_update", "assistantMessageEvent":
+            { "type": "text_delta", "delta": "the answer" } }));
         event(&mut controller, json!({ "type": "agent_end" }));
-        assert_eq!(kinds(&controller), ["footer"]);
+        assert_eq!(kinds(&controller), ["assistant", "footer"]);
     }
 
     #[test]

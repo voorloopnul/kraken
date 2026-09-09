@@ -217,7 +217,7 @@ Item {
 
     // ---- The commit ------------------------------------------------------------
 
-    // The message, the two buttons, and whatever git last said. It sits at the
+    // The message, its action buttons, and whatever git last said. It sits at the
     // bottom whatever the list is doing, so the reader can type while the list
     // is still being read: the file list is what gives up height, never this.
     Column {
@@ -255,8 +255,24 @@ Item {
                     // Two-way with the Git bridge, which keeps one draft per
                     // workspace: switching projects and coming back finds the
                     // half-written message where it was left.
+                    //
+                    // The binding below only holds until the first keystroke:
+                    // a TextArea assigns its own `text` as it is typed in, and
+                    // that assignment replaces the binding. Everything the
+                    // bridge writes afterwards — the other workspace's draft, a
+                    // generated message, the clearing after a commit — would
+                    // never reach a box that has been typed in, so the
+                    // connection below puts it back by hand.
                     text: Git.commit_message
                     onTextChanged: if (text !== Git.commit_message) Git.commit_message = text
+
+                    Connections {
+                        target: Git
+                        function onAction_changed() {
+                            if (message.text !== Git.commit_message)
+                                message.text = Git.commit_message
+                        }
+                    }
                     placeholderText: qsTr("Commit message")
                     Accessible.name: qsTr("Commit message")
                     color: Theme.chat_colors.text
@@ -299,6 +315,23 @@ Item {
             Row {
                 anchors { right: parent.right; verticalCenter: parent.verticalCenter }
                 spacing: 4
+
+                IconButton {
+                    width: 22
+                    height: 22
+                    glyphSize: 16
+                    glyph: "sparkles"
+                    enabled: Git.workspace !== "" && Git.workspace === Diff.workspace
+                             && !Git.action_busy && !Diff.loading && panel.checkedCount > 0
+                    opacity: enabled ? 1 : 0.4
+                    tooltip: qsTr("Generate a commit message from checked files using Pi")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: qsTr("Generate commit message")
+                    activeFocusOnTab: true
+                    Keys.onSpacePressed: clicked()
+                    Keys.onReturnPressed: clicked()
+                    onClicked: Git.generate_message(Diff.workspace, Diff.selected_paths)
+                }
 
                 TextButton {
                     text: qsTr("Commit")

@@ -59,13 +59,14 @@ impl Mutation {
 struct Actions {
     draft: String,
     active: Option<Mutation>,
+    generating: bool,
     status: String,
     error: bool,
 }
 
 impl Actions {
     fn begin(&mut self, operation: Mutation) -> bool {
-        if self.active.is_some() {
+        if self.busy() {
             return false;
         }
         if matches!(&operation, Mutation::Commit { message, paths } if message.trim().is_empty() || paths.is_empty()) {
@@ -75,6 +76,33 @@ impl Actions {
         self.error = false;
         self.active = Some(operation);
         true
+    }
+
+    fn busy(&self) -> bool {
+        self.active.is_some() || self.generating
+    }
+
+    fn begin_generation(&mut self, paths: &[String]) -> bool {
+        if self.busy() || paths.is_empty() {
+            return false;
+        }
+        self.generating = true;
+        self.error = false;
+        self.status = "Generating commit message…".into();
+        true
+    }
+
+    fn finish_generation(&mut self, original: &str, outcome: Result<String, String>) {
+        self.generating = false;
+        self.error = outcome.is_err();
+        self.status = match outcome {
+            Ok(message) if self.draft == original => {
+                self.draft = message;
+                "Commit message generated. Review before committing.".into()
+            }
+            Ok(_) => "Draft changed during generation; kept your edits. Generate again to replace it.".into(),
+            Err(error) => error,
+        };
     }
 
     fn finish(&mut self, outcome: &Result<(), String>) -> Option<Mutation> {
@@ -132,6 +160,7 @@ pub struct GitBridge {
     repository_changed: qt_signal!(),
     commit: qt_method!(fn(&mut self, workspace: QString, paths: QVariantList)),
     push: qt_method!(fn(&mut self)),
+    generate_message: qt_method!(fn(&mut self, workspace: QString, paths: QVariantList)),
 
     workspace_changed: qt_signal!(),
     theme_changed: qt_signal!(),
@@ -355,7 +384,7 @@ impl GitBridge {
     fn get_action_busy(&self) -> bool {
         self.actions
             .get(&self.cwd())
-            .is_some_and(|state| state.active.is_some())
+            .is_some_and(Actions::busy)
     }
 
     fn get_action_status(&self) -> QString {
@@ -386,6 +415,38 @@ impl GitBridge {
 
     fn push(&mut self) {
         self.start_mutation(Mutation::Push);
+    }
+
+    fn generate_message(&mut self, workspace: QString, paths: QVariantList) {
+        let cwd = self.cwd();
+        if cwd.is_empty() || workspace.to_string() != cwd {
+            return;
+        }
+        let paths: Vec<String> = (0..paths.len())
+            .map(|index| paths[index].to_qstring().to_string())
+            .collect();
+        let state = self.actions.entry(cwd.clone()).or_default();
+        if !state.begin_generation(&paths) {
+            return;
+        }
+        let original = state.draft.clone();
+        self.action_changed();
+        let runner = GitRunner::for_workspace(&cwd);
+        let pointer = QPointer::from(&*self);
+        let deliver = queued_callback(move |outcome: Result<String, String>| {
+            if let Some(this) = pointer.as_pinned() {
+                let mut this = this.borrow_mut();
+                if let Some(state) = this.actions.get_mut(&cwd) {
+                    state.finish_generation(&original, outcome);
+                }
+                if cwd == this.cwd() {
+                    this.action_changed();
+                }
+            }
+        });
+        std::thread::spawn(move || {
+            deliver(kraken_core::pi::commit_message::generate(&runner, &paths));
+        });
     }
 
     fn start_mutation(&mut self, operation: Mutation) {
@@ -444,6 +505,30 @@ mod tests {
     }
 
     #[test]
+    fn generation_is_serialized_and_preserves_drafts_on_failure_or_edits() {
+        let mut state = Actions { draft: "Original".into(), ..Default::default() };
+        assert!(!state.begin_generation(&[]));
+        assert!(state.begin_generation(&["file".into()]));
+        assert!(state.busy());
+        assert!(!state.begin(Mutation::Push));
+        assert!(!state.begin_generation(&["file".into()]));
+        state.finish_generation("Original", Err("No credentials".into()));
+        assert!(!state.busy());
+        assert!(state.error);
+        assert_eq!(state.draft, "Original");
+        assert!(state.begin_generation(&["file".into()]));
+        state.finish_generation("Original", Ok("Generated".into()));
+        assert_eq!(state.draft, "Generated");
+        assert!(!state.error);
+        state.begin_generation(&["file".into()]);
+        state.draft = "New edit".into();
+        state.finish_generation("Generated", Ok("Another message".into()));
+        assert_eq!(state.draft, "New edit");
+        state.begin(Mutation::Push);
+        assert!(!state.begin_generation(&["file".into()]));
+    }
+
+    #[test]
     fn writes_are_serialized_until_the_worker_finishes() {
         let mut state = Actions::default();
         assert!(state.begin(Mutation::Push));
@@ -499,6 +584,17 @@ mod tests {
         state.draft = "Next".into();
         state.finish(&Ok(()));
         assert_eq!(state.draft, "Next");
+    }
+
+    #[test]
+    fn generated_messages_stay_with_the_requesting_workspace() {
+        let mut workspaces = HashMap::<String, Actions>::new();
+        workspaces.entry("/first".into()).or_default().begin_generation(&["file".into()]);
+        workspaces.entry("/second".into()).or_default().draft = "Other draft".into();
+        workspaces.get_mut("/first").unwrap().finish_generation("", Ok("Generated".into()));
+        assert_eq!(workspaces["/first"].draft, "Generated");
+        assert!(!workspaces["/first"].busy());
+        assert_eq!(workspaces["/second"].draft, "Other draft");
     }
 
     #[test]
