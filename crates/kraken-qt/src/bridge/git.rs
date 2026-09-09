@@ -153,6 +153,7 @@ pub struct GitBridge {
     #[allow(dead_code)]
     commit_message: qt_property!(QString; NOTIFY action_changed READ get_commit_message WRITE set_commit_message),
     action_busy: qt_property!(bool; NOTIFY action_changed READ get_action_busy),
+    message_generating: qt_property!(bool; NOTIFY action_changed READ get_message_generating),
     action_status: qt_property!(QString; NOTIFY action_changed READ get_action_status),
     action_error: qt_property!(bool; NOTIFY action_changed READ get_action_error),
     action_changed: qt_signal!(),
@@ -387,6 +388,12 @@ impl GitBridge {
             .is_some_and(Actions::busy)
     }
 
+    fn get_message_generating(&self) -> bool {
+        self.actions
+            .get(&self.cwd())
+            .is_some_and(|state| state.generating)
+    }
+
     fn get_action_status(&self) -> QString {
         self.actions
             .get(&self.cwd())
@@ -526,6 +533,30 @@ mod tests {
         assert_eq!(state.draft, "New edit");
         state.begin(Mutation::Push);
         assert!(!state.begin_generation(&["file".into()]));
+    }
+
+    #[test]
+    fn generation_indicator_tracks_current_workspace_and_completion() {
+        let mut bridge = GitBridge::new();
+        bridge.workspace = "/first".into();
+        assert!(!bridge.get_message_generating());
+        bridge.actions.entry("/first".into()).or_default()
+            .begin_generation(&["file".into()]);
+        assert!(bridge.get_message_generating());
+        bridge.workspace = "/second".into();
+        bridge.actions.entry("/second".into()).or_default().begin(Mutation::Push);
+        assert!(bridge.get_action_busy());
+        assert!(!bridge.get_message_generating());
+        bridge.workspace = "/first".into();
+        assert!(bridge.get_message_generating());
+        bridge.actions.get_mut("/first").unwrap()
+            .finish_generation("", Ok("Generated".into()));
+        assert!(!bridge.get_message_generating());
+        bridge.actions.get_mut("/first").unwrap().begin_generation(&["file".into()]);
+        assert!(bridge.get_message_generating());
+        bridge.actions.get_mut("/first").unwrap()
+            .finish_generation("Generated", Err("Generation failed".into()));
+        assert!(!bridge.get_message_generating());
     }
 
     #[test]

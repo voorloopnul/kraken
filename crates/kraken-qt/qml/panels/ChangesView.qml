@@ -233,9 +233,9 @@ Item {
 
         Rectangle {
             width: parent.width
-            // Two lines and a bit: enough for a subject and the start of a
-            // body, and it scrolls past that rather than eating the file list.
-            height: 62
+            // Show more of the subject and body, then scroll rather than
+            // letting a long message consume the file list.
+            height: 124
             radius: 6
             color: Theme.colors.card
             border.width: 1
@@ -317,20 +317,37 @@ Item {
                 spacing: 4
 
                 IconButton {
+                    id: generateButton
                     width: 22
                     height: 22
                     glyphSize: 16
                     glyph: "sparkles"
                     enabled: Git.workspace !== "" && Git.workspace === Diff.workspace
                              && !Git.action_busy && !Diff.loading && panel.checkedCount > 0
-                    opacity: enabled ? 1 : 0.4
-                    tooltip: qsTr("Generate a commit message from checked files using Pi")
+                    // Generation disables clicks, but must not look like an
+                    // idle disabled button. Blink the accent fill clearly.
+                    checked: Git.message_generating
+                    opacity: Git.message_generating ? (generationBlink.on ? 1 : 0.25)
+                                                    : enabled ? 1 : 0.4
+                    tooltip: Git.message_generating ? qsTr("Generating commit message…")
+                                                   : qsTr("Generate a commit message from checked files using Pi")
                     Accessible.role: Accessible.Button
-                    Accessible.name: qsTr("Generate commit message")
+                    Accessible.name: Git.message_generating ? qsTr("Generating commit message…")
+                                                           : qsTr("Generate commit message")
                     activeFocusOnTab: true
                     Keys.onSpacePressed: clicked()
                     Keys.onReturnPressed: clicked()
                     onClicked: Git.generate_message(Diff.workspace, Diff.selected_paths)
+
+                    Timer {
+                        id: generationBlink
+                        property bool on: true
+                        interval: 450
+                        repeat: true
+                        running: generateButton.visible && Git.message_generating
+                        onTriggered: generationBlink.on = !generationBlink.on
+                        onRunningChanged: generationBlink.on = true
+                    }
                 }
 
                 TextButton {
