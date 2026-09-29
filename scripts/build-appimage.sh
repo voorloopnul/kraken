@@ -28,7 +28,11 @@ fetch "https://github.com/AppImage/type2-runtime/releases/download/continuous/ru
 fetch "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${ARCH}.AppImage" \
       "$TOOLS/appimagetool-${ARCH}.AppImage"
 
-QMAKE=${QMAKE:-$(command -v qmake6 || command -v qmake)} cargo build --release
+# Built in the caller's own environment, not with a QMAKE filled in here:
+# qttypes' build script reruns whenever QMAKE changes, and a value that differs
+# from the one a plain `cargo run` sees rebuilds qttypes, qmetaobject and the
+# whole app on every switch between the two. Unset, qttypes finds qmake6 itself.
+cargo build --release
 rm -rf "$APPDIR"
 rm -f "$ROOT"/Kraken-*.AppImage
 
