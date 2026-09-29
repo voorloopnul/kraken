@@ -14,8 +14,8 @@ need while the agent works.
   with the lines added and removed in each — click one to read its diff, syntax
   highlighted, over the dimmed app — and **Commits**, the repository's commit
   graph, newest first
-- a files pane — the workspace as a tree, the way an editor draws one; click a
-  file to read it over the dimmed app, and copy files in and out of the project.
+- a files pane — the workspace as a tree, the way an editor draws one; double-click
+  a file to read it over the dimmed app, and copy files in and out of the project.
   A name that is already taken stops the copy and asks: replace, keep both, or
   cancel. Works the same on a workspace reached over SSH (see below)
 - workspace/project switching, local and over SSH

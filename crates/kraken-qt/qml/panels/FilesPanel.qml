@@ -273,13 +273,16 @@ Item {
                         rowMenu.popup()
                         return
                     }
-                    // A folder opens in place; a file opens the sheet. One
-                    // click for both, because "click a folder to open it" and
-                    // "click a file to read it" are the same gesture to
-                    // whoever is pointing at the row.
+                    // A folder opens in place on one click. A file only
+                    // selects: the preview is a sheet over the whole app, too
+                    // much to throw up for a click that meant to pick a row to
+                    // drag or right-click.
                     if (row.modelData.is_dir)
                         Files.toggle(row.modelData.path)
-                    else
+                }
+
+                onDoubleClicked: function (event) {
+                    if (event.button === Qt.LeftButton && !row.modelData.is_dir)
                         Files.open_preview(row.modelData.path)
                 }
             }
