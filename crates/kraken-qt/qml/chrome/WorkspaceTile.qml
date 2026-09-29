@@ -26,10 +26,10 @@ Item {
         color: App.tile_color(tile.entry ? tile.entry.key : "", Theme.name,
                               tile.current, mouse.containsMouse)
 
-        // A remote workspace keeps an accent bar down its left: the hue says
-        // which folder, and the bar says it is not on this machine.
+        // The current workspace keeps an accent bar down its left: the hue
+        // says which folder, and the bar says it is the one on screen.
         Rectangle {
-            visible: tile.entry ? tile.entry.remote : false
+            visible: tile.current
             anchors { left: parent.left; top: parent.top; bottom: parent.bottom }
             width: 2
             topLeftRadius: 2
