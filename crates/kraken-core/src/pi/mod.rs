@@ -6,5 +6,6 @@ pub mod catalogue;
 pub mod commit_message;
 pub mod config;
 pub mod controller;
+pub mod login_path;
 pub mod rpc;
 pub mod sessions;

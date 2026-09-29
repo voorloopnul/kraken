@@ -136,7 +136,10 @@ for the same depth no matter how short the lines were.
 - Rust 1.90+
 - **Zig 0.15.2**, on `PATH`, to build the terminal engine
 - Qt 6.5 or newer: QtQuick, QtQuick Controls, Layouts, Dialogs
-- `pi` on `PATH` for the agent, and `git` for the git pane
+- `pi` installed (`npm install -g @earendil-works/pi-coding-agent`) for the
+  agent, and `git` for the git pane. Kraken does not ship its own: started from
+  a desktop launcher, where nvm and friends are not on `PATH`, it asks your login
+  shell where `pi` is
 
 Ubuntu/Debian:
 

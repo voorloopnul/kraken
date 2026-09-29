@@ -40,10 +40,11 @@ const OWN_RUNTIME_VARS: [&str; 3] = ["VIRTUAL_ENV", "PYTHONHOME", "PYTHONPATH"];
 /// libstdc++, and one that keeps the Qt plugin paths hands them to any Qt
 /// program the user starts from it.
 ///
-/// PATH is deliberately *not* on this list — the launcher's additions to it
-/// (Homebrew prefixes, the bundled `pi`) are for the terminal's benefit as much
-/// as the agent's, and a bundle started from a desktop launcher inherits a bare
-/// PATH without them.
+/// PATH is deliberately *not* on this list — the additions to it (Homebrew
+/// prefixes, the login shell's entries that make `pi` findable, see
+/// [`crate::pi::login_path`]) are for the terminal's benefit as much as the
+/// agent's, and a bundle started from a desktop launcher inherits a bare PATH
+/// without them.
 const LAUNCHER_VARS: [&str; 9] = [
     "APPDIR",
     "APPIMAGE",

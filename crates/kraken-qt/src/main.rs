@@ -85,11 +85,18 @@ macro_rules! publish {
 }
 
 fn main() {
+    // First, while this is the only thread: it rewrites PATH, which everything
+    // started afterwards inherits.
+    let pi_lookup = kraken_core::pi::login_path::adopt_login_path();
+
     let settings = parse_args();
     if let Some(settings) = settings {
         if let Some(path) = debug::start(&settings) {
             eprintln!("kraken: debug log -> {}", path.display());
         }
+    }
+    if let Some(outcome) = pi_lookup {
+        debug::log("pi.path", &[("outcome", outcome)]);
     }
 
     resources::register_resources();

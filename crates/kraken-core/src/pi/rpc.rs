@@ -564,7 +564,15 @@ impl PiAgent {
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
-                let message = format!("could not start {}: {error}", self.launch.program);
+                let message = if error.kind() == io::ErrorKind::NotFound {
+                    format!(
+                        "{} was not found. Install it with `npm install -g \
+                         @earendil-works/pi-coding-agent` and restart Kraken.",
+                        self.launch.program
+                    )
+                } else {
+                    format!("could not start {}: {error}", self.launch.program)
+                };
                 let _ = self.sender.send(AgentRecord::Failed(message));
                 return Err(error);
             }
