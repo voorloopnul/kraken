@@ -529,9 +529,12 @@ impl SessionBridge {
             .iter()
             .find(|m| m.get("role").and_then(Value::as_str) == Some("user"))
             .map(|m| {
-                kraken_core::chat::formatting::content_text(
+                // One line, as a live session's title is: the title bar gives
+                // it one line of height, and a prompt's own newlines would
+                // stack it past the bar and push the whole row out of view.
+                sessions::collapse(&kraken_core::chat::formatting::content_text(
                     m.get("content").unwrap_or(&Value::Null),
-                )
+                ))
             })
             .unwrap_or_default();
         // There is no friendly name on disk, so the pill shows the id until the

@@ -270,6 +270,9 @@ Rectangle {
                     font.pixelSize: Theme.chat_font_size
                     font.weight: Font.DemiBold
                     elide: Text.ElideRight
+                    // The bar has room for one line; a title that slipped in
+                    // with newlines must not grow it and push the row out.
+                    maximumLineCount: 1
                     Layout.maximumWidth: 520
                 }
                 IconButton {
