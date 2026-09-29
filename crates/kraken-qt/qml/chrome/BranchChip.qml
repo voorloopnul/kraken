@@ -9,7 +9,7 @@ Rectangle {
     property string branch: ""
     signal clicked()
 
-    readonly property color foreground: Theme.name === "dark" ? "#9a9da5" : "#5a5d65"
+    readonly property color foreground: Theme.name === "dark" ? "#949cbb" : "#5a5d65"
 
     implicitWidth: row.implicitWidth + 10
     implicitHeight: row.implicitHeight + 2

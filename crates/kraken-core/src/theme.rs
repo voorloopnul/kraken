@@ -44,13 +44,31 @@ impl TerminalTheme {
     }
 }
 
-/// The original widget colours; the ANSI palette stays libghostty's built-in
-/// (Tomorrow Night).
+/// Catppuccin Frappé, as Ghostty ships it: the terminal reads the same inside
+/// Kraken as it does in Ghostty next to it. The rest of the dark chrome is cut
+/// from the same palette (see [`UI_COLORS`]).
 pub const DARK: TerminalTheme = TerminalTheme {
     name: "dark",
-    background: (0x28, 0x2C, 0x34),
-    foreground: (0xFF, 0xFF, 0xFF),
-    ansi: None,
+    background: (0x30, 0x34, 0x46), // base
+    foreground: (0xC6, 0xD0, 0xF5), // text
+    ansi: Some([
+        (0x51, 0x57, 0x6D), // black — surface1
+        (0xE7, 0x82, 0x84), // red
+        (0xA6, 0xD1, 0x89), // green
+        (0xE5, 0xC8, 0x90), // yellow
+        (0x8C, 0xAA, 0xEE), // blue
+        (0xF4, 0xB8, 0xE4), // magenta — pink
+        (0x81, 0xC8, 0xBE), // cyan — teal
+        (0xA5, 0xAD, 0xCE), // white — subtext0
+        (0x62, 0x68, 0x80), // bright black — surface2
+        (0xE6, 0x71, 0x72), // bright red
+        (0x8E, 0xC7, 0x72), // bright green
+        (0xD9, 0xBA, 0x73), // bright yellow
+        (0x7B, 0x9E, 0xF0), // bright blue
+        (0xF2, 0xA4, 0xDB), // bright magenta
+        (0x5A, 0xBF, 0xB5), // bright cyan
+        (0xB5, 0xBF, 0xE2), // bright white — subtext1
+    ]),
 };
 
 /// One Half Light, on a white ground rather than the palette's own #FAFAFA. The
@@ -111,18 +129,21 @@ pub static UI_COLORS: Lazy<HashMap<&'static str, HashMap<&'static str, String>>>
             // Match the terminal/card working surface: the conversation column
             // is width-capped and centred, so its gutters must carry this same
             // colour or they show as darker vertical bands.
+            // Catppuccin Frappé: base for the working surface, mantle for the
+            // strips that frame it, crust for the empty home screen.
             ("window", hex(DARK.background)),
             ("card", hex(DARK.background)),
-            ("card_border", "#3a3f4a".into()),
-            ("sidebar", "#23252b".into()),
-            ("header", "#23252b".into()),
-            ("hover", "#2c2e35".into()),
-            ("home", "#1f2127".into()),
-            ("text", "#c8cad0".into()),
-            ("accent", "#4f77d4".into()),
-            ("accent_on", "#ffffff".into()),
-            ("accent_soft", "#26365e".into()),
-            ("accent_text", "#8ab4f8".into()),
+            ("card_border", "#414559".into()), // surface0
+            ("sidebar", "#292c3c".into()),     // mantle
+            ("header", "#292c3c".into()),
+            ("hover", "#414559".into()),
+            ("home", "#232634".into()),        // crust
+            ("text", "#c6d0f5".into()),
+            ("accent", "#8caaee".into()),      // blue
+            // Catppuccin's accents are pastels: what sits on one is the base.
+            ("accent_on", "#303446".into()),
+            ("accent_soft", "#424c68".into()), // blue at 20% over base
+            ("accent_text", "#8caaee".into()),
         ]
         .into_iter()
         .collect();
@@ -181,8 +202,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dark_keeps_the_builtin_ansi_palette() {
-        assert!(DARK.palette256().is_none());
+    fn dark_is_ghosttys_catppuccin_frappe() {
+        assert_eq!(hex(DARK.background), "#303446");
+        assert_eq!(hex(DARK.foreground), "#C6D0F5");
+        let palette = DARK.palette256().expect("dark overrides ANSI");
+        assert_eq!(palette[1], (0xE7, 0x82, 0x84));
+        assert_eq!(palette[4], (0x8C, 0xAA, 0xEE));
     }
 
     #[test]

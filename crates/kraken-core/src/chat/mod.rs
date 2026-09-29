@@ -30,21 +30,21 @@ pub mod transcript;
 pub static PALETTE: Lazy<HashMap<&'static str, HashMap<&'static str, &'static str>>> =
     Lazy::new(|| {
         let dark: HashMap<&'static str, &'static str> = [
-            ("text", "#d6d8dd"),
-            ("dim", "#7a7d85"),
-            ("error", "#e06c75"),
-            ("thinking_label", "#9a9da5"),
-            ("thinking_text", "#7a7d85"),
-            ("tool_detail", "#9a9da5"),
-            ("tool_bg", "#17181d"),
-            ("tool_border", "#2c2e35"),
-            ("code_bg", "#17181d"),
-            ("code_border", "#2c2e35"),
-            ("user_bg", "#26282e"),
-            ("user_border", "#33353c"),
-            ("link", "#61afef"),
-            ("inline_bg", "#3a3f4a"),
-            ("inline_text", "#d19a66"),
+            ("text", "#c6d0f5"),
+            ("dim", "#838ba7"),
+            ("error", "#e78284"),
+            ("thinking_label", "#949cbb"),
+            ("thinking_text", "#838ba7"),
+            ("tool_detail", "#949cbb"),
+            ("tool_bg", "#292c3c"),
+            ("tool_border", "#414559"),
+            ("code_bg", "#292c3c"),
+            ("code_border", "#414559"),
+            ("user_bg", "#414559"),
+            ("user_border", "#51576d"),
+            ("link", "#8caaee"),
+            ("inline_bg", "#414559"),
+            ("inline_text", "#ef9f76"),
         ]
         .into_iter()
         .collect();

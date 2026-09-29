@@ -81,9 +81,9 @@ const SNIFF_BYTES: usize = 8192;
 pub fn kind_color(theme: &str, key: &str) -> &'static str {
     let dark = theme == "dark";
     match key {
-        "dir" => if dark { "#61afef" } else { "#0184bc" },
-        "exec" => if dark { "#98c379" } else { "#50a14f" },
-        "file" => if dark { "#c8cad0" } else { "#4a4d55" },
+        "dir" => if dark { "#8caaee" } else { "#0184bc" },
+        "exec" => if dark { "#a6d189" } else { "#50a14f" },
+        "file" => if dark { "#c6d0f5" } else { "#4a4d55" },
         _ => "#ff00ff",
     }
 }

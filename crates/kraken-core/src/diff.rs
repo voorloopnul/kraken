@@ -30,10 +30,10 @@ use crate::util::shell_quote;
 pub fn panel_color(theme: &str, key: &str) -> &'static str {
     let dark = theme == "dark";
     match key {
-        "text" => if dark { "#c8cad0" } else { "#4a4d55" },
-        "dim" => if dark { "#7a7d85" } else { "#9a9da5" },
-        "add" => if dark { "#98c379" } else { "#50a14f" },
-        "del" => if dark { "#e06c75" } else { "#e45649" },
+        "text" => if dark { "#c6d0f5" } else { "#4a4d55" },
+        "dim" => if dark { "#838ba7" } else { "#9a9da5" },
+        "add" => if dark { "#a6d189" } else { "#50a14f" },
+        "del" => if dark { "#e78284" } else { "#e45649" },
         _ => "#ff00ff",
     }
 }
@@ -44,14 +44,14 @@ pub fn panel_color(theme: &str, key: &str) -> &'static str {
 pub fn viewer_color(theme: &str, key: &str) -> &'static str {
     let dark = theme == "dark";
     match key {
-        "text" => if dark { "#c8cad0" } else { "#383a42" },
-        "dim" => if dark { "#7a7d85" } else { "#9a9da5" },
-        "add" => if dark { "#98c379" } else { "#3c7d3b" },
-        "del" => if dark { "#e06c75" } else { "#c93c36" },
-        "add_bg" => if dark { "#2b3a2e" } else { "#e9f6e9" },
-        "del_bg" => if dark { "#3a2b30" } else { "#fdeceb" },
-        "hunk_bg" => if dark { "#2f333c" } else { "#f2f0ec" },
-        "gutter" => if dark { "#6b6e77" } else { "#aeaba4" },
+        "text" => if dark { "#c6d0f5" } else { "#383a42" },
+        "dim" => if dark { "#838ba7" } else { "#9a9da5" },
+        "add" => if dark { "#a6d189" } else { "#3c7d3b" },
+        "del" => if dark { "#e78284" } else { "#c93c36" },
+        "add_bg" => if dark { "#424c50" } else { "#e9f6e9" },
+        "del_bg" => if dark { "#4b404f" } else { "#fdeceb" },
+        "hunk_bg" => if dark { "#414559" } else { "#f2f0ec" },
+        "gutter" => if dark { "#737994" } else { "#aeaba4" },
         _ => "#ff00ff",
     }
 }
@@ -60,7 +60,7 @@ pub fn viewer_color(theme: &str, key: &str) -> &'static str {
 /// makes the sheet modal, so it is a colour with an alpha rather than a tint.
 pub fn scrim(theme: &str) -> (u8, u8, u8, u8) {
     if theme == "dark" {
-        (0, 0, 0, 165)
+        (0x23, 0x26, 0x34, 165)
     } else {
         (24, 22, 18, 130)
     }
@@ -72,11 +72,11 @@ pub fn scrim(theme: &str) -> (u8, u8, u8, u8) {
 pub fn letter_color(theme: &str, letter: char) -> &'static str {
     let dark = theme == "dark";
     match letter {
-        'A' | '?' => if dark { "#98c379" } else { "#50a14f" },
-        'M' => if dark { "#e5c07b" } else { "#c18401" },
-        'D' | 'U' => if dark { "#e06c75" } else { "#e45649" },
-        'R' | 'C' => if dark { "#61afef" } else { "#0184bc" },
-        'T' => if dark { "#c678dd" } else { "#a626a4" },
+        'A' | '?' => if dark { "#a6d189" } else { "#50a14f" },
+        'M' => if dark { "#e5c890" } else { "#c18401" },
+        'D' | 'U' => if dark { "#e78284" } else { "#e45649" },
+        'R' | 'C' => if dark { "#8caaee" } else { "#0184bc" },
+        'T' => if dark { "#ca9ee6" } else { "#a626a4" },
         _ => panel_color(theme, "text"),
     }
 }
@@ -1223,9 +1223,9 @@ mod tests {
         files[1].dels = Some(0);
         assert_eq!(
             summary_html("dark", &files, 0),
-            "<span style=\"color: #c8cad0;\">2 files changed</span>&nbsp;&nbsp;\
-             <span style=\"color: #98c379;\">+5</span>&nbsp;&nbsp;\
-             <span style=\"color: #e06c75;\">−1</span>"
+            "<span style=\"color: #c6d0f5;\">2 files changed</span>&nbsp;&nbsp;\
+             <span style=\"color: #a6d189;\">+5</span>&nbsp;&nbsp;\
+             <span style=\"color: #e78284;\">−1</span>"
         );
         assert_eq!(
             summary_html("light", &files[..1], 7),
@@ -1246,7 +1246,7 @@ mod tests {
 
     #[test]
     fn a_files_letter_carries_its_own_accent() {
-        assert_eq!(letter_color("dark", 'M'), "#e5c07b");
+        assert_eq!(letter_color("dark", 'M'), "#e5c890");
         assert_eq!(letter_color("light", 'D'), "#e45649");
         assert_eq!(letter_color("dark", '?'), letter_color("dark", 'A'));
         // An unknown letter falls back to the plain row colour.

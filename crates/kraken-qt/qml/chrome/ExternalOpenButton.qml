@@ -16,7 +16,7 @@ Rectangle {
     property bool enabled: true
     signal clicked()
 
-    readonly property color chrome: Theme.name === "dark" ? "#9a9da5" : "#5a5d65"
+    readonly property color chrome: Theme.name === "dark" ? "#949cbb" : "#5a5d65"
     // The right-hand segment, measured from the control's own edge so both
     // halves keep their proportions if the size ever changes.
     readonly property real chevronSegment: 23

@@ -31,7 +31,7 @@ Item {
                                                   : Theme.colors.card_border
     }
 
-    readonly property color dangerColor: Theme.name === "dark" ? "#e06c75" : "#c93c36"
+    readonly property color dangerColor: Theme.name === "dark" ? "#e78284" : "#c93c36"
 
     Text {
         id: label

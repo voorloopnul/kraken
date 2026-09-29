@@ -11,9 +11,9 @@ Item {
     property string text
     property string tooltip
     property bool enabled: true
-    property color textColor: Theme.name === "dark" ? "#9a9da5" : "#5a5d65"
+    property color textColor: Theme.name === "dark" ? "#949cbb" : "#5a5d65"
     property color hoverTextColor: Theme.colors.text
-    property color disabledColor: Theme.name === "dark" ? "#55575d" : "#b0b2b8"
+    property color disabledColor: Theme.name === "dark" ? "#626880" : "#b0b2b8"
     property int fontSize: Theme.secondary_font_size
 
     signal clicked()

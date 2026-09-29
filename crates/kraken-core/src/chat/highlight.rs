@@ -31,7 +31,7 @@ pub struct Span {
     pub italic: bool,
 }
 
-/// Dark leans on One Dark; light uses darkened One Light values that keep
+/// Dark is Catppuccin Frappé, matching the terminal; light uses darkened One Light values that keep
 /// contrast on the tinted code background.
 ///
 /// Entries are scope prefixes, longest match wins. The roles are pygments' —
@@ -91,8 +91,8 @@ static TOKEN_COLORS: Lazy<HashMap<&'static str, Palette>> = Lazy::new(|| {
         (
             "dark",
             table(
-                "#c678dd", "#d19a66", "#98c379", "#d19a66", "#7d818c", "#61afef", "#e5c07b",
-                "#56b6c2", "#e5c07b", "#e06c75", "#d19a66",
+                "#ca9ee6", "#ef9f76", "#a6d189", "#ef9f76", "#949cbb", "#8caaee", "#e5c890",
+                "#99d1db", "#e5c890", "#e78284", "#ef9f76",
             ),
         ),
         (
@@ -340,10 +340,10 @@ mod tests {
     fn a_scope_resolves_through_its_prefixes() {
         assert_eq!(
             scope_style("dark", "string.quoted.double.python"),
-            Some(("#98c379", false))
+            Some(("#a6d189", false))
         );
         // The exact entry, and a scope no prefix of which is styled.
-        assert_eq!(scope_style("dark", "comment"), Some(("#7d818c", true)));
+        assert_eq!(scope_style("dark", "comment"), Some(("#949cbb", true)));
         assert_eq!(scope_style("dark", "meta.function-call.python"), None);
     }
 
@@ -352,19 +352,19 @@ mod tests {
         // `keyword` is styled and `keyword.operator` deliberately is not, so a
         // `+` comes out plain even though `keyword` would otherwise claim it.
         // The longer entry is the one that decides.
-        assert_eq!(scope_style("dark", "keyword"), Some(("#c678dd", false)));
+        assert_eq!(scope_style("dark", "keyword"), Some(("#ca9ee6", false)));
         assert_eq!(scope_style("dark", "keyword.operator.arithmetic"), None);
         // One step longer again puts the colour back: `and`, `or` and `not` are
         // filed under the operators the middle entry silenced.
         assert_eq!(
             scope_style("dark", "keyword.operator.word.python"),
-            Some(("#c678dd", false))
+            Some(("#ca9ee6", false))
         );
     }
 
     #[test]
     fn the_two_themes_carry_the_ported_palette() {
-        assert_eq!(scope_style("dark", "keyword"), Some(("#c678dd", false)));
+        assert_eq!(scope_style("dark", "keyword"), Some(("#ca9ee6", false)));
         assert_eq!(scope_style("light", "keyword"), Some(("#96218f", false)));
         assert_eq!(scope_style("light", "comment.line"), Some(("#75786f", true)));
         // An unknown theme answers from the light table rather than not at all.
@@ -412,10 +412,10 @@ mod tests {
     #[test]
     fn keywords_strings_and_comments_get_their_colors() {
         let lines = colors("def go():\n    return \"hi\"  # done\n", "python", "dark");
-        assert_eq!(lines[0][0], ("def".to_string(), "#c678dd"));
-        assert!(lines[0].iter().any(|(text, color)| text == "go" && *color == "#61afef"));
-        assert!(lines[1].iter().any(|(text, color)| text.contains("\"hi\"") && *color == "#98c379"));
-        assert!(lines[1].iter().any(|(text, color)| text.contains("# done") && *color == "#7d818c"));
+        assert_eq!(lines[0][0], ("def".to_string(), "#ca9ee6"));
+        assert!(lines[0].iter().any(|(text, color)| text == "go" && *color == "#8caaee"));
+        assert!(lines[1].iter().any(|(text, color)| text.contains("\"hi\"") && *color == "#a6d189"));
+        assert!(lines[1].iter().any(|(text, color)| text.contains("# done") && *color == "#949cbb"));
     }
 
     #[test]
@@ -435,7 +435,7 @@ mod tests {
         let source = "s = '''\nnot code at all\n'''\n";
         let lines = colors(source, "python", "dark");
         assert_eq!(lines[1].len(), 1);
-        assert_eq!(lines[1][0], ("not code at all".to_string(), "#98c379"));
+        assert_eq!(lines[1][0], ("not code at all".to_string(), "#a6d189"));
     }
 
     #[test]

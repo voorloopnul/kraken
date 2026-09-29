@@ -567,7 +567,7 @@ pub struct LogRow {
 /// main line (reachable from master/main), light gray for side-branch work.
 pub fn log_text_color(theme: &str) -> &'static str {
     if theme == "dark" {
-        "#c8cad0"
+        "#c6d0f5"
     } else {
         "#4a4d55"
     }
@@ -575,7 +575,7 @@ pub fn log_text_color(theme: &str) -> &'static str {
 
 pub fn main_hash_color(theme: &str) -> &'static str {
     if theme == "dark" {
-        "#98c379"
+        "#a6d189"
     } else {
         "#50a14f"
     }
@@ -583,7 +583,7 @@ pub fn main_hash_color(theme: &str) -> &'static str {
 
 pub fn off_main_color(theme: &str) -> &'static str {
     if theme == "dark" {
-        "#7a7d85"
+        "#838ba7"
     } else {
         "#9a9da5"
     }
@@ -1344,9 +1344,9 @@ pub(crate) mod tests {
         let rows = parse_log(&log_fixture(), Some(&main));
         assert_eq!(rows[0].commit.as_ref().expect("commit").on_main_line, Some(true));
         assert_eq!(rows[3].commit.as_ref().expect("commit").on_main_line, Some(false));
-        assert_eq!(hash_color("dark", Some(true)), "#98c379");
+        assert_eq!(hash_color("dark", Some(true)), "#a6d189");
         assert_eq!(hash_color("light", Some(true)), "#50a14f");
-        assert_eq!(hash_color("dark", Some(false)), "#7a7d85");
+        assert_eq!(hash_color("dark", Some(false)), "#838ba7");
         assert_eq!(hash_color("light", Some(false)), "#9a9da5");
     }
 
@@ -1366,9 +1366,9 @@ pub(crate) mod tests {
         let rows = parse_log(&log_fixture(), Some(&main));
         assert_eq!(
             rows[0].html("dark"),
-            "<span style=\"color: #c8cad0;\">*&nbsp;</span>\
-             <span style=\"color: #98c379;\">a1b2c3d</span>\
-             <span style=\"color: #c8cad0;\">&nbsp;(HEAD&nbsp;-&gt;&nbsp;main,&nbsp;origin/main)\
+            "<span style=\"color: #c6d0f5;\">*&nbsp;</span>\
+             <span style=\"color: #a6d189;\">a1b2c3d</span>\
+             <span style=\"color: #c6d0f5;\">&nbsp;(HEAD&nbsp;-&gt;&nbsp;main,&nbsp;origin/main)\
              &nbsp;&nbsp;Add&nbsp;the&nbsp;diff&nbsp;pane</span>"
         );
         // A continuation row is the graph alone, with its trailing space gone.

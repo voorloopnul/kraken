@@ -74,7 +74,7 @@ Rectangle {
                 model: 6
                 delegate: Rectangle {
                     width: 2; height: 2; radius: 1
-                    color: Theme.name === "dark" ? "#5a5d65" : "#b0aeaa"
+                    color: Theme.name === "dark" ? "#626880" : "#b0aeaa"
                 }
             }
         }
@@ -123,7 +123,7 @@ Rectangle {
         anchors.rightMargin: 6
         visible: !header.tabs
         text: header.title
-        color: Theme.name === "dark" ? "#9a9da5" : "#5a5d65"
+        color: Theme.name === "dark" ? "#949cbb" : "#5a5d65"
         font.family: Theme.sans_family
         font.pixelSize: 11
         font.weight: Font.DemiBold

@@ -72,7 +72,7 @@ pub fn tile_hue(key: &str) -> u32 {
 ///
 /// On a light strip an idle tile is a pastel and the current one steps down
 /// into full colour; on a dark strip it has to run the other way, because a
-/// pastel on #23252b glares brighter than anything that could mark it current.
+/// pastel on the dark strip glares brighter than anything that could mark it current.
 fn tile_mix(theme: &str, checked: bool, hovered: bool) -> (f64, f64) {
     match (theme, checked, hovered) {
         ("dark", false, false) => (0.32, 0.32),
@@ -116,7 +116,7 @@ pub fn tile_color(key: &str, theme: &str, checked: bool, hovered: bool) -> Strin
 /// so they are the strip's own extreme rather than anything from the wheel.
 pub fn indicator_color(theme: &str) -> &'static str {
     if theme == "dark" {
-        "#e8e6e2"
+        "#c6d0f5"
     } else {
         "#2a2824"
     }
@@ -213,7 +213,7 @@ mod tests {
         assert_eq!(color.len(), 7);
         assert!(color.starts_with('#'));
         assert!(color[1..].chars().all(|c| c.is_ascii_hexdigit()));
-        assert_eq!(indicator_color("dark"), "#e8e6e2");
+        assert_eq!(indicator_color("dark"), "#c6d0f5");
         assert_eq!(indicator_color("light"), "#2a2824");
     }
 }

@@ -33,7 +33,9 @@ Rectangle {
         }
         width: 8; height: 8; radius: 4
         visible: row.modelData.status !== ""
-        color: row.modelData.status === "running" ? "#e0a030" : "#2ea043"
+        color: row.modelData.status === "running"
+               ? (Theme.name === "dark" ? "#e5c890" : "#e0a030")
+               : (Theme.name === "dark" ? "#a6d189" : "#2ea043")
     }
 
     // The pin leads the row, ahead of the status dot. A pinned row keeps this

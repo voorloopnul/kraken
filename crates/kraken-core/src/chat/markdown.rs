@@ -362,7 +362,7 @@ mod tests {
         let rendered = render("```python\ndef go():\n    return 1\n```", "dark", 13);
         assert!(rendered.html.contains("<pre style="), "{}", rendered.html);
         // `def` is a keyword, so it comes out in the keyword colour.
-        assert!(rendered.html.contains("#c678dd"), "{}", rendered.html);
+        assert!(rendered.html.contains("#ca9ee6"), "{}", rendered.html);
         assert_eq!(rendered.code_blocks.len(), 1);
         assert_eq!(rendered.code_blocks[0].language, "python");
         // The source is what the Copy button puts on the clipboard: unescaped,

@@ -15,8 +15,8 @@ Rectangle {
 
     // History rows use the proportional face: a session's title is prose, and a
     // mono grid makes a list of sentences read like a table of data.
-    readonly property color rowText: Theme.name === "dark" ? "#c8cad0" : "#383a42"
-    readonly property color rowSubtitle: Theme.name === "dark" ? "#7a7d85" : "#8e8b86"
+    readonly property color rowText: Theme.name === "dark" ? "#c6d0f5" : "#383a42"
+    readonly property color rowSubtitle: Theme.name === "dark" ? "#838ba7" : "#8e8b86"
 
     Column {
         anchors.fill: parent

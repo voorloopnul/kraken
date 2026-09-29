@@ -31,7 +31,7 @@ ScrollBar {
         implicitHeight: vertical ? 24 : 10
         radius: 5
         color: control.pressed || control.hovered
-               ? (Theme.name === "dark" ? "#4a4e58" : "#b6b3ac")
-               : (Theme.name === "dark" ? "#3a3d45" : "#ccc9c3")
+               ? (Theme.name === "dark" ? "#626880" : "#b6b3ac")
+               : (Theme.name === "dark" ? "#51576d" : "#ccc9c3")
     }
 }

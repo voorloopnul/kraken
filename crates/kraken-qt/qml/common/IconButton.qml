@@ -19,7 +19,7 @@ Item {
     // that fill: a glyph in the idle grey does not survive an accent ground.
     property color checkedColor: Theme.colors.accent
     property color checkedGlyphColor: Theme.colors.accent_on
-    property color glyphColor: Theme.name === "dark" ? "#9a9da5" : "#5a5d65"
+    property color glyphColor: Theme.name === "dark" ? "#949cbb" : "#5a5d65"
     property color hoverGlyphColor: Theme.colors.text
     property int radius: 6
     property int glyphSize: 18

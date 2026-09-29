@@ -292,7 +292,7 @@ Rectangle {
                 spacing: 4
                 Text {
                     text: App.workspace_label
-                    color: Theme.name === "dark" ? "#9a9da5" : "#5a5d65"
+                    color: Theme.name === "dark" ? "#949cbb" : "#5a5d65"
                     font.family: Theme.sans_family
                     font.pixelSize: 11
                     elide: Text.ElideLeft
@@ -321,7 +321,7 @@ Rectangle {
         Text {
             text: bar.memoryLabel
             visible: bar.memoryLabel !== ""
-            color: Theme.name === "dark" ? "#9a9da5" : "#5a5d65"
+            color: Theme.name === "dark" ? "#949cbb" : "#5a5d65"
             font.family: Theme.sans_family
             font.pixelSize: 11
             padding: 3

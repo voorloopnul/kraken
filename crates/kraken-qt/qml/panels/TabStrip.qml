@@ -102,7 +102,7 @@ Item {
                     // and nothing else: a tab that cannot ring has no `bell`
                     // for a bool property to read.
                     visible: !!tab.modelData.bell && !tab.isCurrent
-                    color: "#e0a030"
+                    color: Theme.name === "dark" ? "#e5c890" : "#e0a030"
                 }
 
                 Text {
@@ -119,7 +119,7 @@ Item {
                     // can be read, and says so rather than looking live.
                     color: tab.modelData.closed ? Theme.chat_colors.dim
                          : tab.isCurrent ? Theme.colors.text
-                         : (Theme.name === "dark" ? "#9a9da5" : "#5a5d65")
+                         : (Theme.name === "dark" ? "#949cbb" : "#5a5d65")
                     font.family: Theme.sans_family
                     font.pixelSize: 11
                     font.italic: !!tab.modelData.closed

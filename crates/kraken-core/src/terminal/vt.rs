@@ -1026,7 +1026,8 @@ mod tests {
 
     #[test]
     fn a_theme_without_an_ansi_table_falls_back_to_the_builtin_palette() {
-        let mut vt = vt(10, 2);
+        let bare = TerminalTheme { name: "bare", ansi: None, ..DARK };
+        let mut vt = Vt::new(10, 2, &bare);
         vt.feed(b"\x1b[32mgreen");
         assert_eq!(vt.render().rows[0].runs[0].fg, DEFAULT_ANSI[2]);
     }
@@ -1279,7 +1280,7 @@ mod tests {
         let rows = vt.render().rows.clone();
         assert_eq!(rows[0].runs.len(), 1);
         assert_eq!(rows[0].runs[0].text, "      ");
-        assert_eq!(rows[0].runs[0].bg, DEFAULT_ANSI[1]);
+        assert_eq!(rows[0].runs[0].bg, DARK.ansi.expect("dark overrides ANSI")[1]);
     }
 
     #[test]
