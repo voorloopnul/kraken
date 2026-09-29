@@ -19,6 +19,30 @@ Rectangle {
     signal quitRequested()
     signal editRemoteRequested(string anchor)
 
+    // One dialog for the whole strip rather than one per tile: the tile's menu
+    // fills in which workspace it is about. Nothing on disk is touched — the
+    // folder and its sessions stay — but a remote's connection details go with
+    // it, and the tile's colour and panel layout are not coming back.
+    ConfirmDialog {
+        id: confirmRemove
+        property string key
+
+        function ask(entry) {
+            key = entry.key
+            title = qsTr("Remove %1 from Workspaces?").arg(entry.tooltip)
+            message = entry.remote
+                ? qsTr("Its connection details are forgotten. Files on the host "
+                       + "and saved sessions are not deleted.")
+                : qsTr("The folder and its saved sessions are not deleted; add it "
+                       + "again to get them back.")
+            open()
+        }
+
+        confirmText: qsTr("Remove")
+        destructive: true
+        onConfirmed: App.remove_workspace(key)
+    }
+
     width: 40
     color: Theme.colors.sidebar
     // The strip's own corner is the window's bottom-left.
@@ -86,7 +110,7 @@ Rectangle {
                     }
                     MenuItem {
                         text: qsTr("Remove from Workspaces")
-                        onTriggered: App.remove_workspace(tile.modelData.key)
+                        onTriggered: confirmRemove.ask(tile.modelData)
                     }
                 }
             }
