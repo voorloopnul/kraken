@@ -94,27 +94,11 @@ Item {
     Clipboard { id: clipboard }
 
     // git refused the checkout — its own words, not a summary of them.
-    Dialog {
+    ConfirmDialog {
         id: refused
-        property string message
-        parent: Overlay.overlay
-        anchors.centerIn: parent
-        modal: true
         title: qsTr("Checkout failed")
-        standardButtons: Dialog.Ok
-        // Sized here rather than by its content: a Dialog takes its implicit
-        // width from what it holds, and content measured back off the dialog
-        // closes that into a loop.
-        implicitWidth: 420
-
-        Text {
-            width: parent.width
-            wrapMode: Text.Wrap
-            text: refused.message
-            color: Theme.colors.text
-            font.family: Theme.mono_family
-            font.pixelSize: 13
-        }
+        alert: true
+        monoMessage: true
     }
 
     // ---- Wiring ---------------------------------------------------------------

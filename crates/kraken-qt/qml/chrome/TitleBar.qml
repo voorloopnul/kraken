@@ -67,7 +67,7 @@ Rectangle {
             text: qsTr("Delete")
             visible: sessionMenu.id !== ""
             height: visible ? implicitHeight : 0
-            onTriggered: History.remove(sessionMenu.path)
+            onTriggered: confirmDelete.open()
         }
     }
 
@@ -123,28 +123,31 @@ Rectangle {
             onTriggered: {
                 const error = App.checkout(branchName)
                 if (error !== "") {
-                    checkoutError.text = error
+                    checkoutError.message = error
                     checkoutError.open()
                 }
             }
         }
     }
 
-    Dialog {
+    // The same question History asks before deleting a row: the menu here is
+    // only a second way to reach the same irreversible action.
+    ConfirmDialog {
+        id: confirmDelete
+        property string path
+        title: qsTr("Delete this session?")
+        message: qsTr("Its conversation is removed from disk. This cannot be undone.")
+        confirmText: qsTr("Delete")
+        destructive: true
+        onAboutToShow: path = sessionMenu.path
+        onConfirmed: History.remove(path)
+    }
+
+    ConfirmDialog {
         id: checkoutError
-        property alias text: message.text
-        parent: Overlay.overlay
-        anchors.centerIn: parent
-        modal: true
         title: qsTr("Could not switch branch")
-        standardButtons: Dialog.Ok
-        Text {
-            id: message
-            color: Theme.colors.text
-            font.family: Theme.sans_family
-            font.pixelSize: 12
-            wrapMode: Text.Wrap
-        }
+        alert: true
+        monoMessage: true
     }
 
     // Dragging the bar moves the window and double-clicking it zooms, and the

@@ -130,27 +130,12 @@ Rectangle {
         }
     }
 
-    Dialog {
+    ConfirmDialog {
         id: confirmDelete
-        parent: Overlay.overlay
-        anchors.centerIn: parent
-        modal: true
-        title: qsTr("Delete session")
-        standardButtons: Dialog.Yes | Dialog.No
-        onAccepted: History.remove(row.modelData.key)
-
-        // Sized here rather than by its content: a Dialog takes its implicit
-        // width from what it holds, and content measured back off the dialog
-        // closes that into a loop.
-        implicitWidth: 360
-
-        Text {
-            width: parent.width
-            wrapMode: Text.Wrap
-            text: qsTr("Permanently delete this session? This cannot be undone.")
-            color: Theme.colors.text
-            font.family: Theme.sans_family
-            font.pixelSize: 12
-        }
+        title: qsTr("Delete this session?")
+        message: qsTr("Its conversation is removed from disk. This cannot be undone.")
+        confirmText: qsTr("Delete")
+        destructive: true
+        onConfirmed: History.remove(row.modelData.key)
     }
 }
