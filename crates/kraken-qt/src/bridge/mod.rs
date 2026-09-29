@@ -7,7 +7,6 @@
 //! interesting half of this app is testable without a display at all.
 
 pub mod app;
-pub mod browser;
 pub mod clipboard;
 pub mod diff;
 pub mod dock;

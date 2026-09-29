@@ -9,7 +9,6 @@ use std::rc::Rc;
 use qmetaobject::*;
 
 use bridge::app::App;
-use bridge::browser::BrowserBridge;
 use bridge::diff::DiffBridge;
 use bridge::dock::DockModel;
 use bridge::files::FilesBridge;
@@ -119,7 +118,6 @@ fn main() {
         "Remotes" => RemotesBridge::new(),
         "Session" => SessionBridge::new(),
         "TerminalTabs" => TerminalBridge::new(),
-        "Browser" => BrowserBridge::new(),
         "Diff" => DiffBridge::new(),
         "Git" => GitBridge::new(),
         "Files" => FilesBridge::new(),

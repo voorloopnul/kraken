@@ -14,7 +14,7 @@
 //! column moves height the same way.
 //!
 //! Only the *arrangement* lives here. The view reads this model and reparents
-//! the real panels, so a panel's own state — terminals, a browser, transcripts —
+//! the real panels, so a panel's own state — terminals, transcripts —
 //! survives a move untouched, and every rule below is testable without a
 //! display, which is what the widget version could never manage.
 
@@ -26,7 +26,6 @@ pub fn preferred_width(key: &str) -> i32 {
     match key {
         "left" => HISTORY_WIDTH,
         "center" => 700,
-        "browser" => 480,
         "files" => 300,
         // Wide enough for a changed file's path with its counts beside it,
         // which is the wider of the two views the pane holds.
@@ -759,7 +758,7 @@ mod tests {
     /// next to it, and at most two side columns beside them.
     fn workspace_dock() -> Dock {
         let mut dock = Dock::new(
-            &["left", "center", "files", "browser", "git", "right"],
+            &["left", "center", "files", "git", "right"],
             "center",
             &["left"],
             &["center"],
@@ -810,8 +809,17 @@ mod tests {
 
     #[test]
     fn past_the_side_column_cap_panels_stack_from_the_right() {
-        let mut dock = workspace_dock();
-        for key in ["files", "browser"] {
+        // The workspace has only three side panels, so a fourth stands in to
+        // reach the case where the rightmost column is full.
+        let mut dock = Dock::new(
+            &["left", "center", "files", "extra", "git", "right"],
+            "center",
+            &["left"],
+            &["center"],
+            Some(2),
+        );
+        dock.set_layout(&[&["left"], &["center"]]);
+        for key in ["files", "extra"] {
             dock.show_panel(key);
         }
         assert_eq!(dock.active_columns().len(), 4); // left, center, + two sides
@@ -824,7 +832,7 @@ mod tests {
                 vec!["left"],
                 vec!["center"],
                 vec!["files"],
-                vec!["browser", "git"],
+                vec!["extra", "git"],
             ]
         );
         // And the next one fills the only remaining space, on the left.
@@ -835,7 +843,7 @@ mod tests {
                 vec!["left"],
                 vec!["center"],
                 vec!["files", "right"],
-                vec!["browser", "git"],
+                vec!["extra", "git"],
             ]
         );
     }
@@ -1085,7 +1093,7 @@ mod tests {
 
     #[test]
     fn every_side_panel_can_be_dragged_and_stops_at_a_floor() {
-        for key in ["files", "browser", "git", "right"] {
+        for key in ["files", "git", "right"] {
             assert!(is_resizable(key), "{key} should be resizable");
             assert!(
                 min_width(key) <= preferred_width(key),

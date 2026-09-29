@@ -326,9 +326,7 @@ impl TerminalBridge {
         if pane.tabs.is_empty() {
             // Kraken opens a replacement rather than leaving an empty pane: a
             // terminal pane with no terminal in it is not a state the panel has
-            // a face for. The browser's last ✕ closes the panel instead,
-            // because a browser tab costs a renderer process and a shell does
-            // not.
+            // a face for.
             pane.counter = 0;
             self.tabs_changed();
             self.add_tab();

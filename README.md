@@ -10,7 +10,6 @@ need while the agent works.
 - a history pane — the Pi sessions recorded for this workspace folder, and the
   one running now; pin the ones you keep coming back to
 - an embedded terminal
-- an embedded browser
 - a git pane, in two tabs: **Changes**, the files touched since the last commit
   with the lines added and removed in each — click one to read its diff, syntax
   highlighted, over the dimmed app — and **Commits**, the repository's commit
@@ -168,14 +167,6 @@ that it is cached.
 builds, because a `Debug` build of the VT core makes feeding a terminal roughly
 a hundred times slower.
 
-The embedded browser additionally needs QtWebEngine, which is a separate
-package and is optional — without it the browser panel says so and the rest of
-the app is unaffected:
-
-```sh
-sudo apt install qml6-module-qtwebengine
-```
-
 If Qt is installed somewhere unusual, set `QMAKE` to its `qmake6`.
 
 ## Run
@@ -189,7 +180,6 @@ cargo run --release
 Kraken stores its own state in:
 
 - `~/.kraken/state.json` — workspaces, SSH hosts, panel layout, font sizes
-- `~/.kraken/screenshots` — captures of the browser pane, attached to a prompt
 - `~/.kraken/remotes` — the local anchor folder for each remote workspace
 - `~/.kraken/ssh` — the control sockets multiplexing each remote's connection
 - `~/.kraken/ext` — the pi extension, unpacked

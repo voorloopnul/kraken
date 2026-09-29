@@ -7,7 +7,6 @@
 //! this crate, which keeps the interesting parts unit-testable without a
 //! display.
 
-pub mod browser;
 pub mod chat;
 pub mod debug;
 pub mod diff;

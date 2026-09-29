@@ -4,7 +4,7 @@ import "../common"
 // One workspace's panes.
 //
 // Every panel is built here, once, and handed to the dock to place. The dock
-// only reparents them, so a panel's own state — terminals, a browser, a
+// only reparents them, so a panel's own state — terminals, a
 // transcript's scroll position — survives a re-dock untouched.
 Rectangle {
     id: view
@@ -22,7 +22,6 @@ Rectangle {
         CenterPanel { id: centerPanel }
         TerminalPanel { id: terminalPanel }
         FilesPanel { id: filesPanel }
-        BrowserPanel { id: browserPanel }
         GitPanel { id: gitPanel }
     }
 
@@ -34,7 +33,6 @@ Rectangle {
             "center": centerPanel,
             "right": terminalPanel,
             "files": filesPanel,
-            "browser": browserPanel,
             "git": gitPanel
         })
         titles: ({
@@ -42,28 +40,15 @@ Rectangle {
             "center": qsTr("Conversation"),
             "right": qsTr("Terminal"),
             "files": qsTr("Files"),
-            "browser": qsTr("Browser"),
             "git": qsTr("Git")
         })
     }
 
-    // A link in a conversation goes to the browser pane, which is shown if it
-    // was not. The transcript raises the request and knows nothing about who
-    // answers it; this is the only place that knows both panels exist.
+    // A link in a conversation opens in the system's browser. The transcript
+    // raises the request and knows nothing about who answers it.
     Connections {
         target: Session
-        function onLink_activated(url) {
-            App.set_panel_visible("browser", true)
-            Browser.open_url(url)
-        }
-    }
-
-    // Last tab closed. An empty browser pane is a stripe of nothing rather than
-    // a browser, so the panel goes with it — and the side strip's toggle goes
-    // out, because it reads the same panel state.
-    Connections {
-        target: Browser
-        function onEmptied() { App.set_panel_visible("browser", false) }
+        function onLink_activated(url) { Qt.openUrlExternally(url) }
     }
 
     // Signing in to a ChatGPT plan. pi's OAuth flow lives only in its own
@@ -95,12 +80,6 @@ Rectangle {
             "echo 'In pi, run: /login openai-codex'\npi\n")
     }
 
-    // A capture of the page, attached to the next prompt.
-    Connections {
-        target: browserPanel
-        function onCaptured(path) { Session.attach_file(path) }
-    }
-
     // The side strip and the title bar toggle panels through App; the dock is
     // what actually shows and hides them.
     Connections {
@@ -129,7 +108,7 @@ Rectangle {
     }
 
     function syncPanels() {
-        for (const side of ["left", "files", "browser", "git", "right"])
+        for (const side of ["left", "files", "git", "right"])
             DockModel.set_panel_visible(side, App.is_panel_visible(side))
     }
 

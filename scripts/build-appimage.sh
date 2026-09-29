@@ -38,20 +38,6 @@ export QMAKE=${QMAKE:-$(command -v qmake6 || command -v qmake)}
 # disk for the plugin to scan. It still needs a path to look at to decide which
 # QML modules to bundle, and the sources are where the imports are written.
 export QML_SOURCES_PATHS="$ROOT/crates/kraken-qt/qml"
-# The browser's engine, which the plugin cannot infer.
-#
-# `BrowserPanel.qml` builds its `WebEngineView` with `Qt.createQmlObject`, so
-# the only `import QtWebEngine` in the tree is inside a string — deliberately,
-# because a real import would take the whole panel down on a machine without
-# the module. The plugin parses imports properly and therefore never sees it,
-# and an AppImage built without this line silently ships no engine at all and
-# shows the "No browser engine" notice on every machine but the build host.
-QT_WEBENGINE_QML="$(dirname "$(qmake6 -query QT_INSTALL_QML 2>/dev/null)/QtWebEngine")/QtWebEngine"
-if [[ -d $QT_WEBENGINE_QML ]]; then
-    export EXTRA_QT_MODULES="webenginecore;webchannel;positioning"
-else
-    echo "note: QtWebEngine not installed; the AppImage will have no browser engine" >&2
-fi
 # Allows the deployment tools to run on machines where FUSE is unavailable.
 export APPIMAGE_EXTRACT_AND_RUN=1
 
@@ -61,25 +47,6 @@ export APPIMAGE_EXTRACT_AND_RUN=1
     --desktop-file "$ROOT/packaging/kraken.desktop" \
     --icon-file "$ROOT/packaging/kraken.svg" \
     --plugin qt
-
-# The QtWebEngine QML module, and the plugin's own dependencies.
-#
-# `EXTRA_QT_MODULES` above deploys Chromium, the helper process and the
-# resources, but not the QML module that `import QtWebEngine` resolves to — the
-# plugin only deploys QML modules it found an import for. Copied by hand, then
-# handed back to linuxdeploy with `--deploy-deps-only` so its libraries are
-# pulled in *and its RUNPATH is rewritten*. Without that second step the plugin
-# still resolves `libQt6WebEngineCore` against /usr/lib on the build host and
-# the bundle only works on a machine that already has QtWebEngine.
-if [[ -d ${QT_WEBENGINE_QML:-} ]]; then
-    qml_root=$(dirname "$QT_WEBENGINE_QML")
-    mkdir -p "$APPDIR/usr/qml"
-    cp -r "$QT_WEBENGINE_QML" "$APPDIR/usr/qml/"
-    [[ -d $qml_root/QtWebChannel ]] && cp -r "$qml_root/QtWebChannel" "$APPDIR/usr/qml/"
-    "$TOOLS/linuxdeploy-${ARCH}.AppImage" --appdir "$APPDIR" \
-        --deploy-deps-only "$APPDIR/usr/qml/QtWebEngine" \
-        --deploy-deps-only "$APPDIR/usr/qml/QtWebChannel"
-fi
 
 # linuxdeploy intentionally excludes the GLVND loader libraries as host-side
 # graphics components. Qt links to libOpenGL directly, however, and minimal
@@ -124,19 +91,10 @@ fi
 
 # Everything Qt deployed that Kraken has no use for.
 #
-# The Qt plugin bundles all of QtWebEngine's locales and all of Qt's own
-# translations, on the assumption that the application is translated. Kraken is
-# not: its interface is English, so the one locale Chromium falls back to is the
-# only one worth carrying, and the `qtbase_*.qm` catalogues only ever translate
-# the standard dialog buttons. The devtools pack is Chromium's inspector UI,
-# which no panel opens.
-KEEP_LOCALE=${KEEP_LOCALE:-en-US}
-locales="$APPDIR/usr/translations/qtwebengine_locales"
-if [[ -d $locales ]]; then
-    find "$locales" -name '*.pak' ! -name "${KEEP_LOCALE}.pak" -delete
-fi
+# The Qt plugin bundles all of Qt's own translations, on the assumption that
+# the application is translated. Kraken is not: its interface is English, and
+# the `qtbase_*.qm` catalogues only ever translate the standard dialog buttons.
 rm -f "$APPDIR"/usr/translations/qtbase_*.qm
-rm -f "$APPDIR/usr/resources/qtwebengine_devtools_resources.pak"
 
 # linuxdeploy leaves AppRun as a symlink to the executable, which runs Kraken
 # with the host's PATH and so never finds the bundled `pi`. A launcher puts the

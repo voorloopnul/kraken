@@ -276,9 +276,8 @@ pub struct SessionBridge {
     models_changed: qt_signal!(),
     attachments_changed: qt_signal!(),
     title_changed: qt_signal!(),
-    /// A link in the transcript was clicked. The browser panel belongs to
-    /// another object, so this says what was asked for and lets the workspace
-    /// route it.
+    /// A link in the transcript was clicked. This says what was asked for and
+    /// lets the workspace decide where it opens.
     link_activated: qt_signal!(url: QString),
     /// A model list asked for by [`request_models`](Self::request_models) has
     /// arrived — the picker opens on this rather than on the click, since the

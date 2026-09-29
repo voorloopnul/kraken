@@ -7,8 +7,8 @@ import "../common"
 //
 // The arrangement is `Dock`'s (in Rust); this lays it out and reports back
 // where everything landed. Panels are built once and kept: a panel that was
-// destroyed and rebuilt on every re-dock would lose its terminals, its browser
-// and its scroll position, which is the whole reason a drag is worth having.
+// destroyed and rebuilt on every re-dock would lose its terminals and its scroll
+// position, which is the whole reason a drag is worth having.
 Item {
     id: dock
 
@@ -208,8 +208,8 @@ Item {
 
                         // Adopting a panel is a reparent, never a rebuild:
                         // a panel destroyed and recreated on every re-dock
-                        // would lose its terminals, its browser and its
-                        // scroll position.
+                        // would lose its terminals and its scroll
+                        // position.
                         Component.onCompleted: adopt()
                         onKeyChanged: adopt()
 

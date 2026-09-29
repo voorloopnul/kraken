@@ -1,7 +1,7 @@
 import QtQuick
 import "../common"
 
-// The tab strip a panel wears in its header — terminals, browser pages, and the
+// The tab strip a panel wears in its header — terminals and the
 // Git pane's two views of the repository.
 //
 // One component for all of them, because a tab is a tab: the same height, the

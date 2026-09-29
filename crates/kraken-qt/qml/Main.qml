@@ -51,7 +51,6 @@ Window {
     function reapChildren() {
         Session.shutdown()
         TerminalTabs.shutdown_all()
-        Browser.discard_all()
     }
 
     readonly property bool fillsScreen: visibility === Window.Maximized
