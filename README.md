@@ -225,3 +225,6 @@ repositories built in a temp directory.
 
 If FUSE is unavailable, launch the result with
 `APPIMAGE_EXTRACT_AND_RUN=1 ./dist/Kraken-x86_64.AppImage`.
+
+The AppImage bundles Qt but not the agent: it runs the `pi` installed on the
+machine.
